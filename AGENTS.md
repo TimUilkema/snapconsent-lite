@@ -23,6 +23,27 @@
 - Small PR-sized changes.
 - Add/update tests when behavior changes.
 - Explain edge cases: retries, races, expired sessions/tokens, partial failures.
-- 
+
 ## Project context
-- Read CONTEXT.md before planning changes.
+Before planning or implementing changes read:
+
+- `CONTEXT.md`
+- `ARCHITECTURE.md`
+
+These documents describe the domain model and system structure.
+
+## Development workflow
+
+For any non-trivial change follow the **RPI workflow** described in:
+
+docs/rpi/README.md
+
+Steps:
+
+1. Research
+2. Plan
+3. Implement
+
+Research and plan documents should be created under:
+
+docs/rpi/<feature-id>/

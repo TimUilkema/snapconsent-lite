@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SnapConsent Lite
 
-## Getting Started
+Minimal Next.js + Supabase app for consent workflows.
 
-First, run the development server:
+## Setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. Install dependencies:
+   `npm install`
+2. Copy `.env.example` to `.env.local` and fill values.
+3. Start Supabase local stack.
+4. Run app:
+   `npm run dev`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## URL Origin Configuration
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Internal app redirects use relative paths and stay on the current host.
+- Share links in the UI are built from the browser host (`window.location.origin`) plus invite path.
+- External links in emails use `APP_ORIGIN`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Set `APP_ORIGIN` in `.env.local`:
 
-## Learn More
+- Desktop-local only: `APP_ORIGIN=http://localhost:3000`
+- LAN/mobile testing: `APP_ORIGIN=http://192.168.2.9:3000`
+- Production: `APP_ORIGIN=https://app.snapconsent.com`
 
-To learn more about Next.js, take a look at the following resources:
+Note: Links created while browsing `http://localhost:3000` are not phone-shareable. For cross-device testing, open the app on desktop with the LAN host/IP.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Mobile Uploads In Local Dev
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Signed storage upload URLs can be generated with loopback hosts (for example `127.0.0.1`).  
+The app normalizes loopback signed upload URLs to the current browser host for LAN/mobile testing.
 
-## Deploy on Vercel
+Recommended local setup for phone testing:
+- Open app via LAN host, not `localhost`.
+- Set `APP_ORIGIN` to the same LAN host.
+- If needed, set `NEXT_PUBLIC_SUPABASE_URL` to a LAN-reachable Supabase API host/port.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Core Auth Flow
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Login: `/login`
+- Protected dashboard: `/dashboard`
+- Projects area: `/projects`
+
+## Projects + Invites Flow (002)
+
+1. Create a project at `/projects`.
+2. Open project dashboard and create an invite URL.
+3. Share invite URL (QR-safe).
+4. Subject opens invite URL, submits consent form.
+5. Receipt email is sent to subject with revoke link.
+6. Subject can revoke consent from public revoke URL.
+
+## Local Email Verification
+
+The local Supabase config uses Inbucket for email testing.
+
+- Inbucket UI: `http://127.0.0.1:54324`
+- SMTP target for app mailer: `127.0.0.1:54325`
+
+After submitting consent, verify in Inbucket:
+- receipt delivered to subject email
+- consent summary content
+- revoke link works and marks consent revoked without deleting consent records
+
+## Validation Commands
+
+- Reset DB and apply migrations: `supabase db reset`
+- Lint: `npm run lint`
+- Run app: `npm run dev`

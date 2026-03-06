@@ -1,8 +1,10 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4f1ea;
+  --foreground: #1f2937;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-border: rgba(148, 163, 184, 0.2);
 }
 
 @theme inline {
@@ -12,15 +14,74 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: only light;
+  background-color: #f4f1ea;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-image:
+    radial-gradient(circle at top left, rgba(254, 240, 138, 0.28), transparent 28%),
+    radial-gradient(circle at top right, rgba(191, 219, 254, 0.34), transparent 32%),
+    linear-gradient(180deg, #fbfaf7 0%, #f4f1ea 100%);
+  font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
+  min-height: 100vh;
+}
+
+main {
+  color: #1f2937;
+}
+
+a,
+button {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+input,
+textarea,
+select {
+  background: #ffffff;
+  color: #111827;
+  border-color: #d4d4d8;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #71717a;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: rgba(251, 191, 36, 0.24);
+}
+
+.app-shell {
+  border: 1px solid var(--surface-border);
+  background: var(--surface);
+  box-shadow:
+    0 18px 40px rgba(15, 23, 42, 0.05),
+    0 2px 8px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(10px);
+}
+
+.content-card {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow:
+    0 14px 36px rgba(15, 23, 42, 0.05),
+    0 1px 4px rgba(15, 23, 42, 0.06);
 }
