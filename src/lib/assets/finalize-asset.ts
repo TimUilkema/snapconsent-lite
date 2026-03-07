@@ -11,6 +11,11 @@ type FinalizeAssetInput = {
   expectedAssetType?: "photo" | "headshot" | null;
 };
 
+export type FinalizedAsset = {
+  assetId: string;
+  assetType: "photo" | "headshot";
+};
+
 async function validateConsents(
   supabase: SupabaseClient,
   tenantId: string,
@@ -39,7 +44,8 @@ async function validateConsents(
   }
 }
 
-export async function finalizeAsset(input: FinalizeAssetInput) {
+export async function finalizeAsset(input: FinalizeAssetInput): Promise<FinalizedAsset> {
+  input.consentIds = Array.from(new Set(input.consentIds));
   const { data: asset, error: assetError } = await input.supabase
     .from("assets")
     .select("id, asset_type")
@@ -80,15 +86,39 @@ export async function finalizeAsset(input: FinalizeAssetInput) {
       consent_id: consentId,
       tenant_id: input.tenantId,
       project_id: input.projectId,
+      link_source: "manual",
+      match_confidence: null,
+      matched_at: null,
+      reviewed_at: null,
+      reviewed_by: null,
+      matcher_version: null,
     }));
 
     const { error: linkError } = await input.supabase.from("asset_consent_links").upsert(rows, {
       onConflict: "asset_id,consent_id",
-      ignoreDuplicates: true,
     });
 
     if (linkError) {
       throw new HttpError(500, "asset_link_failed", "Unable to link asset to consents.");
     }
+
+    if (asset.asset_type === "photo") {
+      const { error: suppressionDeleteError } = await input.supabase
+        .from("asset_consent_link_suppressions")
+        .delete()
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("asset_id", input.assetId)
+        .in("consent_id", input.consentIds);
+
+      if (suppressionDeleteError) {
+        throw new HttpError(500, "asset_link_failed", "Unable to clear matching suppression.");
+      }
+    }
   }
+
+  return {
+    assetId: asset.id,
+    assetType: asset.asset_type,
+  };
 }

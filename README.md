@@ -67,3 +67,56 @@ After submitting consent, verify in Inbucket:
 - Reset DB and apply migrations: `supabase db reset`
 - Lint: `npm run lint`
 - Run app: `npm run dev`
+
+## Internal Matching Jobs
+
+Backbone-only auto-matching queue and worker endpoints are internal and token-protected.
+
+- Worker endpoint: `POST /api/internal/matching/worker`
+- Reconcile endpoint: `POST /api/internal/matching/reconcile`
+- Required env vars:
+  - `MATCHING_WORKER_TOKEN`
+  - `MATCHING_RECONCILE_TOKEN`
+
+Example scheduler calls:
+
+```bash
+curl -X POST "$APP_ORIGIN/api/internal/matching/worker" \
+  -H "Authorization: Bearer $MATCHING_WORKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"batchSize":25}'
+
+curl -X POST "$APP_ORIGIN/api/internal/matching/reconcile" \
+  -H "Authorization: Bearer $MATCHING_RECONCILE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"lookbackMinutes":180,"batchSize":150}'
+```
+
+## Real Face Matcher (Feature 011)
+
+Feature 011 adds a real matcher provider behind the existing matching worker architecture.
+
+- Provider selector:
+  - `AUTO_MATCH_PROVIDER=compreface`
+- Required matcher env vars:
+  - `AUTO_MATCH_CONFIDENCE_THRESHOLD`
+  - `AUTO_MATCH_PROVIDER_TIMEOUT_MS`
+  - `COMPREFACE_BASE_URL`
+  - `COMPREFACE_API_KEY`
+- Optional:
+  - `AUTO_MATCH_MAX_COMPARISONS_PER_JOB`
+
+### Local CompreFace setup (Docker)
+
+1. Start the official CompreFace Docker stack.
+2. Create a recognition/verification API key in CompreFace.
+3. Set in `.env.local`:
+   - `AUTO_MATCH_PROVIDER=compreface`
+   - `COMPREFACE_BASE_URL=<your compreface host>`
+   - `COMPREFACE_API_KEY=<your api key>`
+4. Continue invoking the existing internal matching worker/reconcile endpoints.
+
+Notes:
+- No new public endpoints are introduced.
+- Matching stays server-side in the internal worker.
+- Keep CompreFace API keys server-only.

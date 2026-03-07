@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -143,10 +144,15 @@ export async function POST(request: Request, context: RouteContext) {
         consent_id: consentId,
         tenant_id: tenantId,
         project_id: projectId,
+        link_source: "manual",
+        match_confidence: null,
+        matched_at: null,
+        reviewed_at: null,
+        reviewed_by: null,
+        matcher_version: null,
       },
       {
         onConflict: "asset_id,consent_id",
-        ignoreDuplicates: true,
       },
     );
 
@@ -185,6 +191,21 @@ export async function POST(request: Request, context: RouteContext) {
           throw new HttpError(500, "headshot_replace_failed", "Unable to archive old headshot.");
         }
       }
+    }
+
+    try {
+      await enqueueConsentHeadshotReadyJob({
+        tenantId,
+        projectId,
+        consentId,
+        headshotAssetId: assetId,
+        payload: {
+          source: "headshot_replace",
+          replaced_asset_ids: existingHeadshotIds,
+        },
+      });
+    } catch {
+      // Primary replacement flow must still succeed; reconcile backfills missed jobs.
     }
 
     return Response.json({ ok: true, replacedAssetId: assetId }, { status: 200 });

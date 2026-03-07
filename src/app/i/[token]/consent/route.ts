@@ -1,6 +1,8 @@
 import { markReceiptSent, submitConsent } from "@/lib/consent/submit-consent";
 import { sendConsentReceiptEmail } from "@/lib/email/send-receipt";
 import { HttpError } from "@/lib/http/errors";
+import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
+import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
 import { redirectRelative } from "@/lib/http/redirect-relative";
 import { createClient } from "@/lib/supabase/server";
 import { buildExternalUrl } from "@/lib/url/external-origin";
@@ -65,6 +67,28 @@ export async function POST(request: Request, context: RouteContext) {
       captureIp: parseIpAddress(request),
       captureUserAgent: request.headers.get("user-agent"),
     });
+
+    if (
+      shouldEnqueueConsentHeadshotReadyOnSubmit({
+        duplicate: consent.duplicate,
+        faceMatchOptIn,
+        headshotAssetId,
+      })
+    ) {
+      try {
+        await enqueueConsentHeadshotReadyJob({
+          tenantId: consent.tenantId,
+          projectId: consent.projectId,
+          consentId: consent.consentId,
+          headshotAssetId,
+          payload: {
+            source: "consent_submit",
+          },
+        });
+      } catch {
+        // Primary consent submission must still succeed; reconcile backfills missed jobs.
+      }
+    }
 
     let receiptQueued = false;
 

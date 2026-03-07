@@ -1,5 +1,7 @@
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
+import { shouldEnqueuePhotoUploadedOnFinalize } from "@/lib/matching/auto-match-trigger-conditions";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -33,16 +35,39 @@ export async function POST(request: Request, context: RouteContext) {
     const { projectId, assetId } = await context.params;
     const body = (await request.json().catch(() => null)) as FinalizeAssetBody | null;
     const consentIds = Array.isArray(body?.consentIds)
-      ? body?.consentIds.filter((id) => typeof id === "string").map((id) => id.trim())
+      ? Array.from(
+          new Set(
+            body.consentIds
+              .filter((id) => typeof id === "string")
+              .map((id) => id.trim())
+              .filter((id) => id.length > 0),
+          ),
+        )
       : [];
 
-    await finalizeAsset({
+    const finalizedAsset = await finalizeAsset({
       supabase,
       tenantId,
       projectId,
       assetId,
       consentIds,
     });
+
+    if (shouldEnqueuePhotoUploadedOnFinalize(finalizedAsset.assetType)) {
+      try {
+        await enqueuePhotoUploadedJob({
+          tenantId,
+          projectId,
+          assetId: finalizedAsset.assetId,
+          payload: {
+            source: "photo_finalize",
+            consent_ids: consentIds,
+          },
+        });
+      } catch {
+        // Primary upload flow must still succeed; reconcile backfills missed jobs.
+      }
+    }
 
     return Response.json({ ok: true }, { status: 200 });
   } catch (error) {

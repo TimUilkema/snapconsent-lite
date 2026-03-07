@@ -187,6 +187,7 @@ function getRetentionExpiresAt(assetType: AssetType) {
 export async function createAssetWithIdempotency(
   input: CreateAssetInput,
 ): Promise<CreateAssetResult> {
+  input.consentIds = Array.from(new Set(input.consentIds));
   validateFileMetadata(input.originalFilename, input.contentType, input.fileSizeBytes);
   await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
   await validateConsents(input.supabase, input.tenantId, input.projectId, input.consentIds);

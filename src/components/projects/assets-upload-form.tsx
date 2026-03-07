@@ -45,6 +45,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const [isPreparing, setIsPreparing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [assetType] = useState<"photo">("photo");
   const [progressPercent, setProgressPercent] = useState(0);
@@ -53,6 +54,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("upload_anyway");
 
   const acceptValue = useMemo(() => ACCEPTED_TYPES.join(","), []);
+
+  function clearFileInput() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
 
   function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: number) => void) {
     return new Promise<void>((resolve, reject) => {
@@ -77,11 +84,20 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   }
 
   async function hashFile(file: File) {
-    const buffer = await file.arrayBuffer();
-    const digest = await crypto.subtle.digest("SHA-256", buffer);
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) {
+      return null;
+    }
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const digest = await subtle.digest("SHA-256", buffer);
+      return Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    } catch {
+      return null;
+    }
   }
 
   async function preflight(filesToCheck: File[], hashesByIndex?: Map<number, string>) {
@@ -109,6 +125,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
   async function prepareFiles(nextFiles: File[]) {
     setError(null);
+    setWarning(null);
     setSuccess(null);
     setProgressPercent(0);
     setProgressLabel(null);
@@ -124,14 +141,20 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
     try {
       const hashesByIndex = new Map<number, string>();
+      let hashUnavailable = false;
 
       for (let index = 0; index < nextFiles.length; index += 1) {
         const file = nextFiles[index];
         const hash = await hashFile(file);
+        if (!hash) {
+          hashUnavailable = true;
+          continue;
+        }
+
         hashesByIndex.set(index, hash);
       }
 
-      const hashPayload = await preflight(nextFiles, hashesByIndex);
+      const hashPayload = await preflight(nextFiles, hashesByIndex.size > 0 ? hashesByIndex : undefined);
       const duplicateHashes = new Set(hashPayload.duplicateHashes ?? []);
 
       const prepared = nextFiles.map((file, index) => {
@@ -141,6 +164,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       });
 
       setPreparedFiles(prepared);
+      if (hashUnavailable) {
+        setWarning(
+          "Hash-based duplicate checks are unavailable on this connection. Upload continues, but some duplicates may be missed.",
+        );
+      }
+
       if (prepared.some((entry) => entry.isDuplicate)) {
         setNeedsPolicyChoice(true);
         setDuplicatePolicy("upload_anyway");
@@ -149,7 +178,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
       await uploadPreparedFiles(prepared, "upload_anyway");
     } catch {
-      setError("Unable to check duplicates right now.");
+      setError("Unable to prepare uploads right now.");
     } finally {
       setIsPreparing(false);
     }
@@ -157,6 +186,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
   async function uploadPreparedFiles(nextPrepared: PreparedFile[], policy: DuplicatePolicy) {
     setError(null);
+    setWarning(null);
     setSuccess(null);
     setProgressPercent(0);
     setProgressLabel(null);
@@ -260,6 +290,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
         setSuccess(`Upload complete (${uploadedCount}).`);
       }
       setFiles([]);
+      clearFileInput();
       setPreparedFiles([]);
       setNeedsPolicyChoice(false);
       router.refresh();
@@ -287,7 +318,6 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             const selected = Array.from(event.target.files ?? []);
             setFiles(selected);
             prepareFiles(selected);
-            event.target.value = "";
           }}
           className="block w-full text-sm"
         />
@@ -355,6 +385,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               disabled={isBusy}
               onClick={() => {
                 setFiles([]);
+                clearFileInput();
                 setPreparedFiles([]);
                 setNeedsPolicyChoice(false);
               }}
@@ -372,6 +403,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
       {isPreparing ? <p className="text-xs text-zinc-600">Checking for duplicates...</p> : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {warning ? <p className="text-sm text-amber-700">{warning}</p> : null}
       {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
       {isSubmitting ? (
         <div className="space-y-1">

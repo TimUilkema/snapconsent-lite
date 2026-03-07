@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 
 import { AssetsList } from "@/components/projects/assets-list";
 import { AssetsUploadForm } from "@/components/projects/assets-upload-form";
+import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-matching-panel";
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { InviteActions } from "@/components/projects/invite-actions";
@@ -69,6 +70,12 @@ type AssetViewRow = {
   created_at: string;
   uploaded_at: string | null;
   thumbnailUrl: string | null;
+  linkedConsentCount: number;
+  linkedPeople: Array<{
+    consentId: string;
+    fullName: string | null;
+    email: string | null;
+  }>;
 };
 
 type HeadshotAssetRow = {
@@ -76,6 +83,27 @@ type HeadshotAssetRow = {
   status: string;
   storage_bucket: string | null;
   storage_path: string | null;
+};
+
+type AssetConsentLinkRow = {
+  asset_id: string;
+  consent_id: string;
+  consents:
+    | {
+        id: string;
+        subjects: {
+          email: string;
+          full_name: string;
+        } | null;
+      }
+    | {
+        id: string;
+        subjects: {
+          email: string;
+          full_name: string;
+        } | null;
+      }[]
+    | null;
 };
 
 export default async function ProjectDashboardPage({ params }: RouteProps) {
@@ -155,6 +183,44 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
 
   const assetRows = (assets as AssetRow[] | null) ?? [];
   const assetThumbnailUrls = await signThumbnailUrlsForAssets(supabase, assetRows);
+  const assetLinkCountMap = new Map<string, number>();
+  const assetLinkedPeopleMap = new Map<
+    string,
+    Array<{ consentId: string; fullName: string | null; email: string | null }>
+  >();
+  const assetIds = assetRows.map((asset) => asset.id);
+  if (assetIds.length > 0) {
+    const { data: assetLinks } = await supabase
+      .from("asset_consent_links")
+      .select("asset_id, consent_id, consents(id, subjects(email, full_name))")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", project.id)
+      .in("asset_id", assetIds);
+
+    ((assetLinks as AssetConsentLinkRow[] | null) ?? []).forEach((link) => {
+      const currentCount = assetLinkCountMap.get(link.asset_id) ?? 0;
+      assetLinkCountMap.set(link.asset_id, currentCount + 1);
+
+      const consentRow = Array.isArray(link.consents) ? link.consents[0] : link.consents;
+      if (!consentRow) {
+        return;
+      }
+
+      const existingPeople = assetLinkedPeopleMap.get(link.asset_id) ?? [];
+      if (existingPeople.some((person) => person.consentId === consentRow.id)) {
+        assetLinkedPeopleMap.set(link.asset_id, existingPeople);
+        return;
+      }
+
+      existingPeople.push({
+        consentId: consentRow.id,
+        fullName: consentRow.subjects?.full_name ?? null,
+        email: consentRow.subjects?.email ?? null,
+      });
+      assetLinkedPeopleMap.set(link.asset_id, existingPeople);
+    });
+  }
+
   const assetViewRows: AssetViewRow[] = assetRows.map((asset) => ({
     id: asset.id,
     original_filename: asset.original_filename,
@@ -169,6 +235,8 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
       }
       return resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader);
     })(),
+    linkedConsentCount: assetLinkCountMap.get(asset.id) ?? 0,
+    linkedPeople: assetLinkedPeopleMap.get(asset.id) ?? [],
   }));
 
   const { data: consentRows } = await supabase
@@ -362,6 +430,12 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                           ) : null}
                           {consent?.face_match_opt_in && hasLinkedHeadshot ? (
                             <ConsentHeadshotReplaceControl
+                              projectId={project.id}
+                              consentId={consent.id}
+                            />
+                          ) : null}
+                          {consent ? (
+                            <ConsentAssetMatchingPanel
                               projectId={project.id}
                               consentId={consent.id}
                             />

@@ -48,7 +48,14 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const consentIds = Array.isArray(body.consentIds)
-      ? body.consentIds.filter((id) => typeof id === "string").map((id) => id.trim())
+      ? Array.from(
+          new Set(
+            body.consentIds
+              .filter((id) => typeof id === "string")
+              .map((id) => id.trim())
+              .filter((id) => id.length > 0),
+          ),
+        )
       : [];
 
     const result = await createAssetWithIdempotency({
