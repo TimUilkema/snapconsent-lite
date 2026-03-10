@@ -12,7 +12,11 @@ import {
   enqueuePhotoUploadedJob,
 } from "../src/lib/matching/auto-match-jobs";
 import { type AutoMatcher } from "../src/lib/matching/auto-matcher";
-import { linkPhotosToConsent, unlinkPhotosFromConsent } from "../src/lib/matching/consent-photo-matching";
+import {
+  clearConsentPhotoSuppressions,
+  linkPhotosToConsent,
+  unlinkPhotosFromConsent,
+} from "../src/lib/matching/consent-photo-matching";
 import { runAutoMatchWorker } from "../src/lib/matching/auto-match-worker";
 import { MatcherProviderError } from "../src/lib/matching/provider-errors";
 
@@ -492,6 +496,79 @@ test("manual unlink creates suppression and blocks future auto recreation", asyn
 
   const link = await getPhotoConsentLink(admin, context, photoAssetId, consent.consentId);
   assert.equal(link, null);
+});
+
+test("headshot replacement reset clears suppressions and allows auto recreation again", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+  });
+  const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+  await linkPhotosToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    assetIds: [photoAssetId],
+  });
+  await unlinkPhotosFromConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    assetIds: [photoAssetId],
+  });
+
+  const { data: suppressionBefore, error: suppressionBeforeError } = await admin
+    .from("asset_consent_link_suppressions")
+    .select("asset_id")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId)
+    .eq("consent_id", consent.consentId)
+    .eq("asset_id", photoAssetId)
+    .maybeSingle();
+  assertNoError(suppressionBeforeError, "select suppression before reset");
+  assert.ok(suppressionBefore);
+
+  await clearConsentPhotoSuppressions({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+  });
+
+  const { data: suppressionAfter, error: suppressionAfterError } = await admin
+    .from("asset_consent_link_suppressions")
+    .select("asset_id")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId)
+    .eq("consent_id", consent.consentId)
+    .eq("asset_id", photoAssetId)
+    .maybeSingle();
+  assertNoError(suppressionAfterError, "select suppression after reset");
+  assert.equal(suppressionAfter, null);
+
+  await enqueueConsentHeadshotReadyJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    headshotAssetId: consent.headshotAssetId,
+    payload: { source: "feature-015-test" },
+    supabase: admin,
+  });
+
+  await runAutoMatchWorker({
+    workerId: `feature-015-worker-${randomUUID()}`,
+    batchSize: 10,
+    confidenceThreshold: 0.92,
+    matcher: matcherWithConfidence(0.99),
+    supabase: admin,
+  });
+
+  const link = await getPhotoConsentLink(admin, context, photoAssetId, consent.consentId);
+  assert.equal(link?.link_source, "auto");
 });
 
 test("retryable provider failures are retried", async () => {

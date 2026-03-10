@@ -32,6 +32,11 @@ Before planning or implementing changes read:
 
 These documents describe the domain model and system structure.
 
+## UI DESIGN 
+IMPORTANT:
+Before making UI changes/implementations read:
+- `UNCODEXIFY.MD`
+
 ## Development workflow
 
 For any non-trivial change follow the **RPI workflow** described in:

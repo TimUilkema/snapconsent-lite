@@ -64,11 +64,17 @@ export async function GET(_request: Request, context: RouteContext) {
       width: 240,
       height: 240,
     });
+    const previewMap = await signThumbnailUrlsForAssets(supabase, assets, {
+      width: 960,
+      quality: 85,
+      resize: "contain",
+    });
 
     return Response.json(
       {
         assets: assets.map((asset) => {
           const signedUrl = thumbnailMap.get(asset.id) ?? null;
+          const previewSignedUrl = previewMap.get(asset.id) ?? null;
           return {
             id: asset.id,
             originalFilename: asset.original_filename,
@@ -85,6 +91,9 @@ export async function GET(_request: Request, context: RouteContext) {
             reviewedBy: asset.reviewed_by,
             thumbnailUrl: signedUrl
               ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+              : null,
+            previewUrl: previewSignedUrl
+              ? resolveLoopbackStorageUrlForHostHeader(previewSignedUrl, requestHostHeader)
               : null,
           };
         }),

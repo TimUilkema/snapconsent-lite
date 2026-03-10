@@ -27,43 +27,70 @@ export default async function ProjectsPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
-      <section className="app-shell flex w-full flex-col gap-6 rounded-[28px] px-6 py-8 sm:px-8">
+    <div className="space-y-6">
+      <section className="app-shell rounded-2xl px-5 py-5 sm:px-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">Projects</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
+              Organize photographers, invite subjects, and manage linked project photos from one place.
+            </p>
+          </div>
+          <Link
+            href="/dashboard"
+            className="text-sm font-medium text-zinc-700 underline underline-offset-4"
+          >
+            Back to dashboard
+          </Link>
+        </div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">Projects</h1>
-          <p className="mt-2 text-sm leading-6 text-zinc-600">
-            Create a project and generate subject invite URLs.
-          </p>
+          <CreateProjectForm />
         </div>
 
-        <CreateProjectForm />
+        <section className="content-card rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900">Existing projects</h2>
+              <p className="mt-1 text-sm text-zinc-600">
+                {projects.length} project{projects.length === 1 ? "" : "s"} in this workspace
+              </p>
+            </div>
+          </div>
 
-        <section className="space-y-3 rounded-2xl border border-zinc-200 bg-white/70 p-4">
-          <h2 className="text-sm font-semibold">Existing Projects</h2>
           {projects.length === 0 ? (
-            <p className="text-sm text-zinc-600">No projects yet.</p>
+            <p className="mt-4 text-sm text-zinc-600">No projects yet.</p>
           ) : (
-            <ul className="space-y-2 text-sm">
+            <ul className="mt-4 space-y-3 text-sm">
               {projects.map((project) => (
-                <li
-                  key={project.id}
-                  className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm"
-                >
-                  <Link
-                    className="font-medium text-zinc-900 underline"
-                    href={`/projects/${project.id}`}
-                  >
-                    {project.name}
-                  </Link>
-                  <p className="mt-1 text-zinc-600">
-                    {project.status} - {new Date(project.created_at).toLocaleString()}
-                  </p>
+                <li key={project.id} className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <Link
+                        className="text-base font-medium text-zinc-900 underline underline-offset-4"
+                        href={`/projects/${project.id}`}
+                      >
+                        {project.name}
+                      </Link>
+                      <p className="mt-1 text-zinc-600">
+                        {project.status} · {new Date(project.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <Link
+                      href={`/projects/${project.id}`}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                    >
+                      Open project
+                    </Link>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </section>
-      </section>
-    </main>
+      </div>
+    </div>
   );
 }

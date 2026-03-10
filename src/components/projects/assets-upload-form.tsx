@@ -331,14 +331,14 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={isBusy}
-          className="rounded bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+          className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
         >
           Upload images
         </button>
       )}
 
       {needsPolicyChoice ? (
-        <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
+        <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
           <p className="font-medium">Duplicates detected for this batch.</p>
           <p className="text-xs text-zinc-600">
             {duplicateCount} duplicate file{duplicateCount === 1 ? "" : "s"} out of{" "}
@@ -376,7 +376,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               type="button"
               disabled={isBusy}
               onClick={() => uploadPreparedFiles(preparedFiles, duplicatePolicy)}
-              className="rounded bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+              className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
             >
               Continue upload
             </button>
@@ -389,7 +389,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
                 setPreparedFiles([]);
                 setNeedsPolicyChoice(false);
               }}
-              className="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
             >
               Cancel
             </button>

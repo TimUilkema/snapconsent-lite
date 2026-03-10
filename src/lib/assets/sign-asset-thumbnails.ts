@@ -16,13 +16,25 @@ type ThumbnailSizeOptions = {
   width?: number;
   height?: number;
   quality?: number;
+  resize?: "cover" | "contain";
 };
 
 function getThumbnailTransform(options: ThumbnailSizeOptions | undefined) {
+  const hasWidth = Number.isFinite(options?.width);
+  const hasHeight = Number.isFinite(options?.height);
+
   return {
-    width: options?.width ?? DEFAULT_THUMBNAIL_WIDTH,
-    height: options?.height ?? DEFAULT_THUMBNAIL_HEIGHT,
-    resize: "cover" as const,
+    width: hasWidth
+      ? options?.width
+      : hasHeight
+        ? undefined
+        : DEFAULT_THUMBNAIL_WIDTH,
+    height: hasHeight
+      ? options?.height
+      : hasWidth
+        ? undefined
+        : DEFAULT_THUMBNAIL_HEIGHT,
+    resize: options?.resize ?? ("cover" as const),
     quality: options?.quality ?? DEFAULT_THUMBNAIL_QUALITY,
   };
 }

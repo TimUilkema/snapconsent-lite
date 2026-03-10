@@ -168,7 +168,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
     <form
       action={`/i/${token}/consent`}
       method="post"
-      className="content-card space-y-4 rounded-2xl p-4 sm:p-5"
+      className="content-card space-y-5 rounded-2xl p-4 sm:p-5"
       onSubmit={(event) => {
         if (faceMatchOptIn && !headshotAssetId) {
           event.preventDefault();
@@ -180,7 +180,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         <span className="mb-1 block font-medium">Full name</span>
         <input
           name="full_name"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
           minLength={2}
           maxLength={160}
           required
@@ -191,12 +191,12 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         <input
           name="email"
           type="email"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
           required
         />
       </label>
 
-      <label className="flex items-start gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
+      <label className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
         <input
           type="checkbox"
           checked={faceMatchOptIn}
@@ -223,7 +223,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       </label>
 
       {faceMatchOptIn ? (
-        <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-zinc-800">
+        <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-zinc-800">
           <p className="font-medium">Headshot required</p>
           <p className="text-xs text-zinc-700">
             Your headshot is stored privately for facial matching within this project and is
@@ -250,7 +250,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
             type="button"
             disabled={isUploading}
             onClick={openHeadshotPicker}
-            className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+            className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
           >
             {isUploading ? "Uploading headshot..." : "Upload headshot"}
           </button>
@@ -259,7 +259,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
               <button
                 type="button"
                 disabled={isUploading}
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
                 onClick={() => {
                   setShowSourcePicker(false);
                   if (cameraInputRef.current) {
@@ -273,7 +273,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
               <button
                 type="button"
                 disabled={isUploading}
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
                 onClick={() => {
                   setShowSourcePicker(false);
                   if (fileInputRef.current) {
@@ -303,7 +303,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         </div>
       ) : null}
 
-      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
+      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
         <p className="font-medium">Consent text ({consentVersion ?? "unknown"})</p>
         <p className="mt-2">{consentText ?? "Consent template unavailable."}</p>
       </div>
@@ -317,7 +317,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       <button
         type="submit"
         disabled={isUploading}
-        className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+        className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
         Submit Consent
       </button>

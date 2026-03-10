@@ -85,6 +85,17 @@ function parseSimilarity(data: CompreFaceVerifyResponse | null) {
   return normalizeConfidence(confidence);
 }
 
+function isNoFaceDetectedMessage(providerMessage: string | null) {
+  const normalized = String(providerMessage ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.includes("no face");
+}
+
 function getLongestSideCap(target: DownloadTarget) {
   if (target === "headshot") {
     return HEADSHOT_LONGEST_SIDE_CAP;
@@ -266,7 +277,7 @@ async function verifyPairWithCompreFace(
 
     const parsedResponse = await parseCompreFaceResponse(response);
     if (!response.ok) {
-      if (response.status === 422) {
+      if (response.status === 422 || (response.status === 400 && isNoFaceDetectedMessage(parsedResponse.providerMessage))) {
         logCompreFaceDevelopment("response", {
           status: response.status,
           parsedSimilarity: 0,

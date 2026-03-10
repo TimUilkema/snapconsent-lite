@@ -165,14 +165,14 @@ export function HeadshotReplacementForm({ projectId, consents }: HeadshotReplace
   }
 
   return (
-    <section className="content-card space-y-3 rounded-2xl p-3">
-      <h3 className="text-sm font-semibold text-zinc-900">Replace Consent Headshot</h3>
+    <section className="content-card space-y-4 rounded-2xl p-4">
+      <h3 className="text-lg font-semibold text-zinc-900">Replace consent headshot</h3>
       {consents.length > 0 ? (
         <>
           <label className="block text-sm text-zinc-800">
             <span className="mb-1 block font-medium">Consent</span>
             <select
-              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
               value={selectedConsentId}
               disabled={isSubmitting}
               onChange={(event) => setSelectedConsentId(event.target.value)}
@@ -203,7 +203,7 @@ export function HeadshotReplacementForm({ projectId, consents }: HeadshotReplace
             type="button"
             onClick={handleReplace}
             disabled={isSubmitting || !file || !selectedConsentId}
-            className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+            className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
           >
             {isSubmitting ? "Replacing..." : "Replace headshot"}
           </button>

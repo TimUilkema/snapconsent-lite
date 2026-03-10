@@ -28,6 +28,15 @@ function parseLimit(searchParams: URLSearchParams) {
   return Math.floor(parsed);
 }
 
+function parseMode(searchParams: URLSearchParams) {
+  const mode = String(searchParams.get("mode") ?? "").trim().toLowerCase();
+  if (mode === "likely") {
+    return "likely";
+  }
+
+  return "default";
+}
+
 export async function GET(request: Request, context: RouteContext) {
   try {
     const supabase = await createClient();
@@ -53,17 +62,24 @@ export async function GET(request: Request, context: RouteContext) {
       consentId,
       query: url.searchParams.get("q"),
       limit: parseLimit(url.searchParams),
+      mode: parseMode(url.searchParams),
     });
 
     const requestHeaders = await headers();
     const requestHostHeader = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
 
     const thumbnailMap = await signThumbnailUrlsForAssets(supabase, assets);
+    const previewMap = await signThumbnailUrlsForAssets(supabase, assets, {
+      width: 960,
+      quality: 85,
+      resize: "contain",
+    });
 
     return Response.json(
       {
         assets: assets.map((asset) => {
           const signedUrl = thumbnailMap.get(asset.id) ?? null;
+          const previewSignedUrl = previewMap.get(asset.id) ?? null;
           return {
             id: asset.id,
             originalFilename: asset.original_filename,
@@ -72,8 +88,14 @@ export async function GET(request: Request, context: RouteContext) {
             createdAt: asset.created_at,
             uploadedAt: asset.uploaded_at,
             isLinked: asset.isLinked,
+            candidateConfidence: asset.candidate_confidence,
+            candidateLastScoredAt: asset.candidate_last_scored_at,
+            candidateMatcherVersion: asset.candidate_matcher_version,
             thumbnailUrl: signedUrl
               ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+              : null,
+            previewUrl: previewSignedUrl
+              ? resolveLoopbackStorageUrlForHostHeader(previewSignedUrl, requestHostHeader)
               : null,
           };
         }),

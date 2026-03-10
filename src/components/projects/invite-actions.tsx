@@ -74,20 +74,20 @@ export function InviteSharePanel({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
           onClick={() => setShowUrl((prev) => !prev)}
         >
           {showUrl ? "Hide URL" : "Show URL"}
         </button>
         <button
           type="button"
-          className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
           onClick={handleToggleQr}
         >
           {showQr ? "Hide QR" : "Show QR"}
         </button>
         <a
-          className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
           href={shareUrl}
           target="_blank"
           rel="noreferrer"
@@ -97,16 +97,16 @@ export function InviteSharePanel({
       </div>
       {showUrl ? (
         <label className="block">
-          <span className="mb-1 block text-xs font-medium uppercase text-zinc-500">Invite URL</span>
+          <span className="mb-1 block text-xs font-medium text-zinc-500">Invite URL</span>
           <input
             readOnly
             value={shareUrl}
-            className="w-full rounded border border-zinc-300 px-3 py-2"
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2"
           />
         </label>
       ) : null}
       {showQr ? (
-        <div className="rounded border border-zinc-200 bg-white p-3">
+        <div className="rounded-lg border border-zinc-200 bg-white p-3">
           {qrDataUrl ? (
             <Image src={qrDataUrl} alt="Invite QR code" width={220} height={220} unoptimized />
           ) : null}
@@ -190,7 +190,7 @@ export function InviteActions({
           type="button"
           onClick={handleRevoke}
           disabled={isSubmitting}
-          className="rounded border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+          className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
         >
           {isSubmitting ? "Revoking..." : "Remove invite link"}
         </button>

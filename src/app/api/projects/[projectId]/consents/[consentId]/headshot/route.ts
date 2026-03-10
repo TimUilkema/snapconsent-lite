@@ -1,5 +1,6 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
+import { clearConsentPhotoSuppressions } from "@/lib/matching/consent-photo-matching";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -159,6 +160,13 @@ export async function POST(request: Request, context: RouteContext) {
     if (createNewLinkError) {
       throw new HttpError(500, "headshot_replace_failed", "Unable to link replacement headshot.");
     }
+
+    await clearConsentPhotoSuppressions({
+      supabase,
+      tenantId,
+      projectId,
+      consentId,
+    });
 
     const now = new Date().toISOString();
     for (const oldAssetId of existingHeadshotIds) {

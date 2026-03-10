@@ -119,13 +119,18 @@ export function CreateInviteForm({
   const hasTemplates = templates.length > 0;
 
   return (
-    <section className="content-card space-y-3 rounded-2xl p-4">
-      <h2 className="text-sm font-semibold text-zinc-900">Create Subject Invite</h2>
+    <section className="content-card space-y-4 rounded-2xl p-5">
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-900">Create subject invite</h2>
+        <p className="mt-1 text-sm text-zinc-600">
+          Generate a shareable consent form link for one subject.
+        </p>
+      </div>
       <form onSubmit={handleSubmit} className="space-y-3">
         <label className="block text-sm text-zinc-800">
           <span className="mb-1 block font-medium">Consent template</span>
           <select
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
             value={selectedTemplateId}
             onChange={(event) => setSelectedTemplateId(event.target.value)}
             disabled={!hasTemplates}
@@ -140,7 +145,7 @@ export function CreateInviteForm({
         <button
           type="submit"
           disabled={isSubmitting || !hasTemplates || !selectedTemplateId}
-          className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+          className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
         >
           {isSubmitting ? "Creating..." : "Create Invite URL"}
         </button>
@@ -150,11 +155,11 @@ export function CreateInviteForm({
       ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {payload ? (
-        <div className="space-y-2 text-sm">
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm">
           <p>
             <span className="font-medium">Invite ID:</span> {payload.inviteId}
           </p>
-          <p>
+          <p className="mt-1">
             <span className="font-medium">Expires:</span> {expiresAtLabel}
           </p>
           <InviteSharePanel invitePath={payload.invitePath} defaultShowQr />

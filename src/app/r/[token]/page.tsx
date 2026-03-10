@@ -36,8 +36,8 @@ export default async function RevokePage({ params, searchParams }: RevokePagePro
   const message = getMessage(resolvedSearchParams.status, resolvedSearchParams.error);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
-      <section className="app-shell flex w-full flex-col gap-4 rounded-[28px] px-5 py-6 sm:px-7 sm:py-7">
+    <main className="page-frame flex min-h-screen py-8 sm:py-10">
+      <section className="app-shell flex w-full flex-col gap-4 rounded-2xl px-5 py-6 sm:px-7 sm:py-7">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Revoke Consent</h1>
         <p className="text-sm text-zinc-700">
           Use this page to revoke future processing for your consent.
@@ -66,14 +66,14 @@ export default async function RevokePage({ params, searchParams }: RevokePagePro
             <span className="mb-1 block font-medium">Reason (optional)</span>
             <textarea
               name="reason"
-              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2"
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2"
               rows={3}
               maxLength={300}
             />
           </label>
           <button
             type="submit"
-            className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
+            className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
           >
             Revoke Consent
           </button>

@@ -4,12 +4,15 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
+import { PreviewableImage } from "@/components/projects/previewable-image";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
 
 type ConsentAssetMatchingPanelProps = {
   projectId: string;
   consentId: string;
 };
+
+type MatchableMode = "default" | "likely";
 
 type MatchableAsset = {
   id: string;
@@ -19,7 +22,11 @@ type MatchableAsset = {
   createdAt: string;
   uploadedAt: string | null;
   isLinked: boolean;
+  candidateConfidence: number | null;
+  candidateLastScoredAt: string | null;
+  candidateMatcherVersion: string | null;
   thumbnailUrl: string | null;
+  previewUrl: string | null;
 };
 
 type LinkedAsset = {
@@ -37,6 +44,7 @@ type LinkedAsset = {
   reviewedAt: string | null;
   reviewedBy: string | null;
   thumbnailUrl: string | null;
+  previewUrl: string | null;
 };
 
 type ListAssetsResponse<T> = {
@@ -99,12 +107,18 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
   const [isLoadingLinked, setIsLoadingLinked] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSavingLinks, setIsSavingLinks] = useState(false);
+  const [showFilenames, setShowFilenames] = useState(false);
+  const [reviewLikelyMatches, setReviewLikelyMatches] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const isBusy = isLoadingMatchable || isLoadingLinked || isUploading || isSavingLinks;
 
-  async function loadMatchableAssets(query: string) {
+  function getMatchableMode(): MatchableMode {
+    return reviewLikelyMatches ? "likely" : "default";
+  }
+
+  async function loadMatchableAssets(query: string, mode: MatchableMode) {
     setIsLoadingMatchable(true);
     try {
       const params = new URLSearchParams();
@@ -112,6 +126,9 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
         params.set("q", query.trim());
       }
       params.set("limit", "50");
+      if (mode === "likely") {
+        params.set("mode", "likely");
+      }
 
       const response = await fetch(
         `/api/projects/${projectId}/consents/${consentId}/assets/matchable?${params.toString()}`,
@@ -157,15 +174,15 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
     }
   }
 
-  async function refreshPanelData(query: string) {
-    await Promise.all([loadMatchableAssets(query), loadLinkedAssets()]);
+  async function refreshPanelData(query: string, mode: MatchableMode) {
+    await Promise.all([loadMatchableAssets(query, mode), loadLinkedAssets()]);
   }
 
   async function openPanel() {
     setError(null);
     setSuccess(null);
     setIsOpen(true);
-    await refreshPanelData(searchQuery);
+    await refreshPanelData(searchQuery, getMatchableMode());
   }
 
   async function handleUploadNewPhotos(files: File[]) {
@@ -235,7 +252,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
         uploadedCount += 1;
       }
 
-      await refreshPanelData(searchQuery);
+      await refreshPanelData(searchQuery, getMatchableMode());
       router.refresh();
       setSuccess(
         uploadedCount > 0
@@ -277,7 +294,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
         return;
       }
 
-      await refreshPanelData(searchQuery);
+      await refreshPanelData(searchQuery, getMatchableMode());
       router.refresh();
       setSuccess(`Linked ${payload.linkedCount ?? selectedAssetIds.length} photo(s).`);
     } catch {
@@ -315,7 +332,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
       }
 
       setSelectedAssetIds((current) => current.filter((assetId) => !assetIds.includes(assetId)));
-      await refreshPanelData(searchQuery);
+      await refreshPanelData(searchQuery, getMatchableMode());
       router.refresh();
       setSuccess(`Unlinked ${payload.unlinkedCount ?? assetIds.length} photo(s).`);
     } catch {
@@ -338,7 +355,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
             }
             void openPanel();
           }}
-          className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
         >
           {isOpen ? "Close matching" : "Match assets"}
         </button>
@@ -346,14 +363,14 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
 
       {isOpen ? (
         <div className="mt-3 space-y-4">
-          <section className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <section className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
             <div className="flex items-center justify-between gap-2">
               <h4 className="text-sm font-semibold text-zinc-900">Upload new photos (auto-link)</h4>
               <button
                 type="button"
                 disabled={isBusy}
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded-full bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+                className="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
               >
                 {isUploading ? "Uploading..." : "Upload photos"}
               </button>
@@ -376,121 +393,199 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
             </p>
           </section>
 
-          <section className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-sm font-semibold text-zinc-900">Link existing uploaded photos</h4>
-              <div className="flex flex-wrap gap-2">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
+            <section className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-semibold text-zinc-900">
+                    {reviewLikelyMatches ? "Review likely matches" : "Link existing uploaded photos"}
+                  </h4>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {reviewLikelyMatches
+                      ? "Review medium-confidence candidates and link the correct photos."
+                      : "Select unlinked project photos to connect them to this consent."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={isBusy || selectedAssetIds.length === 0}
+                    onClick={() => void linkSelectedAssets()}
+                    className="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+                  >
+                    Link selected
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy || selectedAssetIds.length === 0}
+                    onClick={() => void unlinkAssets(selectedAssetIds)}
+                    className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
+                  >
+                    Unlink selected
+                  </button>
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800">
+                    <input
+                      type="checkbox"
+                      checked={showFilenames}
+                      onChange={(event) => setShowFilenames(event.target.checked)}
+                    />
+                    Show filenames
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800">
+                    <input
+                      type="checkbox"
+                      checked={reviewLikelyMatches}
+                      onChange={(event) => {
+                        const nextReviewMode = event.target.checked;
+                        setReviewLikelyMatches(nextReviewMode);
+                        setSelectedAssetIds([]);
+                        void loadMatchableAssets(searchQuery, nextReviewMode ? "likely" : "default");
+                      }}
+                    />
+                    Review likely matches
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search by filename"
+                  className="w-full max-w-sm rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-900"
+                />
                 <button
                   type="button"
-                  disabled={isBusy || selectedAssetIds.length === 0}
-                  onClick={() => void linkSelectedAssets()}
-                  className="rounded-full bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+                  disabled={isBusy}
+                  onClick={() => void loadMatchableAssets(searchQuery, getMatchableMode())}
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
                 >
-                  Link selected
-                </button>
-                <button
-                  type="button"
-                  disabled={isBusy || selectedAssetIds.length === 0}
-                  onClick={() => void unlinkAssets(selectedAssetIds)}
-                  className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
-                >
-                  Unlink selected
+                  Search
                 </button>
               </div>
-            </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by filename"
-                className="w-full max-w-sm rounded border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-900"
-              />
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => void loadMatchableAssets(searchQuery)}
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
-              >
-                Search
-              </button>
-            </div>
-
-            {isLoadingMatchable ? (
-              <p className="text-xs text-zinc-600">Loading photos...</p>
-            ) : matchableAssets.length > 0 ? (
-              <ul className="space-y-2">
-                {matchableAssets.map((asset) => {
-                  const isSelected = selectedAssetIds.includes(asset.id);
-                  return (
-                    <li key={asset.id} className="rounded border border-zinc-200 bg-white p-2">
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(event) => {
-                            setSelectedAssetIds((current) => {
-                              if (event.target.checked) {
-                                return current.includes(asset.id) ? current : [...current, asset.id];
-                              }
-                              return current.filter((assetId) => assetId !== asset.id);
-                            });
-                          }}
-                        />
-                        <div className="flex min-w-0 flex-1 gap-2">
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-zinc-200 bg-zinc-100">
-                            {asset.thumbnailUrl ? (
-                              <img
-                                src={asset.thumbnailUrl}
-                                alt={asset.originalFilename}
-                                loading="lazy"
-                                className="h-full w-full object-cover"
+              {isLoadingMatchable ? (
+                <p className="mt-3 text-xs text-zinc-600">Loading photos...</p>
+              ) : matchableAssets.length > 0 ? (
+                <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {matchableAssets.map((asset) => {
+                    const isSelected = selectedAssetIds.includes(asset.id);
+                    return (
+                      <li key={asset.id} className="rounded-xl border border-zinc-200 bg-white p-2 shadow-sm">
+                        <div className="space-y-2">
+                          <div className="relative aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100">
+                            <PreviewableImage
+                              src={asset.thumbnailUrl}
+                              previewSrc={asset.previewUrl}
+                              alt={asset.originalFilename}
+                              className="h-full w-full"
+                              imageClassName="h-full w-full object-cover"
+                            />
+                            <label className="absolute left-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/95 shadow-sm">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(event) => {
+                                  setSelectedAssetIds((current) => {
+                                    if (event.target.checked) {
+                                      return current.includes(asset.id) ? current : [...current, asset.id];
+                                    }
+                                    return current.filter((assetId) => assetId !== asset.id);
+                                  });
+                                }}
                               />
+                            </label>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            {showFilenames ? (
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-medium text-zinc-900">{asset.originalFilename}</p>
+                                <p className="text-xs text-zinc-600">{formatBytes(asset.fileSizeBytes)}</p>
+                                {reviewLikelyMatches && asset.candidateConfidence !== null ? (
+                                  <p className="text-[11px] font-semibold text-amber-700">
+                                    Confidence {(asset.candidateConfidence * 100).toFixed(1)}%
+                                  </p>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div className="flex flex-col">
+                                <span className="text-xs text-zinc-500">{formatBytes(asset.fileSizeBytes)}</span>
+                                {reviewLikelyMatches && asset.candidateConfidence !== null ? (
+                                  <span className="text-[11px] font-semibold text-amber-700">
+                                    Confidence {(asset.candidateConfidence * 100).toFixed(1)}%
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            {isSelected ? (
+                              <span className="rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                Selected
+                              </span>
                             ) : null}
                           </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-zinc-900">{asset.originalFilename}</p>
-                            <p className="text-xs text-zinc-600">{formatBytes(asset.fileSizeBytes)}</p>
-                          </div>
                         </div>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p className="text-xs text-zinc-600">No unlinked uploaded photos found for this project.</p>
-            )}
-          </section>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="mt-3 text-xs text-zinc-600">
+                  {reviewLikelyMatches
+                    ? "No likely matches found in the configured review confidence band."
+                    : "No unlinked uploaded photos found for this project."}
+                </p>
+              )}
+            </section>
 
-          <section className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            <h4 className="text-sm font-semibold text-zinc-900">Linked photos</h4>
-            {isLoadingLinked ? (
-              <p className="text-xs text-zinc-600">Loading linked photos...</p>
-            ) : linkedAssets.length > 0 ? (
-              <ul className="space-y-2">
-                {linkedAssets.map((asset) => (
-                  <li key={asset.id} className="flex items-center justify-between gap-2 rounded border border-zinc-200 bg-white p-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-zinc-200 bg-zinc-100">
-                        {asset.thumbnailUrl ? (
-                          <img
+            <section className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-zinc-900">Linked photos</h4>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Photos already connected to this consent can be reviewed or removed here.
+                  </p>
+                </div>
+              </div>
+
+              {isLoadingLinked ? (
+                <p className="mt-3 text-xs text-zinc-600">Loading linked photos...</p>
+              ) : linkedAssets.length > 0 ? (
+                <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {linkedAssets.map((asset) => (
+                    <li
+                      key={asset.id}
+                      className="rounded-xl border border-zinc-200 bg-white p-2 shadow-sm"
+                    >
+                      <div className="space-y-2">
+                        <div className="relative aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100">
+                          <PreviewableImage
                             src={asset.thumbnailUrl}
+                            previewSrc={asset.previewUrl}
                             alt={asset.originalFilename}
-                            loading="lazy"
-                            className="h-full w-full object-cover"
+                            className="h-full w-full"
+                            imageClassName="h-full w-full object-cover"
                           />
-                        ) : null}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-zinc-900">{asset.originalFilename}</p>
-                        <p className="text-xs text-zinc-600">
-                          Linked at {new Date(asset.linkCreatedAt).toLocaleString()}
-                        </p>
-                        <p className="mt-1">
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void unlinkAssets([asset.id])}
+                            className="absolute right-2 top-2 rounded-lg border border-zinc-300 bg-white/95 px-3 py-1.5 text-[11px] font-medium text-zinc-800 shadow-sm hover:bg-white disabled:opacity-60"
+                          >
+                            Unlink
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          {showFilenames ? (
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium text-zinc-900">{asset.originalFilename}</p>
+                              <p className="text-xs text-zinc-600">{formatBytes(asset.fileSizeBytes)}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-zinc-500">{formatBytes(asset.fileSizeBytes)}</span>
+                          )}
                           <span
-                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                            className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ${
                               asset.linkSource === "auto"
                                 ? "bg-blue-100 text-blue-700"
                                 : "bg-zinc-200 text-zinc-700"
@@ -498,24 +593,16 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
                           >
                             {asset.linkSource === "auto" ? "Auto" : "Manual"}
                           </span>
-                        </p>
+                        </div>
                       </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => void unlinkAssets([asset.id])}
-                      className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
-                    >
-                      Unlink
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs text-zinc-600">No linked photos for this consent yet.</p>
-            )}
-          </section>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-xs text-zinc-600">No linked photos for this consent yet.</p>
+              )}
+            </section>
+          </div>
 
           {error ? <p className="text-xs text-red-700">{error}</p> : null}
           {success ? <p className="text-xs text-emerald-700">{success}</p> : null}

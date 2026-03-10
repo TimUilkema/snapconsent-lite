@@ -29,8 +29,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const errorMessage = errorCode ? ERROR_MESSAGES[errorCode] ?? "Unable to sign in." : null;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-8 sm:px-6 sm:py-10">
-      <section className="app-shell w-full max-w-md rounded-[28px] px-6 py-8 sm:px-8">
+    <main className="page-frame flex min-h-screen items-center justify-center py-8 sm:py-10">
+      <section className="app-shell w-full max-w-md rounded-2xl px-6 py-8 sm:px-8">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">Sign in</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600">Use your Supabase email and password.</p>
 
@@ -44,7 +44,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <label className="block text-sm">
             <span className="mb-1 block font-medium">Email</span>
             <input
-              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 shadow-sm outline-none focus:border-zinc-400"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2.5 shadow-sm outline-none focus:border-zinc-400"
               type="email"
               name="email"
               autoComplete="email"
@@ -54,7 +54,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <label className="block text-sm">
             <span className="mb-1 block font-medium">Password</span>
             <input
-              className="w-full rounded-xl border border-zinc-300 px-3 py-2.5 shadow-sm outline-none focus:border-zinc-400"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2.5 shadow-sm outline-none focus:border-zinc-400"
               type="password"
               name="password"
               autoComplete="current-password"
@@ -62,7 +62,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             />
           </label>
           <button
-            className="w-full rounded-full bg-zinc-900 px-4 py-3 text-sm font-medium text-white hover:bg-zinc-800"
+            className="w-full rounded-lg bg-zinc-900 px-4 py-3 text-sm font-medium text-white hover:bg-zinc-800"
             type="submit"
           >
             Sign in

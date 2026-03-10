@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { getAutoMatchConfidenceThreshold, getAutoMatchReviewMinConfidence } from "@/lib/matching/auto-match-config";
 
 type MatchingScopeInput = {
   supabase: SupabaseClient;
@@ -12,6 +13,7 @@ type MatchingScopeInput = {
 type ListMatchableProjectPhotosInput = MatchingScopeInput & {
   query?: string | null;
   limit?: number | null;
+  mode?: MatchablePhotosMode;
 };
 
 type ModifyConsentPhotoLinksInput = MatchingScopeInput & {
@@ -29,7 +31,13 @@ type MatchablePhotoRow = {
   storage_bucket: string | null;
   storage_path: string | null;
   isLinked: boolean;
+  candidate_confidence: number | null;
+  candidate_last_scored_at: string | null;
+  candidate_matcher_version: string | null;
 };
+
+export const MATCHABLE_PHOTOS_MODES = ["default", "likely"] as const;
+export type MatchablePhotosMode = (typeof MATCHABLE_PHOTOS_MODES)[number];
 
 type LinkedPhotoRow = {
   id: string;
@@ -79,6 +87,14 @@ function normalizeListLimit(value: number | null | undefined) {
 function normalizeQuery(value: string | null | undefined) {
   const trimmed = String(value ?? "").trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeMatchablePhotosMode(value: MatchablePhotosMode | string | null | undefined): MatchablePhotosMode {
+  if (String(value ?? "").trim().toLowerCase() === "likely") {
+    return "likely";
+  }
+
+  return "default";
 }
 
 export async function assertConsentInProject(input: MatchingScopeInput) {
@@ -142,6 +158,17 @@ export async function listMatchableProjectPhotosForConsent(
 ): Promise<MatchablePhotoRow[]> {
   await assertConsentInProject(input);
 
+  const mode = normalizeMatchablePhotosMode(input.mode);
+  if (mode === "likely") {
+    return listLikelyMatchableProjectPhotosForConsent(input);
+  }
+
+  return listDefaultMatchableProjectPhotosForConsent(input);
+}
+
+async function listDefaultMatchableProjectPhotosForConsent(
+  input: ListMatchableProjectPhotosInput,
+): Promise<MatchablePhotoRow[]> {
   const queryText = normalizeQuery(input.query);
   const limit = normalizeListLimit(input.limit);
 
@@ -200,7 +227,135 @@ export async function listMatchableProjectPhotosForConsent(
       storage_bucket: asset.storage_bucket,
       storage_path: asset.storage_path,
       isLinked: false,
+      candidate_confidence: null,
+      candidate_last_scored_at: null,
+      candidate_matcher_version: null,
     }));
+}
+
+type LikelyCandidateRow = {
+  asset_id: string;
+  confidence: number;
+  matcher_version: string | null;
+  last_scored_at: string;
+};
+
+async function listLikelyMatchableProjectPhotosForConsent(
+  input: ListMatchableProjectPhotosInput,
+): Promise<MatchablePhotoRow[]> {
+  const limit = normalizeListLimit(input.limit);
+  const queryText = normalizeQuery(input.query);
+  const confidenceThreshold = getAutoMatchConfidenceThreshold();
+  const reviewMinConfidence = Math.min(getAutoMatchReviewMinConfidence(), confidenceThreshold);
+  if (reviewMinConfidence >= confidenceThreshold) {
+    return [];
+  }
+
+  const candidateFetchLimit = Math.min(MAX_LIMIT * 3, limit * 3);
+  const { data: candidates, error: candidatesError } = await input.supabase
+    .from("asset_consent_match_candidates")
+    .select("asset_id, confidence, matcher_version, last_scored_at")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId)
+    .gte("confidence", reviewMinConfidence)
+    .lt("confidence", confidenceThreshold)
+    .order("confidence", { ascending: false })
+    .order("last_scored_at", { ascending: false })
+    .limit(candidateFetchLimit);
+
+  if (candidatesError) {
+    throw new HttpError(500, "match_candidate_lookup_failed", "Unable to load likely-match candidates.");
+  }
+
+  const candidateRows = (candidates as LikelyCandidateRow[] | null) ?? [];
+  if (candidateRows.length === 0) {
+    return [];
+  }
+
+  const candidateByAssetId = new Map(candidateRows.map((candidate) => [candidate.asset_id, candidate]));
+  const candidateAssetIds = candidateRows.map((candidate) => candidate.asset_id);
+
+  let assetsQuery = input.supabase
+    .from("assets")
+    .select(
+      "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
+    )
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("asset_type", "photo")
+    .eq("status", "uploaded")
+    .is("archived_at", null)
+    .in("id", candidateAssetIds);
+
+  if (queryText) {
+    assetsQuery = assetsQuery.ilike("original_filename", `%${queryText}%`);
+  }
+
+  const { data: assets, error: assetsError } = await assetsQuery;
+  if (assetsError) {
+    throw new HttpError(500, "asset_lookup_failed", "Unable to load likely-match assets.");
+  }
+
+  const assetRows = assets ?? [];
+  const assetIds = assetRows.map((asset) => asset.id);
+  if (assetIds.length === 0) {
+    return [];
+  }
+
+  const { data: links, error: linksError } = await input.supabase
+    .from("asset_consent_links")
+    .select("asset_id")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId)
+    .in("asset_id", assetIds);
+  if (linksError) {
+    throw new HttpError(500, "link_lookup_failed", "Unable to load existing matches.");
+  }
+
+  const { data: suppressionRows, error: suppressionError } = await input.supabase
+    .from("asset_consent_link_suppressions")
+    .select("asset_id")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId)
+    .in("asset_id", assetIds);
+  if (suppressionError) {
+    throw new HttpError(500, "link_lookup_failed", "Unable to load matching suppressions.");
+  }
+
+  const linkedAssetIds = new Set((links ?? []).map((link) => link.asset_id));
+  const suppressedAssetIds = new Set((suppressionRows ?? []).map((row) => row.asset_id));
+
+  return assetRows
+    .filter((asset) => !linkedAssetIds.has(asset.id))
+    .filter((asset) => !suppressedAssetIds.has(asset.id))
+    .map((asset) => ({
+      id: asset.id,
+      original_filename: asset.original_filename,
+      status: asset.status,
+      file_size_bytes: asset.file_size_bytes,
+      created_at: asset.created_at,
+      uploaded_at: asset.uploaded_at,
+      archived_at: asset.archived_at,
+      storage_bucket: asset.storage_bucket,
+      storage_path: asset.storage_path,
+      isLinked: false,
+      candidate_confidence: candidateByAssetId.get(asset.id)?.confidence ?? null,
+      candidate_last_scored_at: candidateByAssetId.get(asset.id)?.last_scored_at ?? null,
+      candidate_matcher_version: candidateByAssetId.get(asset.id)?.matcher_version ?? null,
+    }))
+    .sort((left, right) => {
+      const rightScore = right.candidate_confidence ?? -1;
+      const leftScore = left.candidate_confidence ?? -1;
+      if (rightScore !== leftScore) {
+        return rightScore - leftScore;
+      }
+
+      return right.created_at.localeCompare(left.created_at);
+    })
+    .slice(0, limit);
 }
 
 export async function listLinkedPhotosForConsent(
@@ -308,6 +463,21 @@ export async function linkPhotosToConsent(input: ModifyConsentPhotoLinksInput) {
   }
 
   return { linkedCount: uniqueAssetIds.length };
+}
+
+export async function clearConsentPhotoSuppressions(input: MatchingScopeInput) {
+  await assertConsentInProject(input);
+
+  const { error } = await input.supabase
+    .from("asset_consent_link_suppressions")
+    .delete()
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId);
+
+  if (error) {
+    throw new HttpError(500, "link_delete_failed", "Unable to clear matching suppressions.");
+  }
 }
 
 export async function unlinkPhotosFromConsent(input: ModifyConsentPhotoLinksInput) {

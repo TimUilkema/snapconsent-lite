@@ -60,16 +60,18 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
   const receiptStatus = resolvedSearchParams.receipt;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-4 py-8 sm:px-6 sm:py-10">
-      <section className="app-shell flex w-full flex-col gap-4 rounded-[28px] px-5 py-6 sm:px-7 sm:py-7">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Consent Form</h1>
-        {invite ? (
-          <p className="text-sm text-zinc-700">
-            Project: {invite.project_name} - Invite status: {invite.status}
-          </p>
-        ) : (
-          <p className="text-sm text-zinc-700">Invite lookup</p>
-        )}
+    <main className="page-frame flex min-h-screen flex-col py-8 sm:py-10">
+      <section className="app-shell flex w-full flex-col gap-4 rounded-2xl px-5 py-6 sm:px-7 sm:py-7">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Consent form</h1>
+          {invite ? (
+            <p className="text-sm text-zinc-700">
+              Project: {invite.project_name} · Invite status: {invite.status}
+            </p>
+          ) : (
+            <p className="text-sm text-zinc-700">Invite lookup</p>
+          )}
+        </div>
 
         {errorMessage ? (
           <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -99,7 +101,7 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
             consentVersion={invite.consent_version}
           />
         ) : (
-          <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+          <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
             This invite cannot accept new submissions.
           </p>
         )}

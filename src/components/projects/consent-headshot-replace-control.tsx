@@ -190,7 +190,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
           }
           fileRef.current?.click();
         }}
-        className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+        className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
         {isReplacing ? "Replacing headshot..." : "Replace headshot"}
       </button>
@@ -199,7 +199,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
           <button
             type="button"
             disabled={isReplacing}
-            className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
             onClick={() => {
               setShowSourcePicker(false);
               if (cameraRef.current) {
@@ -213,7 +213,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
           <button
             type="button"
             disabled={isReplacing}
-            className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
             onClick={() => {
               setShowSourcePicker(false);
               if (fileRef.current) {

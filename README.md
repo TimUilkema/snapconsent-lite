@@ -100,11 +100,14 @@ Feature 011 adds a real matcher provider behind the existing matching worker arc
   - `AUTO_MATCH_PROVIDER=compreface`
 - Required matcher env vars:
   - `AUTO_MATCH_CONFIDENCE_THRESHOLD`
+  - `AUTO_MATCH_REVIEW_MIN_CONFIDENCE`
   - `AUTO_MATCH_PROVIDER_TIMEOUT_MS`
   - `COMPREFACE_BASE_URL`
   - `COMPREFACE_API_KEY`
 - Optional:
   - `AUTO_MATCH_MAX_COMPARISONS_PER_JOB`
+  - `AUTO_MATCH_PERSIST_RESULTS`
+  - `AUTO_MATCH_RESULTS_MAX_PER_JOB`
 
 ### Local CompreFace setup (Docker)
 
@@ -120,3 +123,16 @@ Notes:
 - No new public endpoints are introduced.
 - Matching stays server-side in the internal worker.
 - Keep CompreFace API keys server-only.
+
+## Likely-Match Review Band (Feature 012)
+
+- `AUTO_MATCH_REVIEW_MIN_CONFIDENCE` sets the lower bound for review candidates.
+- Pairs in this band (`review_min <= confidence < auto_threshold`) are persisted for manual review.
+- The consent matching panel can load these via `Review likely matches`.
+- Candidates are only available after queued jobs are processed by the internal matching worker.
+
+## Match Results Observability (Feature 013)
+
+- `AUTO_MATCH_PERSIST_RESULTS=true` stores scored pair outcomes for worker jobs.
+- `AUTO_MATCH_RESULTS_MAX_PER_JOB` optionally caps persisted rows per processed job.
+- This is observability-only and does not change canonical matching behavior.

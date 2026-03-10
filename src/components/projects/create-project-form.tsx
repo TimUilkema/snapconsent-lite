@@ -52,24 +52,29 @@ export function CreateProjectForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="content-card space-y-3 rounded-2xl p-4">
-      <h2 className="text-sm font-semibold text-zinc-900">Create Project</h2>
+    <form onSubmit={handleSubmit} className="content-card space-y-4 rounded-2xl p-5">
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-900">Create project</h2>
+        <p className="mt-1 text-sm text-zinc-600">
+          Set up a new workspace for invites, consents, and photo matching.
+        </p>
+      </div>
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block">Name</span>
+        <span className="mb-1 block font-medium">Name</span>
         <input
           type="text"
           name="name"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
           minLength={2}
           maxLength={120}
           required
         />
       </label>
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block">Description (optional)</span>
+        <span className="mb-1 block font-medium">Description</span>
         <textarea
           name="description"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5"
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
           rows={3}
           maxLength={500}
         />
@@ -78,7 +83,7 @@ export function CreateProjectForm() {
       <button
         type="submit"
         disabled={isSubmitting}
-        className="rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+        className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
         {isSubmitting ? "Creating..." : "Create Project"}
       </button>

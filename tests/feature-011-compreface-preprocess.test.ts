@@ -382,3 +382,42 @@ test("422 verify responses are treated as no-face/no-match confidence zero", asy
     clearEnv();
   }
 });
+
+test("400 no-face verify responses are treated as no-match confidence zero", async () => {
+  const clearEnv = withMatcherEnv();
+  const sourceImage = await createSmallJpegBuffer();
+  const stats: FakeStorageStats = { downloadCalls: 0, uploadCalls: 0, removeCalls: 0 };
+  const supabase = createFakeSupabase(
+    {
+      "project-assets:headshot.jpg": sourceImage,
+      "project-assets:photo.jpg": sourceImage,
+    },
+    stats,
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    createJsonResponse(
+      {
+        message: "No face is found in the given image",
+      },
+      400,
+    );
+
+  try {
+    const matcher = createCompreFaceAutoMatcher();
+    const matches = await matcher.match({
+      tenantId: "tenant-id",
+      projectId: "project-id",
+      jobType: "photo_uploaded",
+      candidates: [createCandidate()],
+      supabase,
+    });
+
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.confidence, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});

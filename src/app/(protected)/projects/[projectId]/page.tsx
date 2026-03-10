@@ -6,6 +6,7 @@ import { AssetsList } from "@/components/projects/assets-list";
 import { AssetsUploadForm } from "@/components/projects/assets-upload-form";
 import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-matching-panel";
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
+import { PreviewableImage } from "@/components/projects/previewable-image";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { InviteActions } from "@/components/projects/invite-actions";
 import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
@@ -51,59 +52,11 @@ type ConsentTemplateOption = {
   version: string;
 };
 
-type AssetRow = {
-  id: string;
-  original_filename: string;
-  status: string;
-  file_size_bytes: number;
-  created_at: string;
-  uploaded_at: string | null;
-  storage_bucket: string | null;
-  storage_path: string | null;
-};
-
-type AssetViewRow = {
-  id: string;
-  original_filename: string;
-  status: string;
-  file_size_bytes: number;
-  created_at: string;
-  uploaded_at: string | null;
-  thumbnailUrl: string | null;
-  linkedConsentCount: number;
-  linkedPeople: Array<{
-    consentId: string;
-    fullName: string | null;
-    email: string | null;
-  }>;
-};
-
 type HeadshotAssetRow = {
   id: string;
   status: string;
   storage_bucket: string | null;
   storage_path: string | null;
-};
-
-type AssetConsentLinkRow = {
-  asset_id: string;
-  consent_id: string;
-  consents:
-    | {
-        id: string;
-        subjects: {
-          email: string;
-          full_name: string;
-        } | null;
-      }
-    | {
-        id: string;
-        subjects: {
-          email: string;
-          full_name: string;
-        } | null;
-      }[]
-    | null;
 };
 
 export default async function ProjectDashboardPage({ params }: RouteProps) {
@@ -172,72 +125,7 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId);
 
-  const { data: assets } = await supabase
-    .from("assets")
-    .select("id, original_filename, status, file_size_bytes, created_at, uploaded_at, storage_bucket, storage_path")
-    .eq("project_id", project.id)
-    .eq("tenant_id", tenantId)
-    .eq("asset_type", "photo")
-    .neq("status", "archived")
-    .order("created_at", { ascending: false });
-
-  const assetRows = (assets as AssetRow[] | null) ?? [];
-  const assetThumbnailUrls = await signThumbnailUrlsForAssets(supabase, assetRows);
-  const assetLinkCountMap = new Map<string, number>();
-  const assetLinkedPeopleMap = new Map<
-    string,
-    Array<{ consentId: string; fullName: string | null; email: string | null }>
-  >();
-  const assetIds = assetRows.map((asset) => asset.id);
-  if (assetIds.length > 0) {
-    const { data: assetLinks } = await supabase
-      .from("asset_consent_links")
-      .select("asset_id, consent_id, consents(id, subjects(email, full_name))")
-      .eq("tenant_id", tenantId)
-      .eq("project_id", project.id)
-      .in("asset_id", assetIds);
-
-    ((assetLinks as AssetConsentLinkRow[] | null) ?? []).forEach((link) => {
-      const currentCount = assetLinkCountMap.get(link.asset_id) ?? 0;
-      assetLinkCountMap.set(link.asset_id, currentCount + 1);
-
-      const consentRow = Array.isArray(link.consents) ? link.consents[0] : link.consents;
-      if (!consentRow) {
-        return;
-      }
-
-      const existingPeople = assetLinkedPeopleMap.get(link.asset_id) ?? [];
-      if (existingPeople.some((person) => person.consentId === consentRow.id)) {
-        assetLinkedPeopleMap.set(link.asset_id, existingPeople);
-        return;
-      }
-
-      existingPeople.push({
-        consentId: consentRow.id,
-        fullName: consentRow.subjects?.full_name ?? null,
-        email: consentRow.subjects?.email ?? null,
-      });
-      assetLinkedPeopleMap.set(link.asset_id, existingPeople);
-    });
-  }
-
-  const assetViewRows: AssetViewRow[] = assetRows.map((asset) => ({
-    id: asset.id,
-    original_filename: asset.original_filename,
-    status: asset.status,
-    file_size_bytes: asset.file_size_bytes,
-    created_at: asset.created_at,
-    uploaded_at: asset.uploaded_at,
-    thumbnailUrl: (() => {
-      const signedUrl = assetThumbnailUrls.get(asset.id) ?? null;
-      if (!signedUrl) {
-        return null;
-      }
-      return resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader);
-    })(),
-    linkedConsentCount: assetLinkCountMap.get(asset.id) ?? 0,
-    linkedPeople: assetLinkedPeopleMap.get(asset.id) ?? [],
-  }));
+  const inviteCount = (invites as InviteRow[] | null)?.length ?? 0;
 
   const { data: consentRows } = await supabase
     .from("consents")
@@ -298,6 +186,11 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
         width: 240,
         height: 240,
       });
+      const headshotPreviewUrls = await signThumbnailUrlsForAssets(supabase, uniqueHeadshotAssets, {
+        width: 960,
+        quality: 85,
+        resize: "contain",
+      });
 
       consentHeadshotAssetMap.forEach((headshotAsset, consentId) => {
         const signedUrl = headshotThumbnailUrls.get(headshotAsset.id) ?? null;
@@ -307,46 +200,129 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
             ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
             : null,
         );
+        const previewSignedUrl = headshotPreviewUrls.get(headshotAsset.id) ?? null;
+        if (previewSignedUrl) {
+          consentHeadshotThumbnailMap.set(
+            `${consentId}:preview`,
+            resolveLoopbackStorageUrlForHostHeader(previewSignedUrl, requestHostHeader),
+          );
+        }
       });
     }
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
-      <section className="app-shell flex w-full flex-col gap-6 rounded-[28px] px-6 py-8 sm:px-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">{project.name}</h1>
-        <p className="text-sm text-zinc-700">Status: {project.status} - Signed consents: {consentCount ?? 0}</p>
-        {project.description ? <p className="text-sm text-zinc-800">{project.description}</p> : null}
+    <div className="space-y-6">
+      <section className="app-shell rounded-2xl px-5 py-5 sm:px-6">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-600">
+              <Link href="/projects" className="font-medium text-zinc-700 underline underline-offset-4">
+                Projects
+              </Link>
+              <span>/</span>
+              <span>{project.name}</span>
+            </div>
+            <nav className="flex flex-wrap gap-2" aria-label="Project sections">
+              <a
+                href="#project-invites"
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+              >
+                Invites
+              </a>
+              <a
+                href="#project-assets"
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+              >
+                Assets
+              </a>
+            </nav>
+          </div>
 
-        <CreateInviteForm
-          projectId={project.id}
-          templates={templateOptions}
-          defaultTemplateId={defaultTemplateId}
-        />
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+            <div>
+              <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">{project.name}</h1>
+              <p className="mt-2 text-sm leading-6 text-zinc-600">
+                Manage consent invites, review subject details, and match project photos to signed consents.
+              </p>
+              {project.description ? (
+                <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-800">{project.description}</p>
+              ) : null}
+            </div>
 
-        <section className="content-card space-y-3 rounded-2xl p-4">
-          <h2 className="text-sm font-semibold text-zinc-900">Invites</h2>
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <div className="rounded-xl border border-zinc-200 bg-white p-3">
+                <p className="text-sm text-zinc-500">Status</p>
+                <p className="mt-1 font-medium text-zinc-900">{project.status}</p>
+              </div>
+              <div className="rounded-xl border border-zinc-200 bg-white p-3">
+                <p className="text-sm text-zinc-500">Invites</p>
+                <p className="mt-1 font-medium text-zinc-900">{inviteCount}</p>
+              </div>
+              <div className="rounded-xl border border-zinc-200 bg-white p-3">
+                <p className="text-sm text-zinc-500">Signed consents</p>
+                <p className="mt-1 font-medium text-zinc-900">{consentCount ?? 0}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <section id="project-invites" className="section-anchor content-card space-y-4 rounded-2xl p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900">Invites</h2>
+              <p className="mt-1 text-sm text-zinc-600">
+                Sent invites, signed consent details, headshots, and manual matching live here.
+              </p>
+            </div>
+          </div>
           {(invites as InviteRow[] | null)?.length ? (
             <ul className="space-y-2 text-sm">
               {(invites as InviteRow[]).map((invite) => (
-                <li key={invite.id} className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
+                <li key={invite.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-col gap-2">
-                    <div>
-                      <p>
-                        <span className="font-medium">Invite ID:</span> {invite.id}
-                      </p>
-                      <p className="text-zinc-700">
-                        Template:{" "}
-                        {invite.consent_template
-                          ? `${invite.consent_template.template_key} ${invite.consent_template.version}`
-                          : "Unknown"}
-                      </p>
-                      <p className="text-zinc-700">
-                        {invite.status} - uses {invite.used_count}/{invite.max_uses}
-                      </p>
-                      <p className="text-zinc-700">
-                        Expires: {invite.expires_at ? new Date(invite.expires_at).toLocaleString() : "None"}
-                      </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        {invite.consents?.[0] ? (
+                          <>
+                            <p className="font-medium text-zinc-900">
+                              {invite.consents[0].subjects?.full_name ?? "Unknown subject"}
+                            </p>
+                            <p className="text-zinc-700">
+                              {invite.consents[0].subjects?.email ?? "Unknown email"}
+                            </p>
+                          </>
+                        ) : (
+                          <p>
+                            <span className="font-medium">Invite ID:</span> {invite.id}
+                          </p>
+                        )}
+                        <p className="text-zinc-700">
+                          Template:{" "}
+                          {invite.consent_template
+                            ? `${invite.consent_template.template_key} ${invite.consent_template.version}`
+                            : "Unknown"}
+                        </p>
+                        <p className="text-zinc-700">
+                          {invite.status} - uses {invite.used_count}/{invite.max_uses}
+                        </p>
+                        <p className="text-zinc-700">
+                          Expires: {invite.expires_at ? new Date(invite.expires_at).toLocaleString() : "None"}
+                        </p>
+                      </div>
+                      {invite.consents?.[0] && consentHeadshotLinkMap.has(invite.consents[0].id) ? (
+                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
+                          <PreviewableImage
+                            src={consentHeadshotThumbnailMap.get(invite.consents[0].id) ?? null}
+                            previewSrc={consentHeadshotThumbnailMap.get(`${invite.consents[0].id}:preview`) ?? null}
+                            alt={`Headshot of ${invite.consents[0].subjects?.full_name ?? "subject"}`}
+                            className="h-full w-full"
+                            imageClassName="h-full w-full object-cover"
+                          />
+                        </div>
+                      ) : null}
                     </div>
                     <InviteActions
                       inviteId={invite.id}
@@ -355,10 +331,10 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                         inviteKeyMap.has(invite.id)
                           ? buildInvitePath(
                               deriveInviteToken({
-                              tenantId,
-                              projectId: project.id,
-                              idempotencyKey: inviteKeyMap.get(invite.id) ?? "",
-                            }),
+                                tenantId,
+                                projectId: project.id,
+                                idempotencyKey: inviteKeyMap.get(invite.id) ?? "",
+                              }),
                             )
                           : null
                       }
@@ -366,9 +342,11 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                       isRevokable={invite.status === "active" && invite.used_count === 0}
                     />
                     {invite.used_count > 0 && invite.consents?.[0] ? (
-                      <details className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3">
-                        <summary className="cursor-pointer text-sm font-medium">View consent details</summary>
-                        <div className="mt-2 space-y-2 text-sm text-zinc-700">
+                      <details className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                        <summary className="cursor-pointer text-sm font-medium text-zinc-900">
+                          View consent details
+                        </summary>
+                        <div className="mt-3 space-y-4 text-sm text-zinc-700">
                           {(() => {
                             const consent = invite.consents?.[0];
                             const hasLinkedHeadshot = consent
@@ -377,69 +355,116 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                             const headshotThumbnailUrl = consent
                               ? consentHeadshotThumbnailMap.get(consent.id) ?? null
                               : null;
+                            const headshotPreviewUrl = consent
+                              ? consentHeadshotThumbnailMap.get(`${consent.id}:preview`) ?? null
+                              : null;
                             return (
                               <>
-                          <p>
-                            <span className="font-medium">Subject email:</span>{" "}
-                            {consent?.subjects?.email ?? "Unknown"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Subject name:</span>{" "}
-                            {consent?.subjects?.full_name ?? "Unknown"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Signed at:</span>{" "}
-                            {consent?.signed_at ? new Date(consent.signed_at).toLocaleString() : "Unknown"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Consent version:</span>{" "}
-                            {consent?.consent_version ?? "Unknown"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Consent text:</span>{" "}
-                            {consent?.consent_text ?? "Unknown"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Facial matching:</span>{" "}
-                            {consent?.face_match_opt_in ? "Enabled" : "Disabled"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Headshot status:</span>{" "}
-                            {consent?.face_match_opt_in
-                              ? hasLinkedHeadshot
-                                ? "Linked"
-                                : "Missing"
-                              : "Not applicable"}
-                          </p>
-                          {consent?.face_match_opt_in && hasLinkedHeadshot ? (
-                            <div>
-                              <p>
-                                <span className="font-medium">Headshot preview:</span>
-                              </p>
-                              <div className="mt-1 h-24 w-24 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100">
-                                {headshotThumbnailUrl ? (
-                                  <img
-                                    src={headshotThumbnailUrl}
-                                    alt={`Headshot of ${consent?.subjects?.full_name ?? "subject"}`}
-                                    loading="lazy"
-                                    className="h-full w-full object-cover"
+                                <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:items-stretch">
+                                  <section className="flex h-full flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Subject name
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.subjects?.full_name ?? "Unknown"}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Subject email
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.subjects?.email ?? "Unknown"}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Signed at
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.signed_at
+                                            ? new Date(consent.signed_at).toLocaleString()
+                                            : "Unknown"}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Consent version
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.consent_version ?? "Unknown"}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-1 flex-col rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                      <p className="text-sm text-zinc-500">
+                                        Consent text
+                                      </p>
+                                      <p className="mt-2 flex-1 whitespace-pre-line leading-6 text-zinc-800">
+                                        {consent?.consent_text ?? "Unknown"}
+                                      </p>
+                                    </div>
+                                  </section>
+
+                                  <section className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
+                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Facial matching
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.face_match_opt_in ? "Enabled" : "Disabled"}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-xl bg-zinc-50 p-3">
+                                        <p className="text-sm text-zinc-500">
+                                          Headshot status
+                                        </p>
+                                        <p className="mt-1 text-sm font-medium text-zinc-900">
+                                          {consent?.face_match_opt_in
+                                            ? hasLinkedHeadshot
+                                              ? "Linked"
+                                              : "Missing"
+                                            : "Not applicable"}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {consent?.face_match_opt_in && hasLinkedHeadshot ? (
+                                      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                        <p className="text-sm text-zinc-500">
+                                          Headshot preview
+                                        </p>
+                                        <div className="mt-3 h-32 w-32 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
+                                          <PreviewableImage
+                                            src={headshotThumbnailUrl}
+                                            previewSrc={headshotPreviewUrl}
+                                            alt={`Headshot of ${consent?.subjects?.full_name ?? "subject"}`}
+                                            className="h-full w-full"
+                                            imageClassName="h-full w-full object-cover"
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : null}
+
+                                    {consent?.face_match_opt_in && hasLinkedHeadshot ? (
+                                      <ConsentHeadshotReplaceControl
+                                        projectId={project.id}
+                                        consentId={consent.id}
+                                      />
+                                    ) : null}
+                                  </section>
+                                </div>
+
+                                {consent ? (
+                                  <ConsentAssetMatchingPanel
+                                    projectId={project.id}
+                                    consentId={consent.id}
                                   />
                                 ) : null}
-                              </div>
-                            </div>
-                          ) : null}
-                          {consent?.face_match_opt_in && hasLinkedHeadshot ? (
-                            <ConsentHeadshotReplaceControl
-                              projectId={project.id}
-                              consentId={consent.id}
-                            />
-                          ) : null}
-                          {consent ? (
-                            <ConsentAssetMatchingPanel
-                              projectId={project.id}
-                              consentId={consent.id}
-                            />
-                          ) : null}
                               </>
                             );
                           })()}
@@ -455,16 +480,27 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
           )}
         </section>
 
-        <section className="content-card space-y-4 rounded-2xl p-4">
-          <h2 className="text-sm font-semibold text-zinc-900">Assets</h2>
-          <AssetsUploadForm projectId={project.id} />
-          <AssetsList assets={assetViewRows} />
-        </section>
+        <aside>
+          <CreateInviteForm
+            projectId={project.id}
+            templates={templateOptions}
+            defaultTemplateId={defaultTemplateId}
+          />
+        </aside>
+      </div>
 
-        <Link className="text-sm text-zinc-700 underline" href="/projects">
-          Back to projects
-        </Link>
+      <section id="project-assets" className="section-anchor content-card space-y-4 rounded-2xl p-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900">Assets</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Upload project photos, filter large collections, and inspect linked subjects.
+            </p>
+          </div>
+        </div>
+        <AssetsUploadForm projectId={project.id} />
+        <AssetsList projectId={project.id} />
       </section>
-    </main>
+    </div>
   );
 }
