@@ -49,6 +49,8 @@ export async function POST(request: Request) {
         retried: result.retried,
         dead: result.dead,
         skipped_ineligible: result.skippedIneligible,
+        scored_pairs: result.scoredPairs,
+        candidate_pairs: result.candidatePairs,
       },
       { status: 200 },
     );

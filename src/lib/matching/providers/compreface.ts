@@ -2,8 +2,15 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import sharp from "sharp";
 
 import { HttpError } from "@/lib/http/errors";
-import { getCompreFaceConfig } from "@/lib/matching/auto-match-config";
-import type { AutoMatcher, AutoMatcherCandidate, AutoMatcherMatch } from "@/lib/matching/auto-matcher";
+import { getAutoMatchProviderConcurrency, getCompreFaceConfig } from "@/lib/matching/auto-match-config";
+import type {
+  AutoMatcher,
+  AutoMatcherCandidate,
+  AutoMatcherFaceBox,
+  AutoMatcherFaceEvidence,
+  AutoMatcherMatch,
+  AutoMatcherProviderMetadata,
+} from "@/lib/matching/auto-matcher";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
 
 type DownloadedImage = {
@@ -12,6 +19,7 @@ type DownloadedImage = {
 };
 
 type DownloadCache = Map<string, DownloadedImage>;
+type DownloadInFlight = Map<string, Promise<DownloadedImage | null>>;
 type DownloadTarget = "photo" | "headshot";
 type VerifyContext = {
   assetId: string;
@@ -21,12 +29,32 @@ type VerifyContext = {
   headshotByteSize: number;
 };
 
+type CompreFaceFaceBox = {
+  probability?: number;
+  x_max?: number;
+  y_max?: number;
+  x_min?: number;
+  y_min?: number;
+};
+
 type CompreFaceVerifyResponse = {
   result?: Array<{
+    source_image_face?: {
+      box?: CompreFaceFaceBox;
+      embedding?: number[];
+    };
     face_matches?: Array<{
       similarity?: number;
+      box?: CompreFaceFaceBox;
+      embedding?: number[];
+      face?: {
+        box?: CompreFaceFaceBox;
+        embedding?: number[];
+      };
     }>;
+    plugins_versions?: Record<string, unknown>;
   }>;
+  plugins_versions?: Record<string, unknown>;
 };
 
 export const COMPREFACE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -47,6 +75,16 @@ function logCompreFaceDevelopment(event: string, fields: Record<string, unknown>
   }
 
   console.info(`[matching][compreface] ${event}`, fields);
+}
+
+function percentile(values: number[], p: number) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const position = Math.max(0, Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1));
+  return sorted[position] ?? 0;
 }
 
 function createServiceRoleClient() {
@@ -83,6 +121,104 @@ function parseSimilarity(data: CompreFaceVerifyResponse | null) {
 
   const confidence = data.result[0]?.face_matches?.[0]?.similarity;
   return normalizeConfidence(confidence);
+}
+
+function normalizeFaceBox(
+  box: CompreFaceFaceBox | null | undefined,
+): AutoMatcherFaceBox | null {
+  if (!box) {
+    return null;
+  }
+
+  const xMin = Number(box.x_min);
+  const yMin = Number(box.y_min);
+  const xMax = Number(box.x_max);
+  const yMax = Number(box.y_max);
+  if (!Number.isFinite(xMin) || !Number.isFinite(yMin) || !Number.isFinite(xMax) || !Number.isFinite(yMax)) {
+    return null;
+  }
+
+  if (xMax < xMin || yMax < yMin) {
+    return null;
+  }
+
+  const probability = Number(box.probability);
+  return {
+    xMin,
+    yMin,
+    xMax,
+    yMax,
+    probability: Number.isFinite(probability) ? normalizeConfidence(probability) : null,
+  };
+}
+
+function normalizeEmbedding(embedding: number[] | null | undefined) {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    return null;
+  }
+
+  const normalized = embedding
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (normalized.length !== embedding.length) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function parsePluginVersions(data: CompreFaceVerifyResponse | null) {
+  if (data?.plugins_versions && typeof data.plugins_versions === "object" && !Array.isArray(data.plugins_versions)) {
+    return data.plugins_versions;
+  }
+
+  const resultItemPluginVersions = data?.result?.[0]?.plugins_versions;
+  if (
+    resultItemPluginVersions
+    && typeof resultItemPluginVersions === "object"
+    && !Array.isArray(resultItemPluginVersions)
+  ) {
+    return resultItemPluginVersions;
+  }
+
+  return null;
+}
+
+function parseFaceEvidence(data: CompreFaceVerifyResponse | null): AutoMatcherFaceEvidence[] {
+  if (!data?.result || data.result.length === 0) {
+    return [];
+  }
+
+  const faces: AutoMatcherFaceEvidence[] = [];
+  data.result.forEach((resultItem) => {
+    const sourceFaceBox = normalizeFaceBox(resultItem.source_image_face?.box);
+    const sourceEmbedding = normalizeEmbedding(resultItem.source_image_face?.embedding);
+    (resultItem.face_matches ?? []).forEach((faceMatch, providerFaceIndex) => {
+      const faceGeometry = faceMatch.face ?? faceMatch;
+      faces.push({
+        similarity: normalizeConfidence(faceMatch.similarity),
+        sourceFaceBox,
+        targetFaceBox: normalizeFaceBox(faceGeometry.box),
+        sourceEmbedding,
+        targetEmbedding: normalizeEmbedding(faceGeometry.embedding),
+        providerFaceIndex,
+      });
+    });
+  });
+
+  return faces.sort((left, right) => {
+    if (right.similarity !== left.similarity) {
+      return right.similarity - left.similarity;
+    }
+
+    const leftIndex = left.providerFaceIndex ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = right.providerFaceIndex ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return JSON.stringify(left.targetFaceBox ?? {}).localeCompare(JSON.stringify(right.targetFaceBox ?? {}));
+  });
 }
 
 function isNoFaceDetectedMessage(providerMessage: string | null) {
@@ -184,6 +320,7 @@ async function downloadAsBase64(
   candidate: AutoMatcherCandidate,
   target: DownloadTarget,
   cache: DownloadCache,
+  inFlight: DownloadInFlight,
 ) {
   const ref = target === "photo" ? candidate.photo : candidate.headshot;
   if (!ref.storageBucket || !ref.storagePath) {
@@ -196,24 +333,66 @@ async function downloadAsBase64(
     return cached;
   }
 
-  const { data, error } = await supabase.storage.from(ref.storageBucket).download(ref.storagePath);
-  if (error || !data) {
-    return null;
+  const pending = inFlight.get(cacheKey);
+  if (pending) {
+    return pending;
   }
 
-  const bytes = await data.arrayBuffer();
-  if (bytes.byteLength === 0) {
-    return null;
+  const downloadPromise = (async () => {
+    const { data, error } = await supabase.storage.from(ref.storageBucket).download(ref.storagePath);
+    if (error || !data) {
+      return null;
+    }
+
+    const bytes = await data.arrayBuffer();
+    if (bytes.byteLength === 0) {
+      return null;
+    }
+
+    const sourceBuffer = Buffer.from(bytes);
+    const preprocessedBuffer = await preprocessImageForCompreFace(sourceBuffer, target);
+    const encodedImage: DownloadedImage = {
+      base64: preprocessedBuffer.toString("base64"),
+      byteSize: preprocessedBuffer.length,
+    };
+    cache.set(cacheKey, encodedImage);
+    return encodedImage;
+  })()
+    .finally(() => {
+      inFlight.delete(cacheKey);
+    });
+
+  inFlight.set(cacheKey, downloadPromise);
+  return downloadPromise;
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  inputs: TInput[],
+  concurrency: number,
+  handler: (item: TInput, index: number) => Promise<TOutput>,
+) {
+  if (inputs.length === 0) {
+    return [] as TOutput[];
   }
 
-  const sourceBuffer = Buffer.from(bytes);
-  const preprocessedBuffer = await preprocessImageForCompreFace(sourceBuffer, target);
-  const encodedImage: DownloadedImage = {
-    base64: preprocessedBuffer.toString("base64"),
-    byteSize: preprocessedBuffer.length,
-  };
-  cache.set(cacheKey, encodedImage);
-  return encodedImage;
+  const normalizedConcurrency = Math.max(1, Math.min(concurrency, inputs.length));
+  const results = new Array<TOutput>(inputs.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= inputs.length) {
+        return;
+      }
+
+      results[current] = await handler(inputs[current], current);
+    }
+  }
+
+  await Promise.all(Array.from({ length: normalizedConcurrency }, () => runWorker()));
+  return results;
 }
 
 async function parseCompreFaceResponse(response: Response) {
@@ -234,9 +413,7 @@ async function parseCompreFaceResponse(response: Response) {
   const providerMessage =
     typeof responseBody?.message === "string"
       ? responseBody.message
-      : responseText
-        ? responseText.slice(0, 200)
-        : null;
+      : null;
 
   return {
     responseBody,
@@ -262,7 +439,11 @@ async function verifyPairWithCompreFace(
   });
 
   try {
-    const response = await fetch(`${config.baseUrl}/api/v1/verification/verify`, {
+    const verifyUrl = new URL(`${config.baseUrl}/api/v1/verification/verify`);
+    verifyUrl.searchParams.set("face_plugins", "calculator");
+    verifyUrl.searchParams.set("status", "true");
+
+    const response = await fetch(verifyUrl.toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -283,7 +464,15 @@ async function verifyPairWithCompreFace(
           parsedSimilarity: 0,
           providerMessage: parsedResponse.providerMessage,
         });
-        return 0;
+        return {
+          confidence: 0,
+          faces: [],
+          providerMetadata: {
+            provider: "compreface",
+            providerMode: "verification",
+            providerPluginVersions: null,
+          } satisfies AutoMatcherProviderMetadata,
+        };
       }
 
       logCompreFaceDevelopment("response", {
@@ -347,13 +536,24 @@ async function verifyPairWithCompreFace(
       );
     }
 
-    const similarity = parseSimilarity((parsedResponse.responseBody as CompreFaceVerifyResponse | null) ?? null);
+    const responseData = (parsedResponse.responseBody as CompreFaceVerifyResponse | null) ?? null;
+    const similarity = parseSimilarity(responseData);
+    const faces = parseFaceEvidence(responseData);
+    const providerPluginVersions = parsePluginVersions(responseData);
     logCompreFaceDevelopment("response", {
       status: response.status,
       parsedSimilarity: similarity,
       providerMessage: parsedResponse.providerMessage,
     });
-    return similarity;
+    return {
+      confidence: similarity,
+      faces,
+      providerMetadata: {
+        provider: "compreface",
+        providerMode: "verification",
+        providerPluginVersions,
+      } satisfies AutoMatcherProviderMetadata,
+    };
   } catch (error) {
     if (error instanceof MatcherProviderError) {
       throw error;
@@ -381,35 +581,57 @@ export function createCompreFaceAutoMatcher(): AutoMatcher {
   return {
     version: "compreface-v1",
     async match(input) {
+      const startedAt = performance.now();
       const supabase = getStorageClient(input.supabase);
       const cache: DownloadCache = new Map();
-      const matches: AutoMatcherMatch[] = [];
+      const inFlightDownloads: DownloadInFlight = new Map();
+      const concurrency = getAutoMatchProviderConcurrency();
+      const verifyDurationsMs: number[] = [];
 
-      for (const candidate of input.candidates) {
-        const sourceImage = await downloadAsBase64(supabase, candidate, "headshot", cache);
-        const targetImage = await downloadAsBase64(supabase, candidate, "photo", cache);
+      const matches = await mapWithConcurrency(input.candidates, concurrency, async (candidate) => {
+        const sourceImage = await downloadAsBase64(supabase, candidate, "headshot", cache, inFlightDownloads);
+        const targetImage = await downloadAsBase64(supabase, candidate, "photo", cache, inFlightDownloads);
         if (!sourceImage || !targetImage) {
-          matches.push({
+          return {
             assetId: candidate.assetId,
             consentId: candidate.consentId,
             confidence: 0,
-          });
-          continue;
+          } satisfies AutoMatcherMatch;
         }
 
-        const confidence = await verifyPairWithCompreFace(sourceImage.base64, targetImage.base64, {
+        const verifyStartedAt = performance.now();
+        const result = await verifyPairWithCompreFace(sourceImage.base64, targetImage.base64, {
           assetId: candidate.assetId,
           consentId: candidate.consentId,
           jobType: input.jobType,
           photoByteSize: targetImage.byteSize,
           headshotByteSize: sourceImage.byteSize,
         });
-        matches.push({
+        verifyDurationsMs.push(performance.now() - verifyStartedAt);
+        return {
           assetId: candidate.assetId,
           consentId: candidate.consentId,
-          confidence,
-        });
-      }
+          confidence: result.confidence,
+          faces: result.faces,
+          providerMetadata: result.providerMetadata,
+        } satisfies AutoMatcherMatch;
+      });
+
+      const durationMs = performance.now() - startedAt;
+      const providerCalls = verifyDurationsMs.length;
+      const totalVerifyMs = verifyDurationsMs.reduce((sum, value) => sum + value, 0);
+      const avgVerifyMs = providerCalls > 0 ? totalVerifyMs / providerCalls : 0;
+      const p95VerifyMs = percentile(verifyDurationsMs, 0.95);
+      const pairsPerSecond = durationMs > 0 ? (input.candidates.length * 1000) / durationMs : 0;
+      logCompreFaceDevelopment("batch_metrics", {
+        candidateCount: input.candidates.length,
+        providerCalls,
+        concurrency,
+        durationMs: Math.round(durationMs),
+        verifyAvgMs: Math.round(avgVerifyMs),
+        verifyP95Ms: Math.round(p95VerifyMs),
+        pairsPerSecond: Number(pairsPerSecond.toFixed(2)),
+      });
 
       return matches;
     },

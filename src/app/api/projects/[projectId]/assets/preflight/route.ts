@@ -20,6 +20,8 @@ type PreflightBody = {
   files?: PreflightFile[];
 };
 
+const IN_FILTER_CHUNK_SIZE = 40;
+
 function normalizeAssetType(value: unknown): "photo" | "headshot" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized || normalized === "photo") {
@@ -50,6 +52,18 @@ function normalizeContentHash(value: unknown): string | null {
     return null;
   }
   return trimmed;
+}
+
+function chunkValues<T>(values: T[], chunkSize: number) {
+  if (values.length === 0) {
+    return [];
+  }
+
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
 }
 
 export async function POST(request: Request, context: RouteContext) {
@@ -83,22 +97,28 @@ export async function POST(request: Request, context: RouteContext) {
 
     let candidateSizes: number[] = [];
     if (uniqueSizes.length > 0) {
-      const { data, error } = await supabase
-        .from("assets")
-        .select("file_size_bytes")
-        .eq("tenant_id", tenantId)
-        .eq("project_id", projectId)
-        .eq("asset_type", assetType)
-        .in("file_size_bytes", uniqueSizes);
+      const foundSizes = new Set<number>();
+      const sizeChunks = chunkValues(uniqueSizes, IN_FILTER_CHUNK_SIZE);
+      for (const sizeChunk of sizeChunks) {
+        const { data, error } = await supabase
+          .from("assets")
+          .select("file_size_bytes")
+          .eq("tenant_id", tenantId)
+          .eq("project_id", projectId)
+          .eq("asset_type", assetType)
+          .in("file_size_bytes", sizeChunk);
 
-      if (error) {
-        throw new HttpError(500, "asset_size_lookup_failed", "Unable to preflight assets.");
+        if (error) {
+          throw new HttpError(500, "asset_size_lookup_failed", "Unable to preflight assets.");
+        }
+
+        (data ?? [])
+          .map((row) => Number(row.file_size_bytes))
+          .filter((size) => Number.isFinite(size) && size > 0)
+          .forEach((size) => foundSizes.add(size));
       }
 
-      const foundSizes = (data ?? [])
-        .map((row) => Number(row.file_size_bytes))
-        .filter((size) => Number.isFinite(size) && size > 0);
-      candidateSizes = Array.from(new Set(foundSizes));
+      candidateSizes = Array.from(foundSizes);
     }
 
     const hashes = files
@@ -108,22 +128,28 @@ export async function POST(request: Request, context: RouteContext) {
 
     let duplicateHashes: string[] = [];
     if (uniqueHashes.length > 0) {
-      const { data, error } = await supabase
-        .from("assets")
-        .select("content_hash")
-        .eq("tenant_id", tenantId)
-        .eq("project_id", projectId)
-        .eq("asset_type", assetType)
-        .in("content_hash", uniqueHashes);
+      const foundHashes = new Set<string>();
+      const hashChunks = chunkValues(uniqueHashes, IN_FILTER_CHUNK_SIZE);
+      for (const hashChunk of hashChunks) {
+        const { data, error } = await supabase
+          .from("assets")
+          .select("content_hash")
+          .eq("tenant_id", tenantId)
+          .eq("project_id", projectId)
+          .eq("asset_type", assetType)
+          .in("content_hash", hashChunk);
 
-      if (error) {
-        throw new HttpError(500, "asset_hash_lookup_failed", "Unable to preflight assets.");
+        if (error) {
+          throw new HttpError(500, "asset_hash_lookup_failed", "Unable to preflight assets.");
+        }
+
+        (data ?? [])
+          .map((row) => normalizeContentHash(row.content_hash))
+          .filter((hash): hash is string => hash !== null)
+          .forEach((hash) => foundHashes.add(hash));
       }
 
-      const foundHashes = (data ?? [])
-        .map((row) => normalizeContentHash(row.content_hash))
-        .filter((hash): hash is string => hash !== null);
-      duplicateHashes = Array.from(new Set(foundHashes));
+      duplicateHashes = Array.from(foundHashes);
     }
 
     return Response.json({ candidateSizes, duplicateHashes }, { status: 200 });

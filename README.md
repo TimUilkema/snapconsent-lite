@@ -102,11 +102,13 @@ Feature 011 adds a real matcher provider behind the existing matching worker arc
   - `AUTO_MATCH_CONFIDENCE_THRESHOLD`
   - `AUTO_MATCH_REVIEW_MIN_CONFIDENCE`
   - `AUTO_MATCH_PROVIDER_TIMEOUT_MS`
+  - `AUTO_MATCH_PROVIDER_CONCURRENCY`
   - `COMPREFACE_BASE_URL`
   - `COMPREFACE_API_KEY`
 - Optional:
   - `AUTO_MATCH_MAX_COMPARISONS_PER_JOB`
   - `AUTO_MATCH_PERSIST_RESULTS`
+  - `AUTO_MATCH_PERSIST_FACE_EVIDENCE` (requires `AUTO_MATCH_PERSIST_RESULTS=true`)
   - `AUTO_MATCH_RESULTS_MAX_PER_JOB`
 
 ### Local CompreFace setup (Docker)
@@ -136,3 +138,25 @@ Notes:
 - `AUTO_MATCH_PERSIST_RESULTS=true` stores scored pair outcomes for worker jobs.
 - `AUTO_MATCH_RESULTS_MAX_PER_JOB` optionally caps persisted rows per processed job.
 - This is observability-only and does not change canonical matching behavior.
+
+## Matched Face Evidence (Feature 017)
+
+- `AUTO_MATCH_PERSIST_FACE_EVIDENCE=true` stores per-face geometry/embedding evidence for consent-linked match results.
+- Requires `AUTO_MATCH_PERSIST_RESULTS=true` because face evidence is owned by persisted pair-level result rows.
+- Face evidence is internal-only and does not change canonical link or review-candidate behavior.
+
+## CompreFace Benchmarking
+
+Use the local benchmark script to compare matcher throughput at different provider concurrency settings:
+
+```bash
+npx tsx scripts/benchmark-compreface-matcher.ts \
+  --tenant-id <tenant-uuid> \
+  --project-id <project-uuid> \
+  --consent-id <consent-uuid> \
+  --limit 180 \
+  --runs 3 \
+  --concurrency 1,2,4,8
+```
+
+This prints per-run and summary timing plus pairs/sec so you can tune `AUTO_MATCH_PROVIDER_CONCURRENCY`.

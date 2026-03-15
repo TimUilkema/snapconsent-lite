@@ -1,0 +1,608 @@
+{
+  "generatedAt": "2026-03-14T21:56:44.983Z",
+  "benchmarkType": "matching-queue-throughput-matrix",
+  "config": {
+    "workerUri": "http://localhost:3000/api/internal/matching/worker",
+    "providerConcurrencyTag": "12",
+    "workerCounts": [
+      1,
+      2,
+      4,
+      6
+    ],
+    "batchSizes": [
+      5,
+      10,
+      20
+    ],
+    "rounds": 2,
+    "maxJobs": 20,
+    "maxSeconds": 120
+  },
+  "runs": [
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 5,
+      "round": 1,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 12377,
+        "jobsPerSecond": 1.616,
+        "ticks": 4
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 5,
+      "round": 2,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 11089,
+        "jobsPerSecond": 1.804,
+        "ticks": 4
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 5,
+      "round": 1,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 8946,
+        "jobsPerSecond": 2.236,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 5,
+      "round": 2,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 9020,
+        "jobsPerSecond": 2.217,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 5,
+      "round": 1,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 11528,
+        "jobsPerSecond": 1.735,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 5,
+      "round": 2,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 10065,
+        "jobsPerSecond": 1.987,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 5,
+      "round": 1,
+      "totals": {
+        "claimed": 30,
+        "succeeded": 30,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 16159,
+        "jobsPerSecond": 1.857,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 5,
+      "round": 2,
+      "totals": {
+        "claimed": 30,
+        "succeeded": 30,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 13088,
+        "jobsPerSecond": 2.292,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 10,
+      "round": 1,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 11433,
+        "jobsPerSecond": 1.749,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 10,
+      "round": 2,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 12650,
+        "jobsPerSecond": 1.581,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 10,
+      "round": 1,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 8799,
+        "jobsPerSecond": 2.273,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 10,
+      "round": 2,
+      "totals": {
+        "claimed": 20,
+        "succeeded": 20,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 9495,
+        "jobsPerSecond": 2.106,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 10,
+      "round": 1,
+      "totals": {
+        "claimed": 40,
+        "succeeded": 39,
+        "retried": 1,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 64972,
+        "jobsPerSecond": 0.6,
+        "ticks": 1
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 10,
+      "round": 2,
+      "totals": {
+        "claimed": 4,
+        "succeeded": 0,
+        "retried": 4,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 218026,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 10,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 106,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 10,
+      "round": 2,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 90,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 20,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 26,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 20,
+      "round": 2,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 26,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 20,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 36,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 20,
+      "round": 2,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 24,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 20,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 45,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 20,
+      "round": 2,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 36379,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 20,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 150,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 20,
+      "round": 2,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "errors": 0,
+        "elapsedMs": 56,
+        "jobsPerSecond": 0,
+        "ticks": 2
+      }
+    }
+  ],
+  "summary": [
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 5,
+      "rounds": 2,
+      "avgJobsPerSecond": 2.227,
+      "minJobsPerSecond": 2.217,
+      "maxJobsPerSecond": 2.236,
+      "avgSucceeded": 20,
+      "avgElapsedMs": 8983,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 10,
+      "rounds": 2,
+      "avgJobsPerSecond": 2.189,
+      "minJobsPerSecond": 2.106,
+      "maxJobsPerSecond": 2.273,
+      "avgSucceeded": 20,
+      "avgElapsedMs": 9147,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 5,
+      "rounds": 2,
+      "avgJobsPerSecond": 2.075,
+      "minJobsPerSecond": 1.857,
+      "maxJobsPerSecond": 2.292,
+      "avgSucceeded": 30,
+      "avgElapsedMs": 14623.5,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 5,
+      "rounds": 2,
+      "avgJobsPerSecond": 1.861,
+      "minJobsPerSecond": 1.735,
+      "maxJobsPerSecond": 1.987,
+      "avgSucceeded": 20,
+      "avgElapsedMs": 10796.5,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 5,
+      "rounds": 2,
+      "avgJobsPerSecond": 1.71,
+      "minJobsPerSecond": 1.616,
+      "maxJobsPerSecond": 1.804,
+      "avgSucceeded": 20,
+      "avgElapsedMs": 11733,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 10,
+      "rounds": 2,
+      "avgJobsPerSecond": 1.665,
+      "minJobsPerSecond": 1.581,
+      "maxJobsPerSecond": 1.749,
+      "avgSucceeded": 20,
+      "avgElapsedMs": 12041.5,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 10,
+      "rounds": 2,
+      "avgJobsPerSecond": 0.3,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0.6,
+      "avgSucceeded": 19.5,
+      "avgElapsedMs": 141499,
+      "avgRetries": 2.5,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 10,
+      "rounds": 2,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgSucceeded": 0,
+      "avgElapsedMs": 98,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 1,
+      "batchSize": 20,
+      "rounds": 2,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgSucceeded": 0,
+      "avgElapsedMs": 26,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 2,
+      "batchSize": 20,
+      "rounds": 2,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgSucceeded": 0,
+      "avgElapsedMs": 30,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 4,
+      "batchSize": 20,
+      "rounds": 2,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgSucceeded": 0,
+      "avgElapsedMs": 18212,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    },
+    {
+      "providerConcurrencyTag": "12",
+      "workers": 6,
+      "batchSize": 20,
+      "rounds": 2,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgSucceeded": 0,
+      "avgElapsedMs": 103,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 0
+    }
+  ],
+  "recommendation": {
+    "providerConcurrencyTag": "12",
+    "workers": 2,
+    "batchSize": 5,
+    "avgJobsPerSecond": 2.227
+  }
+}

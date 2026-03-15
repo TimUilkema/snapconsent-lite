@@ -16,10 +16,35 @@ export type AutoMatcherCandidate = {
   headshot: AutoMatcherStorageRef;
 };
 
+export type AutoMatcherFaceBox = {
+  xMin: number;
+  yMin: number;
+  xMax: number;
+  yMax: number;
+  probability?: number | null;
+};
+
+export type AutoMatcherFaceEvidence = {
+  similarity: number;
+  sourceFaceBox?: AutoMatcherFaceBox | null;
+  targetFaceBox?: AutoMatcherFaceBox | null;
+  sourceEmbedding?: number[] | null;
+  targetEmbedding?: number[] | null;
+  providerFaceIndex?: number | null;
+};
+
+export type AutoMatcherProviderMetadata = {
+  provider: string;
+  providerMode: string;
+  providerPluginVersions?: Record<string, unknown> | null;
+};
+
 export type AutoMatcherMatch = {
   assetId: string;
   consentId: string;
   confidence: number;
+  faces?: AutoMatcherFaceEvidence[];
+  providerMetadata?: AutoMatcherProviderMetadata;
 };
 
 export type AutoMatcherInput = {

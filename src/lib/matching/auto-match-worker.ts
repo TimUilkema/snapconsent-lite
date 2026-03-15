@@ -4,12 +4,19 @@ import { HttpError } from "@/lib/http/errors";
 import {
   getAutoMatchConfidenceThreshold,
   getAutoMatchMaxComparisonsPerJob,
+  getAutoMatchPersistFaceEvidence,
   getAutoMatchPersistResults,
   getAutoMatchResultsMaxPerJob,
   getAutoMatchReviewMinConfidence,
 } from "@/lib/matching/auto-match-config";
 import type { FaceMatchJobType } from "@/lib/matching/auto-match-jobs";
-import { getAutoMatcher, type AutoMatcher, type AutoMatcherCandidate, type AutoMatcherMatch } from "@/lib/matching/auto-matcher";
+import {
+  getAutoMatcher,
+  type AutoMatcher,
+  type AutoMatcherCandidate,
+  type AutoMatcherFaceBox,
+  type AutoMatcherMatch,
+} from "@/lib/matching/auto-matcher";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
 
 type ClaimedFaceMatchJobRow = {
@@ -54,6 +61,7 @@ type RunAutoMatchWorkerInput = {
   confidenceThreshold?: number;
   reviewMinConfidence?: number;
   persistResults?: boolean;
+  persistFaceEvidence?: boolean;
   resultsMaxPerJob?: number | null;
   maxComparisonsPerJob?: number | null;
   matcher?: AutoMatcher;
@@ -66,6 +74,8 @@ export type RunAutoMatchWorkerResult = {
   retried: number;
   dead: number;
   skippedIneligible: number;
+  scoredPairs: number;
+  candidatePairs: number;
 };
 
 type EligibleConsentWithHeadshot = {
@@ -209,6 +219,14 @@ function normalizePersistResults(value: boolean | undefined) {
   }
 
   return getAutoMatchPersistResults();
+}
+
+function normalizePersistFaceEvidence(value: boolean | undefined) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  return getAutoMatchPersistFaceEvidence();
 }
 
 function normalizeResultsMaxPerJob(value: number | null | undefined) {
@@ -485,10 +503,110 @@ function normalizeAutoMatcherMatches(matches: AutoMatcherMatch[]) {
       assetId,
       consentId,
       confidence,
+      faces: Array.isArray(match.faces) ? match.faces : undefined,
+      providerMetadata: match.providerMetadata,
     });
   });
 
   return Array.from(byPair.values());
+}
+
+function normalizeFaceBoxForPersistence(faceBox: AutoMatcherFaceBox | null | undefined) {
+  if (!faceBox) {
+    return null;
+  }
+
+  const xMin = Number((faceBox as { xMin?: number }).xMin);
+  const yMin = Number((faceBox as { yMin?: number }).yMin);
+  const xMax = Number((faceBox as { xMax?: number }).xMax);
+  const yMax = Number((faceBox as { yMax?: number }).yMax);
+  if (!Number.isFinite(xMin) || !Number.isFinite(yMin) || !Number.isFinite(xMax) || !Number.isFinite(yMax)) {
+    return null;
+  }
+
+  if (xMax < xMin || yMax < yMin) {
+    return null;
+  }
+
+  const probability = Number((faceBox as { probability?: number | null }).probability);
+  const payload: Record<string, number> = {
+    x_min: xMin,
+    y_min: yMin,
+    x_max: xMax,
+    y_max: yMax,
+  };
+  if (Number.isFinite(probability)) {
+    payload.probability = Math.max(0, Math.min(1, probability));
+  }
+
+  return payload;
+}
+
+function normalizeEmbeddingForPersistence(embedding: number[] | null | undefined) {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    return null;
+  }
+
+  const normalized = embedding
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (normalized.length !== embedding.length) {
+    return null;
+  }
+
+  return normalized;
+}
+
+type NormalizedFaceEvidence = {
+  similarity: number;
+  sourceFaceBox: Record<string, number> | null;
+  targetFaceBox: Record<string, number> | null;
+  sourceEmbedding: number[] | null;
+  targetEmbedding: number[] | null;
+  providerFaceIndex: number | null;
+};
+
+function normalizeFaceEvidenceForPersistence(match: AutoMatcherMatch): NormalizedFaceEvidence[] {
+  if (!Array.isArray(match.faces) || match.faces.length === 0) {
+    return [];
+  }
+
+  const normalized = match.faces.map((face) => {
+    const parsedSimilarity = Number(face.similarity);
+    const similarity =
+      Number.isFinite(parsedSimilarity) && parsedSimilarity >= 0 && parsedSimilarity <= 1
+        ? parsedSimilarity
+        : match.confidence;
+
+    const parsedProviderFaceIndex = Number(face.providerFaceIndex);
+    const providerFaceIndex =
+      Number.isFinite(parsedProviderFaceIndex) && parsedProviderFaceIndex >= 0
+        ? Math.floor(parsedProviderFaceIndex)
+        : null;
+
+    return {
+      similarity,
+      sourceFaceBox: normalizeFaceBoxForPersistence(face.sourceFaceBox),
+      targetFaceBox: normalizeFaceBoxForPersistence(face.targetFaceBox),
+      sourceEmbedding: normalizeEmbeddingForPersistence(face.sourceEmbedding),
+      targetEmbedding: normalizeEmbeddingForPersistence(face.targetEmbedding),
+      providerFaceIndex,
+    } satisfies NormalizedFaceEvidence;
+  });
+
+  return normalized.sort((left, right) => {
+    if (right.similarity !== left.similarity) {
+      return right.similarity - left.similarity;
+    }
+
+    const leftIndex = left.providerFaceIndex ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = right.providerFaceIndex ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return JSON.stringify(left.targetFaceBox ?? {}).localeCompare(JSON.stringify(right.targetFaceBox ?? {}));
+  });
 }
 
 function buildPairKey(assetId: string, consentId: string) {
@@ -536,6 +654,34 @@ async function deleteMatchCandidatePair(
   }
 }
 
+async function deleteStaleMatchResultFaceRows(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+  assetId: string,
+  consentId: string,
+  keepFaceRanks: number[],
+) {
+  let query = supabase
+    .from("asset_consent_match_result_faces")
+    .delete()
+    .eq("tenant_id", tenantId)
+    .eq("project_id", projectId)
+    .eq("job_id", jobId)
+    .eq("asset_id", assetId)
+    .eq("consent_id", consentId);
+
+  if (keepFaceRanks.length > 0) {
+    query = query.not("face_rank", "in", `(${keepFaceRanks.join(",")})`);
+  }
+
+  const { error } = await query;
+  if (error) {
+    throw new HttpError(500, "face_match_result_faces_delete_failed", "Unable to remove stale face-evidence rows.");
+  }
+}
+
 async function applyAutoMatches(
   supabase: SupabaseClient,
   tenantId: string,
@@ -547,6 +693,7 @@ async function applyAutoMatches(
   confidenceThreshold: number,
   reviewMinConfidence: number,
   persistResults: boolean,
+  persistFaceEvidence: boolean,
   resultsMaxPerJob: number | null,
   matches: AutoMatcherMatch[],
 ) {
@@ -697,62 +844,152 @@ async function applyAutoMatches(
     candidateDeletePairKeys.add(pairKey);
   });
 
+  const resultRows = normalizedScores
+    .map((match) => {
+      const pairKey = buildPairKey(match.assetId, match.consentId);
+      let decision: MatchResultDecision = "below_review_band";
+
+      if (manualPairs.has(pairKey)) {
+        decision = "skipped_manual";
+      } else if (suppressedPairs.has(pairKey)) {
+        decision = "skipped_suppressed";
+      } else if (match.confidence >= confidenceThreshold) {
+        decision = "auto_link_upserted";
+      } else if (match.confidence >= reviewMinConfidence) {
+        decision = "candidate_upserted";
+      }
+
+      return {
+        tenant_id: tenantId,
+        project_id: projectId,
+        asset_id: match.assetId,
+        consent_id: match.consentId,
+        job_id: jobId,
+        job_type: jobType,
+        confidence: match.confidence,
+        decision,
+        matcher_version: matcherVersion,
+        auto_threshold: confidenceThreshold,
+        review_min_confidence: reviewMinConfidence,
+        scored_at: nowIso,
+      };
+    })
+    .sort((left, right) => {
+      if (right.confidence !== left.confidence) {
+        return right.confidence - left.confidence;
+      }
+      const assetSort = left.asset_id.localeCompare(right.asset_id);
+      if (assetSort !== 0) {
+        return assetSort;
+      }
+      return left.consent_id.localeCompare(right.consent_id);
+    });
+
+  const boundedResultRows =
+    typeof resultsMaxPerJob === "number" ? resultRows.slice(0, resultsMaxPerJob) : resultRows;
+
   let persistedResultsCount = 0;
-  if (persistResults && normalizedScores.length > 0) {
-    const resultRows = normalizedScores
-      .map((match) => {
-        const pairKey = buildPairKey(match.assetId, match.consentId);
-        let decision: MatchResultDecision = "below_review_band";
+  if (persistResults && boundedResultRows.length > 0) {
+    const { error: resultsUpsertError } = await supabase.from("asset_consent_match_results").upsert(boundedResultRows, {
+      onConflict: "job_id,asset_id,consent_id",
+    });
 
-        if (manualPairs.has(pairKey)) {
-          decision = "skipped_manual";
-        } else if (suppressedPairs.has(pairKey)) {
-          decision = "skipped_suppressed";
-        } else if (match.confidence >= confidenceThreshold) {
-          decision = "auto_link_upserted";
-        } else if (match.confidence >= reviewMinConfidence) {
-          decision = "candidate_upserted";
-        }
+    if (resultsUpsertError) {
+      throw new HttpError(500, "face_match_results_upsert_failed", "Unable to persist match results.");
+    }
 
-        return {
+    persistedResultsCount = boundedResultRows.length;
+  }
+
+  let persistedFaceEvidenceCount = 0;
+  if (persistResults && persistFaceEvidence && boundedResultRows.length > 0) {
+    const decisionsInScope = new Set<MatchResultDecision>(["auto_link_upserted", "skipped_manual"]);
+    const faceRows: Array<{
+      job_id: string;
+      asset_id: string;
+      consent_id: string;
+      face_rank: number;
+      tenant_id: string;
+      project_id: string;
+      similarity: number;
+      source_face_box: Record<string, number> | null;
+      target_face_box: Record<string, number> | null;
+      source_embedding: number[] | null;
+      target_embedding: number[] | null;
+      provider: string;
+      provider_mode: string;
+      provider_face_index: number | null;
+      provider_plugin_versions: Record<string, unknown> | null;
+      matcher_version: string;
+      scored_at: string;
+    }> = [];
+    const keepFaceRanksByPair = new Map<string, number[]>();
+
+    boundedResultRows.forEach((resultRow) => {
+      const pairKey = buildPairKey(resultRow.asset_id, resultRow.consent_id);
+      keepFaceRanksByPair.set(pairKey, []);
+
+      if (!decisionsInScope.has(resultRow.decision)) {
+        return;
+      }
+
+      const match = scoreByPair.get(pairKey);
+      if (!match) {
+        return;
+      }
+
+      const normalizedFaces = normalizeFaceEvidenceForPersistence(match);
+      keepFaceRanksByPair.set(
+        pairKey,
+        normalizedFaces.map((_, index) => index),
+      );
+
+      normalizedFaces.forEach((face, faceRank) => {
+        faceRows.push({
+          job_id: jobId,
+          asset_id: resultRow.asset_id,
+          consent_id: resultRow.consent_id,
+          face_rank: faceRank,
           tenant_id: tenantId,
           project_id: projectId,
-          asset_id: match.assetId,
-          consent_id: match.consentId,
-          job_id: jobId,
-          job_type: jobType,
-          confidence: match.confidence,
-          decision,
+          similarity: face.similarity,
+          source_face_box: face.sourceFaceBox,
+          target_face_box: face.targetFaceBox,
+          source_embedding: face.sourceEmbedding,
+          target_embedding: face.targetEmbedding,
+          provider: match.providerMetadata?.provider ?? "unknown",
+          provider_mode: match.providerMetadata?.providerMode ?? "unknown",
+          provider_face_index: face.providerFaceIndex,
+          provider_plugin_versions: match.providerMetadata?.providerPluginVersions ?? null,
           matcher_version: matcherVersion,
-          auto_threshold: confidenceThreshold,
-          review_min_confidence: reviewMinConfidence,
           scored_at: nowIso,
-        };
-      })
-      .sort((left, right) => {
-        if (right.confidence !== left.confidence) {
-          return right.confidence - left.confidence;
-        }
-        const assetSort = left.asset_id.localeCompare(right.asset_id);
-        if (assetSort !== 0) {
-          return assetSort;
-        }
-        return left.consent_id.localeCompare(right.consent_id);
+        });
       });
+    });
 
-    const boundedRows =
-      typeof resultsMaxPerJob === "number" ? resultRows.slice(0, resultsMaxPerJob) : resultRows;
-
-    if (boundedRows.length > 0) {
-      const { error: resultsUpsertError } = await supabase.from("asset_consent_match_results").upsert(boundedRows, {
-        onConflict: "job_id,asset_id,consent_id",
+    if (faceRows.length > 0) {
+      const { error: faceEvidenceUpsertError } = await supabase.from("asset_consent_match_result_faces").upsert(faceRows, {
+        onConflict: "job_id,asset_id,consent_id,face_rank",
       });
-
-      if (resultsUpsertError) {
-        throw new HttpError(500, "face_match_results_upsert_failed", "Unable to persist match results.");
+      if (faceEvidenceUpsertError) {
+        throw new HttpError(500, "face_match_result_faces_upsert_failed", "Unable to persist face-evidence rows.");
       }
     }
-    persistedResultsCount = boundedRows.length;
+
+    for (const [pairKey, keepFaceRanks] of keepFaceRanksByPair.entries()) {
+      const [assetId, consentId] = pairKey.split(":");
+      await deleteStaleMatchResultFaceRows(
+        supabase,
+        tenantId,
+        projectId,
+        jobId,
+        assetId,
+        consentId,
+        keepFaceRanks,
+      );
+    }
+
+    persistedFaceEvidenceCount = faceRows.length;
   }
 
   let actionTaken = "no_write";
@@ -780,6 +1017,7 @@ async function applyAutoMatches(
     aboveThresholdPairs,
     reviewBandPairs: candidateRows.length,
     persistedResultsCount,
+    persistedFaceEvidenceCount,
     threshold: confidenceThreshold,
     reviewMinConfidence,
     actionTaken,
@@ -877,16 +1115,27 @@ async function processClaimedFaceMatchJob(
   confidenceThreshold: number,
   reviewMinConfidence: number,
   persistResults: boolean,
+  persistFaceEvidence: boolean,
   resultsMaxPerJob: number | null,
   maxComparisonsPerJob: number,
 ) {
+  const startedAt = performance.now();
   const resolved = await resolveJobCandidates(supabase, job, maxComparisonsPerJob);
 
   if (!resolved.eligible) {
     await completeFaceMatchJob(supabase, job.job_id);
-    return { skippedIneligible: true };
+    logWorkerDevelopment("job_metrics", {
+      jobId: job.job_id,
+      jobType: job.job_type,
+      candidateCount: 0,
+      scoredPairs: 0,
+      skippedIneligible: true,
+      totalMs: Math.round(performance.now() - startedAt),
+    });
+    return { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 };
   }
 
+  const matcherStartedAt = performance.now();
   const matches = await matcher.match({
     tenantId: job.tenant_id,
     projectId: job.project_id,
@@ -894,7 +1143,9 @@ async function processClaimedFaceMatchJob(
     candidates: resolved.candidates,
     supabase,
   });
+  const matcherDurationMs = performance.now() - matcherStartedAt;
 
+  const writesStartedAt = performance.now();
   await applyAutoMatches(
     supabase,
     job.tenant_id,
@@ -906,11 +1157,31 @@ async function processClaimedFaceMatchJob(
     confidenceThreshold,
     reviewMinConfidence,
     persistResults,
+    persistFaceEvidence,
     resultsMaxPerJob,
     matches,
   );
+  const writesDurationMs = performance.now() - writesStartedAt;
   await completeFaceMatchJob(supabase, job.job_id);
-  return { skippedIneligible: false };
+
+  const scoredPairs = normalizeAutoMatcherMatches(matches).length;
+  const totalDurationMs = performance.now() - startedAt;
+  const pairsPerSecond = totalDurationMs > 0 ? (scoredPairs * 1000) / totalDurationMs : 0;
+  logWorkerDevelopment("job_metrics", {
+    jobId: job.job_id,
+    jobType: job.job_type,
+    candidateCount: resolved.candidates.length,
+    scoredPairs,
+    matcherMs: Math.round(matcherDurationMs),
+    writesMs: Math.round(writesDurationMs),
+    totalMs: Math.round(totalDurationMs),
+    pairsPerSecond: Number(pairsPerSecond.toFixed(2)),
+  });
+  return {
+    skippedIneligible: false,
+    scoredPairs,
+    candidatePairs: resolved.candidates.length,
+  };
 }
 
 export async function runAutoMatchWorker(
@@ -921,12 +1192,21 @@ export async function runAutoMatchWorker(
   const confidenceThreshold = normalizeThreshold(input.confidenceThreshold);
   const reviewMinConfidence = normalizeReviewMinConfidence(input.reviewMinConfidence, confidenceThreshold);
   const persistResults = normalizePersistResults(input.persistResults);
+  const persistFaceEvidence = normalizePersistFaceEvidence(input.persistFaceEvidence);
   const resultsMaxPerJob = normalizeResultsMaxPerJob(input.resultsMaxPerJob);
   const maxComparisonsPerJob = normalizeMaxComparisons(input.maxComparisonsPerJob);
   const matcher = input.matcher ?? getAutoMatcher();
   const workerId = String(input.workerId ?? "").trim();
   if (!workerId) {
     throw new HttpError(400, "face_match_worker_id_required", "Worker ID is required.");
+  }
+
+  if (persistFaceEvidence && !persistResults) {
+    throw new HttpError(
+      500,
+      "face_match_invalid_config",
+      "AUTO_MATCH_PERSIST_FACE_EVIDENCE requires AUTO_MATCH_PERSIST_RESULTS.",
+    );
   }
 
   const claimedJobs = await claimFaceMatchJobs(supabase, workerId, batchSize);
@@ -936,6 +1216,8 @@ export async function runAutoMatchWorker(
     retried: 0,
     dead: 0,
     skippedIneligible: 0,
+    scoredPairs: 0,
+    candidatePairs: 0,
   };
 
   for (const job of claimedJobs) {
@@ -947,6 +1229,7 @@ export async function runAutoMatchWorker(
         confidenceThreshold,
         reviewMinConfidence,
         persistResults,
+        persistFaceEvidence,
         resultsMaxPerJob,
         maxComparisonsPerJob,
       );
@@ -955,6 +1238,8 @@ export async function runAutoMatchWorker(
       } else {
         counters.succeeded += 1;
       }
+      counters.scoredPairs += result.scoredPairs;
+      counters.candidatePairs += result.candidatePairs;
     } catch (error) {
       const retryable = isRetryableError(error);
       const failedJob = await failFaceMatchJob(

@@ -1,0 +1,80 @@
+{
+  "generatedAt": "2026-03-14T22:08:26.182Z",
+  "benchmarkType": "matching-queue-throughput-matrix",
+  "config": {
+    "workerUri": "http://localhost:3000/api/internal/matching/worker",
+    "providerConcurrencyTag": "unset",
+    "workerCounts": [
+      1,
+      2,
+      4
+    ],
+    "batchSizes": [
+      5,
+      10,
+      20
+    ],
+    "rounds": 2,
+    "maxPairs": 100,
+    "maxJobs": 500,
+    "maxSeconds": 180,
+    "stopOnQueueEmpty": true
+  },
+  "matrixStats": {
+    "runCount": 1,
+    "depletedEarly": true
+  },
+  "runs": [
+    {
+      "providerConcurrencyTag": "unset",
+      "workers": 1,
+      "batchSize": 5,
+      "round": 1,
+      "totals": {
+        "claimed": 0,
+        "succeeded": 0,
+        "retried": 0,
+        "dead": 0,
+        "skippedIneligible": 0,
+        "scoredPairs": 0,
+        "candidatePairs": 0,
+        "errors": 2,
+        "elapsedMs": 160540,
+        "jobsPerSecond": 0,
+        "pairsPerSecond": 0,
+        "ticks": 2,
+        "stopReason": "queue_empty",
+        "reachedPairTarget": false
+      }
+    }
+  ],
+  "summary": [
+    {
+      "providerConcurrencyTag": "unset",
+      "workers": 1,
+      "batchSize": 5,
+      "rounds": 1,
+      "avgJobsPerSecond": 0,
+      "minJobsPerSecond": 0,
+      "maxJobsPerSecond": 0,
+      "avgPairsPerSecond": 0,
+      "minPairsPerSecond": 0,
+      "maxPairsPerSecond": 0,
+      "reachedPairTargetRuns": 0,
+      "reachedPairTargetRate": 0,
+      "avgSucceeded": 0,
+      "avgScoredPairs": 0,
+      "avgElapsedMs": 160540,
+      "avgRetries": 0,
+      "avgDead": 0,
+      "avgErrors": 2
+    }
+  ],
+  "recommendation": {
+    "providerConcurrencyTag": "unset",
+    "workers": 1,
+    "batchSize": 5,
+    "avgJobsPerSecond": 0,
+    "avgPairsPerSecond": 0
+  }
+}

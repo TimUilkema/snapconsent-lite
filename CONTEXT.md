@@ -1,14 +1,9 @@
 # CONTEXT.md
 
 ## Project
-SnapConsent Lite
-
-This project is a simplified version of the SnapConsent concept.  
-The goal of this repository is primarily to experiment with **AI-assisted software development workflows using Codex**, while building a small but realistic web application.
+SnapConsent
 
 The application manages **digital consent for photos or media usage**.
-
-The full SnapConsent product would include advanced features (watermarking, biometric scope, DAM integrations, etc.), but this repository focuses only on a minimal core domain.
 
 ---
 
@@ -29,7 +24,7 @@ Revocation is possible but **does not delete historical records**.
 
 ## Simplified Domain Entities
 
-The simplified system will likely contain:
+The system will likely contain:
 
 - **tenants**  
   Organizations using the platform.
@@ -46,7 +41,6 @@ The simplified system will likely contain:
 - **subjects**  
   The person giving consent.
 
-This repository intentionally keeps the data model simple at first.
 
 ---
 
@@ -81,14 +75,9 @@ Local development uses **Supabase CLI + Docker**.
 
 ## Development Philosophy
 
-The main goal of this repository is to practice:
-
-- AI-assisted coding
-- repository-aware agents
-- research → plan → implement workflows
-- safe incremental development
-
 Changes should be:
 - small
 - reviewable
 - well-reasoned
+- research → plan → implement workflows
+- safe incremental development

@@ -4,6 +4,8 @@ const DEFAULT_THRESHOLD = 0.92;
 const DEFAULT_REVIEW_MIN_CONFIDENCE = 0.3;
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_TIMEOUT_MS = 60_000;
+const DEFAULT_PROVIDER_CONCURRENCY = 4;
+const MAX_PROVIDER_CONCURRENCY = 16;
 const DEFAULT_PROVIDER = "stub";
 const MAX_RESULTS_PER_JOB = 5_000;
 
@@ -70,6 +72,17 @@ export function getAutoMatchProviderTimeoutMs() {
   return Math.floor(parseBoundedNumber(process.env.AUTO_MATCH_PROVIDER_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 250, MAX_TIMEOUT_MS));
 }
 
+export function getAutoMatchProviderConcurrency() {
+  return Math.floor(
+    parseBoundedNumber(
+      process.env.AUTO_MATCH_PROVIDER_CONCURRENCY,
+      DEFAULT_PROVIDER_CONCURRENCY,
+      1,
+      MAX_PROVIDER_CONCURRENCY,
+    ),
+  );
+}
+
 export function getAutoMatchMaxComparisonsPerJob() {
   const parsed = Number(process.env.AUTO_MATCH_MAX_COMPARISONS_PER_JOB ?? "");
   if (!Number.isFinite(parsed)) {
@@ -86,6 +99,10 @@ export function getAutoMatchMaxComparisonsPerJob() {
 
 export function getAutoMatchPersistResults() {
   return parseBoolean(process.env.AUTO_MATCH_PERSIST_RESULTS, false);
+}
+
+export function getAutoMatchPersistFaceEvidence() {
+  return parseBoolean(process.env.AUTO_MATCH_PERSIST_FACE_EVIDENCE, false);
 }
 
 export function getAutoMatchResultsMaxPerJob() {
