@@ -6,10 +6,15 @@ import { getAutoMatchProviderConcurrency, getCompreFaceConfig } from "@/lib/matc
 import type {
   AutoMatcher,
   AutoMatcherCandidate,
+  AutoMatcherEmbeddingCompareInput,
+  AutoMatcherEmbeddingCompareResult,
   AutoMatcherFaceBox,
   AutoMatcherFaceEvidence,
   AutoMatcherMatch,
+  AutoMatcherMaterializationResult,
+  AutoMatcherMaterializedFace,
   AutoMatcherProviderMetadata,
+  AutoMatcherStorageRef,
 } from "@/lib/matching/auto-matcher";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
 
@@ -55,6 +60,22 @@ type CompreFaceVerifyResponse = {
     plugins_versions?: Record<string, unknown>;
   }>;
   plugins_versions?: Record<string, unknown>;
+};
+
+type CompreFaceDetectionResponse = {
+  result?: Array<{
+    box?: CompreFaceFaceBox;
+    embedding?: number[];
+    plugins_versions?: Record<string, unknown>;
+  }>;
+  plugins_versions?: Record<string, unknown>;
+};
+
+type CompreFaceEmbeddingVerifyResponse = {
+  result?: Array<{
+    similarity?: number;
+    embedding?: number[];
+  }>;
 };
 
 export const COMPREFACE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -323,6 +344,16 @@ async function downloadAsBase64(
   inFlight: DownloadInFlight,
 ) {
   const ref = target === "photo" ? candidate.photo : candidate.headshot;
+  return downloadStorageRefAsBase64(supabase, ref, target, cache, inFlight);
+}
+
+async function downloadStorageRefAsBase64(
+  supabase: SupabaseClient,
+  ref: AutoMatcherStorageRef,
+  target: DownloadTarget,
+  cache: DownloadCache,
+  inFlight: DownloadInFlight,
+) {
   if (!ref.storageBucket || !ref.storagePath) {
     return null;
   }
@@ -364,6 +395,245 @@ async function downloadAsBase64(
 
   inFlight.set(cacheKey, downloadPromise);
   return downloadPromise;
+}
+
+function throwCompreFaceResponseError(
+  response: Response,
+  providerMessage: string | null,
+  action: "detect" | "verify" | "compare_embeddings",
+) {
+  if (response.status === 404) {
+    const serviceAction = action === "verify" ? "verification" : action;
+    throw new MatcherProviderError(
+      `${serviceAction}_service_not_found`,
+      `CompreFace ${serviceAction} service was not found for the provided API key.`,
+      false,
+    );
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    throw new MatcherProviderError(
+      "provider_auth_error",
+      "CompreFace credentials were rejected.",
+      false,
+    );
+  }
+
+  if (response.status === 400) {
+    throw new MatcherProviderError(
+      "provider_bad_request",
+      `CompreFace rejected the ${action} request payload.`,
+      false,
+    );
+  }
+
+  if (response.status === 413) {
+    throw new MatcherProviderError(
+      "provider_payload_too_large",
+      "CompreFace rejected the image payload as too large.",
+      true,
+    );
+  }
+
+  if (response.status === 415) {
+    throw new MatcherProviderError(
+      "provider_unsupported_format",
+      "CompreFace rejected the image format.",
+      false,
+    );
+  }
+
+  if (response.status >= 500) {
+    throw new MatcherProviderError(
+      "provider_server_error",
+      `CompreFace ${action} failed with status ${response.status}.`,
+      true,
+    );
+  }
+
+  throw new MatcherProviderError(
+    "compreface_request_failed",
+    providerMessage
+      ? `CompreFace ${action} failed: ${providerMessage}`
+      : `CompreFace ${action} failed with status ${response.status}.`,
+    false,
+  );
+}
+
+function parseDetectionFaces(data: CompreFaceDetectionResponse | null): AutoMatcherMaterializedFace[] {
+  if (!data?.result || data.result.length === 0) {
+    return [];
+  }
+
+  const faces: AutoMatcherMaterializedFace[] = [];
+  data.result.forEach((resultItem, index) => {
+    const faceBox = normalizeFaceBox(resultItem.box);
+    const embedding = normalizeEmbedding(resultItem.embedding);
+    if (!faceBox || !embedding) {
+      return;
+    }
+
+    faces.push({
+      faceRank: index,
+      providerFaceIndex: index,
+      detectionProbability: faceBox.probability ?? null,
+      faceBox,
+      embedding,
+    });
+  });
+
+  return faces;
+}
+
+async function detectFacesWithCompreFace(
+  image: string,
+  target: DownloadTarget,
+  byteSize: number,
+  assetId: string,
+): Promise<AutoMatcherMaterializationResult> {
+  const config = getCompreFaceConfig();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+
+  logCompreFaceDevelopment("detect_request", {
+    assetId,
+    target,
+    byteSize,
+  });
+
+  try {
+    const detectUrl = new URL(`${config.baseUrl}/api/v1/detection/detect`);
+    detectUrl.searchParams.set("face_plugins", "calculator");
+    detectUrl.searchParams.set("status", "true");
+
+    const response = await fetch(detectUrl.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": config.detectionApiKey,
+      },
+      body: JSON.stringify({
+        file: image,
+      }),
+      signal: controller.signal,
+    });
+
+    const parsedResponse = await parseCompreFaceResponse(response);
+    if (!response.ok) {
+      if (response.status === 422 || (response.status === 400 && isNoFaceDetectedMessage(parsedResponse.providerMessage))) {
+        return {
+          faces: [],
+          providerMetadata: {
+            provider: "compreface",
+            providerMode: "detection",
+            providerPluginVersions: null,
+          },
+        };
+      }
+
+      throwCompreFaceResponseError(response, parsedResponse.providerMessage, "detect");
+    }
+
+    const responseData = (parsedResponse.responseBody as CompreFaceDetectionResponse | null) ?? null;
+    return {
+      faces: parseDetectionFaces(responseData),
+      providerMetadata: {
+        provider: "compreface",
+        providerMode: "detection",
+        providerPluginVersions: parsePluginVersions(responseData as CompreFaceVerifyResponse | null),
+      },
+    };
+  } catch (error) {
+    if (error instanceof MatcherProviderError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new MatcherProviderError(
+        "compreface_timeout",
+        "CompreFace request timed out.",
+        true,
+      );
+    }
+
+    throw new MatcherProviderError(
+      "compreface_network_error",
+      "Unable to reach CompreFace service.",
+      true,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseEmbeddingCompareSimilarities(
+  data: CompreFaceEmbeddingVerifyResponse | null,
+  targetCount: number,
+) {
+  const similarities = (data?.result ?? []).map((row) => normalizeConfidence(row.similarity));
+  while (similarities.length < targetCount) {
+    similarities.push(0);
+  }
+  return similarities.slice(0, targetCount);
+}
+
+async function compareEmbeddingsWithCompreFace(
+  input: AutoMatcherEmbeddingCompareInput,
+): Promise<AutoMatcherEmbeddingCompareResult> {
+  const config = getCompreFaceConfig();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+
+  try {
+    const verifyUrl = new URL(`${config.baseUrl}/api/v1/verification/embeddings/verify`);
+    const response = await fetch(verifyUrl.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": config.verificationApiKey,
+      },
+      body: JSON.stringify({
+        source: input.sourceEmbedding,
+        targets: input.targetEmbeddings,
+      }),
+      signal: controller.signal,
+    });
+
+    const parsedResponse = await parseCompreFaceResponse(response);
+    if (!response.ok) {
+      throwCompreFaceResponseError(response, parsedResponse.providerMessage, "compare_embeddings");
+    }
+
+    const responseData = (parsedResponse.responseBody as CompreFaceEmbeddingVerifyResponse | null) ?? null;
+    return {
+      targetSimilarities: parseEmbeddingCompareSimilarities(responseData, input.targetEmbeddings.length),
+      providerMetadata: {
+        provider: "compreface",
+        providerMode: "verification_embeddings",
+        providerPluginVersions: null,
+      },
+    };
+  } catch (error) {
+    if (error instanceof MatcherProviderError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new MatcherProviderError(
+        "compreface_timeout",
+        "CompreFace request timed out.",
+        true,
+      );
+    }
+
+    throw new MatcherProviderError(
+      "compreface_network_error",
+      "Unable to reach CompreFace service.",
+      true,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -447,7 +717,7 @@ async function verifyPairWithCompreFace(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": config.apiKey,
+        "x-api-key": config.verificationApiKey,
       },
       body: JSON.stringify({
         source_image: sourceImage,
@@ -457,11 +727,11 @@ async function verifyPairWithCompreFace(
     });
 
     const parsedResponse = await parseCompreFaceResponse(response);
-    if (!response.ok) {
-      if (response.status === 422 || (response.status === 400 && isNoFaceDetectedMessage(parsedResponse.providerMessage))) {
-        logCompreFaceDevelopment("response", {
-          status: response.status,
-          parsedSimilarity: 0,
+      if (!response.ok) {
+        if (response.status === 422 || (response.status === 400 && isNoFaceDetectedMessage(parsedResponse.providerMessage))) {
+          logCompreFaceDevelopment("response", {
+            status: response.status,
+            parsedSimilarity: 0,
           providerMessage: parsedResponse.providerMessage,
         });
         return {
@@ -481,60 +751,8 @@ async function verifyPairWithCompreFace(
         providerMessage: parsedResponse.providerMessage,
       });
 
-      if (response.status === 404) {
-        throw new MatcherProviderError(
-          "verification_service_not_found",
-          "CompreFace verification service was not found for the provided API key.",
-          false,
-        );
+        throwCompreFaceResponseError(response, parsedResponse.providerMessage, "verify");
       }
-
-      if (response.status === 401 || response.status === 403) {
-        throw new MatcherProviderError(
-          "provider_auth_error",
-          "CompreFace credentials were rejected.",
-          false,
-        );
-      }
-
-      if (response.status === 400) {
-        throw new MatcherProviderError(
-          "provider_bad_request",
-          "CompreFace rejected the verify request payload.",
-          false,
-        );
-      }
-
-      if (response.status === 413) {
-        throw new MatcherProviderError(
-          "provider_payload_too_large",
-          "CompreFace rejected the image payload as too large.",
-          true,
-        );
-      }
-
-      if (response.status === 415) {
-        throw new MatcherProviderError(
-          "provider_unsupported_format",
-          "CompreFace rejected the image format.",
-          false,
-        );
-      }
-
-      if (response.status >= 500) {
-        throw new MatcherProviderError(
-          "provider_server_error",
-          `CompreFace verify failed with status ${response.status}.`,
-          true,
-        );
-      }
-
-      throw new MatcherProviderError(
-        "compreface_request_failed",
-        `CompreFace request failed with status ${response.status}.`,
-        false,
-      );
-    }
 
     const responseData = (parsedResponse.responseBody as CompreFaceVerifyResponse | null) ?? null;
     const similarity = parseSimilarity(responseData);
@@ -580,6 +798,27 @@ async function verifyPairWithCompreFace(
 export function createCompreFaceAutoMatcher(): AutoMatcher {
   return {
     version: "compreface-v1",
+    async materializeAssetFaces(input) {
+      const supabase = getStorageClient(input.supabase);
+      const cache: DownloadCache = new Map();
+      const inFlightDownloads: DownloadInFlight = new Map();
+      const downloadedImage = await downloadStorageRefAsBase64(supabase, input.storage, input.assetType, cache, inFlightDownloads);
+      if (!downloadedImage) {
+        return {
+          faces: [],
+          providerMetadata: {
+            provider: "compreface",
+            providerMode: "detection",
+            providerPluginVersions: null,
+          },
+        };
+      }
+
+      return detectFacesWithCompreFace(downloadedImage.base64, input.assetType, downloadedImage.byteSize, input.assetId);
+    },
+    async compareEmbeddings(input) {
+      return compareEmbeddingsWithCompreFace(input);
+    },
     async match(input) {
       const startedAt = performance.now();
       const supabase = getStorageClient(input.supabase);

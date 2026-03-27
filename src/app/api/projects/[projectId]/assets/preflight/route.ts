@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { SAFE_IN_FILTER_CHUNK_SIZE, chunkValues } from "@/lib/supabase/safe-in-filter";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -19,8 +20,6 @@ type PreflightBody = {
   assetType?: string;
   files?: PreflightFile[];
 };
-
-const IN_FILTER_CHUNK_SIZE = 40;
 
 function normalizeAssetType(value: unknown): "photo" | "headshot" {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -52,18 +51,6 @@ function normalizeContentHash(value: unknown): string | null {
     return null;
   }
   return trimmed;
-}
-
-function chunkValues<T>(values: T[], chunkSize: number) {
-  if (values.length === 0) {
-    return [];
-  }
-
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += chunkSize) {
-    chunks.push(values.slice(index, index + chunkSize));
-  }
-  return chunks;
 }
 
 export async function POST(request: Request, context: RouteContext) {
@@ -98,8 +85,9 @@ export async function POST(request: Request, context: RouteContext) {
     let candidateSizes: number[] = [];
     if (uniqueSizes.length > 0) {
       const foundSizes = new Set<number>();
-      const sizeChunks = chunkValues(uniqueSizes, IN_FILTER_CHUNK_SIZE);
+      const sizeChunks = chunkValues(uniqueSizes, SAFE_IN_FILTER_CHUNK_SIZE);
       for (const sizeChunk of sizeChunks) {
+        // safe-in-filter: preflight size lookup is request-bounded and chunked by shared helper.
         const { data, error } = await supabase
           .from("assets")
           .select("file_size_bytes")
@@ -129,8 +117,9 @@ export async function POST(request: Request, context: RouteContext) {
     let duplicateHashes: string[] = [];
     if (uniqueHashes.length > 0) {
       const foundHashes = new Set<string>();
-      const hashChunks = chunkValues(uniqueHashes, IN_FILTER_CHUNK_SIZE);
+      const hashChunks = chunkValues(uniqueHashes, SAFE_IN_FILTER_CHUNK_SIZE);
       for (const hashChunk of hashChunks) {
+        // safe-in-filter: preflight hash lookup is request-bounded and chunked by shared helper.
         const { data, error } = await supabase
           .from("assets")
           .select("content_hash")

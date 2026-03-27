@@ -143,12 +143,16 @@ async function createLargeImageBufferOver5mb() {
 function withMatcherEnv() {
   process.env.COMPREFACE_BASE_URL = "http://compreface.local";
   process.env.COMPREFACE_API_KEY = "test-key";
+  delete process.env.COMPREFACE_VERIFICATION_API_KEY;
+  delete process.env.COMPREFACE_DETECTION_API_KEY;
   process.env.AUTO_MATCH_PROVIDER_TIMEOUT_MS = "3000";
   process.env.AUTO_MATCH_PROVIDER_CONCURRENCY = "4";
 
   return () => {
     delete process.env.COMPREFACE_BASE_URL;
     delete process.env.COMPREFACE_API_KEY;
+    delete process.env.COMPREFACE_VERIFICATION_API_KEY;
+    delete process.env.COMPREFACE_DETECTION_API_KEY;
     delete process.env.AUTO_MATCH_PROVIDER_TIMEOUT_MS;
     delete process.env.AUTO_MATCH_PROVIDER_CONCURRENCY;
   };
@@ -639,6 +643,95 @@ test("matcher processes candidates concurrently with bounded provider concurrenc
     assert.equal(matches.length, 3);
     assert.ok(maxInFlight >= 2);
     assert.equal(stats.downloadCalls, 6);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});
+
+test("materialization uses the detection key while verify and embedding compare use the verification key", async () => {
+  const clearEnv = withMatcherEnv();
+  process.env.COMPREFACE_VERIFICATION_API_KEY = "verify-key";
+  process.env.COMPREFACE_DETECTION_API_KEY = "detect-key";
+
+  const sourceImage = await createSmallJpegBuffer();
+  const stats: FakeStorageStats = { downloadCalls: 0, uploadCalls: 0, removeCalls: 0 };
+  const supabase = createFakeSupabase(
+    {
+      "project-assets:headshot.jpg": sourceImage,
+      "project-assets:photo.jpg": sourceImage,
+    },
+    stats,
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input));
+    const apiKey = String((init?.headers as Record<string, string> | undefined)?.["x-api-key"] ?? "");
+
+    if (requestUrl.pathname.endsWith("/api/v1/detection/detect")) {
+      assert.equal(apiKey, "detect-key");
+      return createJsonResponse({
+        result: [
+          {
+            box: { x_min: 1, y_min: 2, x_max: 11, y_max: 12, probability: 0.99 },
+            embedding: [0.1, 0.2, 0.3],
+          },
+        ],
+      });
+    }
+
+    if (requestUrl.pathname.endsWith("/api/v1/verification/verify")) {
+      assert.equal(apiKey, "verify-key");
+      return createJsonResponse({
+        result: [
+          {
+            face_matches: [{ similarity: 0.88 }],
+          },
+        ],
+      });
+    }
+
+    if (requestUrl.pathname.endsWith("/api/v1/verification/embeddings/verify")) {
+      assert.equal(apiKey, "verify-key");
+      return createJsonResponse({
+        result: [{ similarity: 0.91 }],
+      });
+    }
+
+    assert.fail(`Unexpected URL ${requestUrl.toString()}`);
+  };
+
+  try {
+    const matcher = createCompreFaceAutoMatcher();
+
+    const materialized = await matcher.materializeAssetFaces?.({
+      tenantId: "tenant-id",
+      projectId: "project-id",
+      assetId: "headshot-id",
+      assetType: "headshot",
+      storage: {
+        storageBucket: "project-assets",
+        storagePath: "headshot.jpg",
+      },
+      supabase,
+    });
+    assert.equal(materialized?.faces.length, 1);
+
+    const compared = await matcher.compareEmbeddings?.({
+      sourceEmbedding: [0.1, 0.2, 0.3],
+      targetEmbeddings: [[0.1, 0.2, 0.3]],
+    });
+    assert.deepEqual(compared?.targetSimilarities, [0.91]);
+
+    const matches = await matcher.match({
+      tenantId: "tenant-id",
+      projectId: "project-id",
+      jobType: "photo_uploaded",
+      candidates: [createCandidate()],
+      supabase,
+    });
+    assert.equal(matches[0]?.confidence, 0.88);
   } finally {
     globalThis.fetch = originalFetch;
     clearEnv();

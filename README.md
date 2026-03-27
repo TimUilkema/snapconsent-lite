@@ -102,10 +102,12 @@ Feature 011 adds a real matcher provider behind the existing matching worker arc
   - `AUTO_MATCH_CONFIDENCE_THRESHOLD`
   - `AUTO_MATCH_REVIEW_MIN_CONFIDENCE`
   - `AUTO_MATCH_PROVIDER_TIMEOUT_MS`
-  - `AUTO_MATCH_PROVIDER_CONCURRENCY`
   - `COMPREFACE_BASE_URL`
   - `COMPREFACE_API_KEY`
 - Optional:
+  - `AUTO_MATCH_PIPELINE_MODE`
+  - `AUTO_MATCH_WORKER_CONCURRENCY`
+  - `AUTO_MATCH_PROVIDER_CONCURRENCY`
   - `AUTO_MATCH_MAX_COMPARISONS_PER_JOB`
   - `AUTO_MATCH_PERSIST_RESULTS`
   - `AUTO_MATCH_PERSIST_FACE_EVIDENCE` (requires `AUTO_MATCH_PERSIST_RESULTS=true`)
@@ -125,6 +127,14 @@ Notes:
 - No new public endpoints are introduced.
 - Matching stays server-side in the internal worker.
 - Keep CompreFace API keys server-only.
+- Total CompreFace fan-out is roughly `AUTO_MATCH_WORKER_CONCURRENCY * AUTO_MATCH_PROVIDER_CONCURRENCY`, so tune both conservatively.
+
+### Pipeline rollout modes
+
+- `AUTO_MATCH_PIPELINE_MODE=raw` keeps the original raw pairwise verification flow.
+- `AUTO_MATCH_PIPELINE_MODE=materialized_shadow` materializes faces and stores versioned embedding-compare outcomes, but does not change canonical link or candidate writes.
+- `AUTO_MATCH_PIPELINE_MODE=materialized_apply` uses the materialized compare pipeline to drive the existing pair-level apply logic.
+- Materialized apply still keeps `asset_consent_links` pair-level and canonical. Persisted winning face data is for later conflict-resolution features and does not enable face exclusivity by itself.
 
 ## Likely-Match Review Band (Feature 012)
 
@@ -160,3 +170,4 @@ npx tsx scripts/benchmark-compreface-matcher.ts \
 ```
 
 This prints per-run and summary timing plus pairs/sec so you can tune `AUTO_MATCH_PROVIDER_CONCURRENCY`.
+For worker throughput tuning, benchmark a small matrix of worker concurrency x provider concurrency values instead of raising both at once.

@@ -1,4 +1,5 @@
 import { createAssetWithIdempotency } from "@/lib/assets/create-asset";
+import { normalizeSubjectRelation } from "@/lib/assets/normalize-subject-relation";
 import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createClient } from "@/lib/supabase/server";
@@ -28,6 +29,8 @@ type AssetListSort =
   | "file_size_desc"
   | "file_size_asc";
 
+type DuplicatePolicy = "upload_anyway" | "overwrite" | "ignore";
+
 type AssetRow = {
   id: string;
   original_filename: string;
@@ -45,22 +48,42 @@ type AssetConsentLinkRow = {
   consents:
     | {
         id: string;
-        subjects: {
-          email: string;
-          full_name: string;
-        } | null;
+        subjects:
+          | {
+              email: string;
+              full_name: string;
+            }
+          | {
+              email: string;
+              full_name: string;
+            }[]
+          | null;
       }
     | {
         id: string;
-        subjects: {
-          email: string;
-          full_name: string;
-        } | null;
+        subjects:
+          | {
+              email: string;
+              full_name: string;
+            }
+          | {
+              email: string;
+              full_name: string;
+            }[]
+          | null;
       }[]
     | null;
 };
 
 type ConsentFilterOptionRow = {
+  id: string;
+  subjects: Array<{
+    email: string;
+    full_name: string;
+  }> | null;
+};
+
+type ConsentFilterOption = {
   id: string;
   subjects: {
     email: string;
@@ -125,21 +148,17 @@ function parseConsentFilterIds(searchParams: URLSearchParams) {
   );
 }
 
-function applySort<TQuery extends { order: (...args: unknown[]) => TQuery }>(
-  query: TQuery,
-  sort: AssetListSort,
-) {
-  switch (sort) {
-    case "created_at_asc":
-      return query.order("created_at", { ascending: true });
-    case "file_size_desc":
-      return query.order("file_size_bytes", { ascending: false }).order("created_at", { ascending: false });
-    case "file_size_asc":
-      return query.order("file_size_bytes", { ascending: true }).order("created_at", { ascending: false });
-    case "created_at_desc":
-    default:
-      return query.order("created_at", { ascending: false });
+function parseDuplicatePolicy(value: unknown): DuplicatePolicy {
+  if (typeof value !== "string") {
+    return "upload_anyway";
   }
+
+  const normalized = value.trim();
+  if (normalized === "overwrite" || normalized === "ignore") {
+    return normalized;
+  }
+
+  return "upload_anyway";
 }
 
 async function requireAuthAndScope(context: RouteContext) {
@@ -184,11 +203,15 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     const people = ((consentFilterRows as ConsentFilterOptionRow[] | null) ?? []).map((consent) => {
-      const fullName = consent.subjects?.full_name?.trim() ?? null;
-      const email = consent.subjects?.email?.trim() ?? null;
+      const normalizedConsent: ConsentFilterOption = {
+        id: consent.id,
+        subjects: normalizeSubjectRelation(consent.subjects),
+      };
+      const fullName = normalizedConsent.subjects?.full_name?.trim() ?? null;
+      const email = normalizedConsent.subjects?.email?.trim() ?? null;
       const label = fullName || email || "Unknown subject";
       return {
-        consentId: consent.id,
+        consentId: normalizedConsent.id,
         fullName,
         email,
         label,
@@ -250,7 +273,23 @@ export async function GET(request: Request, context: RouteContext) {
       query = query.in("id", filteredAssetIds);
     }
 
-    query = applySort(query, sort).range(offset, offset + limit - 1);
+    switch (sort) {
+      case "created_at_asc":
+        query = query.order("created_at", { ascending: true });
+        break;
+      case "file_size_desc":
+        query = query.order("file_size_bytes", { ascending: false }).order("created_at", { ascending: false });
+        break;
+      case "file_size_asc":
+        query = query.order("file_size_bytes", { ascending: true }).order("created_at", { ascending: false });
+        break;
+      case "created_at_desc":
+      default:
+        query = query.order("created_at", { ascending: false });
+        break;
+    }
+
+    query = query.range(offset, offset + limit - 1);
 
     const { data: assets, error: assetsError, count } = await query;
     if (assetsError) {
@@ -294,6 +333,7 @@ export async function GET(request: Request, context: RouteContext) {
         if (!consentRow) {
           return;
         }
+        const subjectRow = Array.isArray(consentRow.subjects) ? (consentRow.subjects[0] ?? null) : consentRow.subjects;
 
         const existingPeople = assetLinkedPeopleMap.get(link.asset_id) ?? [];
         if (existingPeople.some((person) => person.consentId === consentRow.id)) {
@@ -302,8 +342,8 @@ export async function GET(request: Request, context: RouteContext) {
 
         existingPeople.push({
           consentId: consentRow.id,
-          fullName: consentRow.subjects?.full_name ?? null,
-          email: consentRow.subjects?.email ?? null,
+          fullName: subjectRow?.full_name ?? null,
+          email: subjectRow?.email ?? null,
         });
         assetLinkedPeopleMap.set(link.asset_id, existingPeople);
       });
@@ -378,10 +418,7 @@ export async function POST(request: Request, context: RouteContext) {
       contentHash: typeof body.contentHash === "string" ? body.contentHash.trim() : null,
       contentHashAlgo: typeof body.contentHashAlgo === "string" ? body.contentHashAlgo.trim() : null,
       assetType: typeof body.assetType === "string" ? body.assetType.trim() : "photo",
-      duplicatePolicy:
-        typeof body.duplicatePolicy === "string" && body.duplicatePolicy.trim().length > 0
-          ? body.duplicatePolicy.trim()
-          : "upload_anyway",
+      duplicatePolicy: parseDuplicatePolicy(body.duplicatePolicy),
     });
 
     return Response.json(result.payload, { status: result.status });

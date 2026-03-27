@@ -1,6 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { runChunkedMutation, runChunkedRead } from "@/lib/supabase/safe-in-filter";
+
+const MAX_REQUEST_CONSENT_IDS = 50;
 
 type FinalizeAssetInput = {
   supabase: SupabaseClient;
@@ -16,6 +19,14 @@ export type FinalizedAsset = {
   assetType: "photo" | "headshot";
 };
 
+function normalizeConsentIds(consentIds: string[]) {
+  const unique = Array.from(new Set(consentIds.map((consentId) => String(consentId ?? "").trim()).filter(Boolean)));
+  if (unique.length > MAX_REQUEST_CONSENT_IDS) {
+    throw new HttpError(400, "invalid_consent_ids_too_large", "Too many consent IDs were provided.");
+  }
+  return unique;
+}
+
 async function validateConsents(
   supabase: SupabaseClient,
   tenantId: string,
@@ -26,16 +37,21 @@ async function validateConsents(
     return;
   }
 
-  const { data, error } = await supabase
-    .from("consents")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .in("id", consentIds);
+  const data = await runChunkedRead(consentIds, async (consentIdChunk) => {
+    // safe-in-filter: finalize consent validation is request-bounded and chunked by shared helper.
+    const { data: rows, error } = await supabase
+      .from("consents")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .in("id", consentIdChunk);
 
-  if (error) {
-    throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
-  }
+    if (error) {
+      throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
+    }
+
+    return (rows ?? []) as Array<{ id: string }>;
+  });
 
   const found = new Set((data ?? []).map((row) => row.id));
   const missing = consentIds.filter((id) => !found.has(id));
@@ -45,7 +61,7 @@ async function validateConsents(
 }
 
 export async function finalizeAsset(input: FinalizeAssetInput): Promise<FinalizedAsset> {
-  input.consentIds = Array.from(new Set(input.consentIds));
+  input.consentIds = normalizeConsentIds(input.consentIds);
   const { data: asset, error: assetError } = await input.supabase
     .from("assets")
     .select("id, asset_type")
@@ -103,17 +119,20 @@ export async function finalizeAsset(input: FinalizeAssetInput): Promise<Finalize
     }
 
     if (asset.asset_type === "photo") {
-      const { error: suppressionDeleteError } = await input.supabase
-        .from("asset_consent_link_suppressions")
-        .delete()
-        .eq("tenant_id", input.tenantId)
-        .eq("project_id", input.projectId)
-        .eq("asset_id", input.assetId)
-        .in("consent_id", input.consentIds);
+      await runChunkedMutation(input.consentIds, async (consentIdChunk) => {
+        // safe-in-filter: finalize suppression cleanup is request-bounded and chunked by shared helper.
+        const { error: suppressionDeleteError } = await input.supabase
+          .from("asset_consent_link_suppressions")
+          .delete()
+          .eq("tenant_id", input.tenantId)
+          .eq("project_id", input.projectId)
+          .eq("asset_id", input.assetId)
+          .in("consent_id", consentIdChunk);
 
-      if (suppressionDeleteError) {
-        throw new HttpError(500, "asset_link_failed", "Unable to clear matching suppression.");
-      }
+        if (suppressionDeleteError) {
+          throw new HttpError(500, "asset_link_failed", "Unable to clear matching suppression.");
+        }
+      });
     }
   }
 

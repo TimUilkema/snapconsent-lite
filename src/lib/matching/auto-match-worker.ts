@@ -1,23 +1,46 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 import {
+  getAutoMatchCompareVersion,
   getAutoMatchConfidenceThreshold,
+  getAutoMatchMaterializerVersion,
   getAutoMatchMaxComparisonsPerJob,
+  getAutoMatchPipelineMode,
   getAutoMatchPersistFaceEvidence,
   getAutoMatchPersistResults,
   getAutoMatchResultsMaxPerJob,
   getAutoMatchReviewMinConfidence,
+  getAutoMatchWorkerConcurrency,
 } from "@/lib/matching/auto-match-config";
-import type { FaceMatchJobType } from "@/lib/matching/auto-match-jobs";
+import {
+  enqueueCompareMaterializedPairJob,
+  enqueueMaterializeAssetFacesJob,
+  type FaceMatchJobType,
+} from "@/lib/matching/auto-match-jobs";
+import {
+  ensureAssetFaceMaterialization,
+  loadConsentHeadshotMaterialization,
+  loadCurrentProjectConsentHeadshots,
+  loadCurrentAssetFaceMaterialization,
+  loadEligibleConsentHeadshotMaterializations,
+  loadEligibleConsentsForHeadshotAsset,
+  loadEligiblePhotoMaterializations,
+  type AssetFaceMaterializationFaceRow,
+  type AssetFaceMaterializationRow,
+} from "@/lib/matching/face-materialization";
+import { ensureMaterializedFaceCompare } from "@/lib/matching/materialized-face-compare";
 import {
   getAutoMatcher,
   type AutoMatcher,
   type AutoMatcherCandidate,
   type AutoMatcherFaceBox,
   type AutoMatcherMatch,
+  type AutoMatcherProviderMetadata,
 } from "@/lib/matching/auto-matcher";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
+import { chunkValues, runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type ClaimedFaceMatchJobRow = {
   job_id: string;
@@ -70,6 +93,7 @@ type RunAutoMatchWorkerInput = {
 
 export type RunAutoMatchWorkerResult = {
   claimed: number;
+  workerConcurrency: number;
   succeeded: number;
   retried: number;
   dead: number;
@@ -88,6 +112,28 @@ type EligibleConsentWithHeadshot = {
 type ResolveJobCandidatesResult = {
   eligible: boolean;
   candidates: AutoMatcherCandidate[];
+};
+
+type ProcessClaimedFaceMatchJobResult = {
+  skippedIneligible: boolean;
+  scoredPairs: number;
+  candidatePairs: number;
+};
+
+type ExecuteClaimedFaceMatchJobResult = {
+  outcome: "succeeded" | "skipped_ineligible" | "retried" | "dead";
+  scoredPairs: number;
+  candidatePairs: number;
+};
+
+type MaterializeAssetFacesPayload = {
+  materializerVersion: string;
+};
+
+type CompareMaterializedPairPayload = {
+  headshotMaterializationId: string;
+  assetMaterializationId: string;
+  compareVersion: string;
 };
 
 const MAX_BATCH_SIZE = 200;
@@ -134,6 +180,10 @@ function getInternalSupabaseClient(supabase?: SupabaseClient) {
 }
 
 function toSafeErrorMessage(error: unknown) {
+  if (error && typeof error === "object" && "message" in error) {
+    return normalizePostgrestError(error, "face_match_worker_error").message;
+  }
+
   if (error instanceof HttpError) {
     return error.message;
   }
@@ -146,6 +196,10 @@ function toSafeErrorMessage(error: unknown) {
 }
 
 function toSafeErrorCode(error: unknown) {
+  if (error && typeof error === "object" && ("code" in error || "message" in error)) {
+    return normalizePostgrestError(error, "face_match_worker_error").code;
+  }
+
   if (error instanceof MatcherProviderError) {
     return error.code;
   }
@@ -246,6 +300,136 @@ function normalizeResultsMaxPerJob(value: number | null | undefined) {
   return Math.min(normalized, MAX_RESULTS_PER_JOB);
 }
 
+function normalizeVersionToken(value: unknown, fallback: string) {
+  const normalized = String(value ?? "").trim();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function parseMaterializeAssetFacesPayload(payload: Record<string, unknown> | null | undefined): MaterializeAssetFacesPayload {
+  return {
+    materializerVersion: normalizeVersionToken(payload?.materializerVersion, getAutoMatchMaterializerVersion()),
+  };
+}
+
+function parseCompareMaterializedPairPayload(payload: Record<string, unknown> | null | undefined): CompareMaterializedPairPayload {
+  const headshotMaterializationId = String(payload?.headshotMaterializationId ?? "").trim();
+  const assetMaterializationId = String(payload?.assetMaterializationId ?? "").trim();
+  const compareVersion = normalizeVersionToken(payload?.compareVersion, getAutoMatchCompareVersion());
+
+  if (!headshotMaterializationId || !assetMaterializationId) {
+    throw new HttpError(
+      400,
+      "face_match_invalid_payload",
+      "Compare materialized pair jobs require headshot and asset materialization ids.",
+    );
+  }
+
+  return {
+    headshotMaterializationId,
+    assetMaterializationId,
+    compareVersion,
+  };
+}
+
+function parseMaterializedFaceBox(faceBox: Record<string, unknown>): AutoMatcherFaceBox | null {
+  const xMin = Number(faceBox.x_min);
+  const yMin = Number(faceBox.y_min);
+  const xMax = Number(faceBox.x_max);
+  const yMax = Number(faceBox.y_max);
+  if (!Number.isFinite(xMin) || !Number.isFinite(yMin) || !Number.isFinite(xMax) || !Number.isFinite(yMax)) {
+    return null;
+  }
+
+  const probability = Number(faceBox.probability);
+  return {
+    xMin,
+    yMin,
+    xMax,
+    yMax,
+    probability: Number.isFinite(probability) ? probability : null,
+  };
+}
+
+function toAutoMatcherProviderMetadata(
+  provider: string,
+  providerMode: string,
+  providerPluginVersions: Record<string, unknown> | null,
+): AutoMatcherProviderMetadata {
+  return {
+    provider,
+    providerMode,
+    providerPluginVersions,
+  };
+}
+
+function buildMaterializedMatchFromCompare(input: {
+  assetId: string;
+  consentId: string;
+  confidence: number;
+  providerMetadata: AutoMatcherProviderMetadata;
+  headshotFace: AssetFaceMaterializationFaceRow | null;
+  winningAssetFace: AssetFaceMaterializationFaceRow | null;
+}): AutoMatcherMatch {
+  const faces =
+    input.headshotFace && input.winningAssetFace
+      ? [
+          {
+            similarity: input.confidence,
+            sourceFaceBox: parseMaterializedFaceBox(input.headshotFace.face_box),
+            targetFaceBox: parseMaterializedFaceBox(input.winningAssetFace.face_box),
+            sourceEmbedding: input.headshotFace.embedding,
+            targetEmbedding: input.winningAssetFace.embedding,
+            providerFaceIndex: input.winningAssetFace.provider_face_index,
+          },
+        ]
+      : undefined;
+
+  return {
+    assetId: input.assetId,
+    consentId: input.consentId,
+    confidence: input.confidence,
+    faces,
+    providerMetadata: input.providerMetadata,
+  };
+}
+
+function normalizeWorkerConcurrency(claimedJobCount: number) {
+  if (claimedJobCount <= 0) {
+    return 0;
+  }
+
+  return Math.min(getAutoMatchWorkerConcurrency(), claimedJobCount);
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  inputs: TInput[],
+  concurrency: number,
+  handler: (item: TInput, index: number) => Promise<TOutput>,
+) {
+  if (inputs.length === 0) {
+    return [] as TOutput[];
+  }
+
+  const normalizedConcurrency = Math.max(1, Math.min(concurrency, inputs.length));
+  const results = new Array<TOutput>(inputs.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= inputs.length) {
+        return;
+      }
+
+      results[current] = await handler(inputs[current], current);
+    }
+  }
+
+  await Promise.all(Array.from({ length: normalizedConcurrency }, () => runWorker()));
+  return results;
+}
+
 async function claimFaceMatchJobs(
   supabase: SupabaseClient,
   workerId: string,
@@ -309,96 +493,67 @@ async function loadEligibleConsentIdsWithHeadshots(
   tenantId: string,
   projectId: string,
 ): Promise<EligibleConsentWithHeadshot[]> {
-  const { data: consents, error: consentsError } = await supabase
-    .from("consents")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("face_match_opt_in", true)
-    .is("revoked_at", null)
-    .limit(MAX_MATCH_CANDIDATES);
-
-  if (consentsError) {
-    throw new HttpError(500, "face_match_consent_lookup_failed", "Unable to load eligible consents.");
-  }
-
-  const consentIds = (consents ?? []).map((row) => row.id);
-  if (consentIds.length === 0) {
-    return [];
-  }
-
-  const { data: links, error: linksError } = await supabase
-    .from("asset_consent_links")
-    .select("consent_id, asset_id")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .in("consent_id", consentIds);
-
-  if (linksError) {
-    throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to load consent headshots.");
-  }
-
-  const headshotIds = Array.from(new Set((links ?? []).map((link) => link.asset_id)));
-  if (headshotIds.length === 0) {
+  const currentHeadshots = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, {
+    optInOnly: true,
+    notRevokedOnly: true,
+    limit: MAX_MATCH_CANDIDATES,
+  });
+  if (currentHeadshots.length === 0) {
     return [];
   }
 
   const nowIso = new Date().toISOString();
-  const { data: headshots, error: headshotsError } = await supabase
-    .from("assets")
-    .select("id, storage_bucket, storage_path, uploaded_at")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("asset_type", "headshot")
-    .eq("status", "uploaded")
-    .is("archived_at", null)
-    .in("id", headshotIds)
-    .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`)
-    .order("uploaded_at", { ascending: false });
+  const headshotRows = await runChunkedRead(
+    currentHeadshots.map((row) => row.headshotAssetId),
+    async (headshotIdChunk) => {
+      // safe-in-filter: worker headshot storage lookup is bounded and chunked by shared helper.
+      const { data, error } = await supabase
+        .from("assets")
+        .select("id, storage_bucket, storage_path")
+        .eq("tenant_id", tenantId)
+        .eq("project_id", projectId)
+        .eq("asset_type", "headshot")
+        .eq("status", "uploaded")
+        .is("archived_at", null)
+        .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`)
+        // safe-in-filter: headshot validation is batch-bounded and chunked by shared helper.
+        .in("id", headshotIdChunk);
 
-  if (headshotsError) {
-    throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to validate consent headshots.");
-  }
+      if (error) {
+        throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to validate consent headshots.");
+      }
+
+      return (data ?? []) as Array<{
+        id: string;
+        storage_bucket: string | null;
+        storage_path: string | null;
+      }>;
+    },
+  );
 
   const headshotById = new Map(
-    (headshots ?? []).map((headshot) => [
+    headshotRows.map((headshot) => [
       headshot.id,
       {
         storageBucket: headshot.storage_bucket,
         storagePath: headshot.storage_path,
-        uploadedAt: headshot.uploaded_at,
       },
     ]),
   );
-  const eligibleByConsentId = new Map<string, EligibleConsentWithHeadshot>();
 
-  const sortedLinks = (links ?? [])
-    .filter((link) => headshotById.has(link.asset_id))
-    .sort((left, right) => {
-      const leftUploadedAt = headshotById.get(left.asset_id)?.uploadedAt ?? "";
-      const rightUploadedAt = headshotById.get(right.asset_id)?.uploadedAt ?? "";
-      return rightUploadedAt.localeCompare(leftUploadedAt);
-    });
-
-  sortedLinks.forEach((link) => {
-    if (eligibleByConsentId.has(link.consent_id)) {
-      return;
-    }
-
-    const headshot = headshotById.get(link.asset_id);
+  return currentHeadshots.flatMap((row) => {
+    const headshot = headshotById.get(row.headshotAssetId);
     if (!headshot?.storageBucket || !headshot.storagePath) {
-      return;
+      return [];
     }
 
-    eligibleByConsentId.set(link.consent_id, {
-      consentId: link.consent_id,
-      headshotAssetId: link.asset_id,
+    return [{
+      consentId: row.consentId,
+      headshotAssetId: row.headshotAssetId,
       headshotStorageBucket: headshot.storageBucket,
       headshotStoragePath: headshot.storagePath,
-    });
+    }];
   });
-
-  return Array.from(eligibleByConsentId.values());
 }
 
 async function loadEligibleHeadshotForConsent(
@@ -682,6 +837,47 @@ async function deleteStaleMatchResultFaceRows(
   }
 }
 
+async function loadCandidatePairRows(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  assetIds: string[],
+  consentIds: string[],
+  table: "asset_consent_links" | "asset_consent_link_suppressions",
+  selectClause: string,
+  errorCode: string,
+  errorMessage: string,
+) {
+  const rows: Array<{
+    asset_id: string;
+    consent_id: string;
+    link_source?: string | null;
+  }> = [];
+
+  for (const assetIdChunk of chunkValues(assetIds)) {
+    for (const consentIdChunk of chunkValues(consentIds)) {
+      // safe-in-filter: worker pair-state lookups are batch-bounded and chunked on both dimensions.
+      const { data, error } = await supabase
+        .from(table)
+        .select(selectClause)
+        .eq("tenant_id", tenantId)
+        .eq("project_id", projectId)
+        .in("asset_id", assetIdChunk)
+        .in("consent_id", consentIdChunk);
+
+      if (error) {
+        throw new HttpError(500, errorCode, errorMessage);
+      }
+
+      rows.push(
+        ...((data ?? []) as unknown as Array<{ asset_id: string; consent_id: string; link_source?: string | null }>),
+      );
+    }
+  }
+
+  return rows;
+}
+
 async function applyAutoMatches(
   supabase: SupabaseClient,
   tenantId: string,
@@ -717,34 +913,35 @@ async function applyAutoMatches(
 
   const assetIds = Array.from(new Set(candidates.map((candidate) => candidate.assetId)));
   const consentIds = Array.from(new Set(candidates.map((candidate) => candidate.consentId)));
-
-  const { data: existingLinks, error: existingLinksError } = await supabase
-    .from("asset_consent_links")
-    .select("asset_id, consent_id, link_source")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .in("asset_id", assetIds)
-    .in("consent_id", consentIds);
-
-  if (existingLinksError) {
-    throw new HttpError(500, "face_match_link_lookup_failed", "Unable to load existing consent links.");
-  }
-
-  const existingLinkSourceByPair = new Map<string, string>(
-    (existingLinks ?? []).map((row) => [`${row.asset_id}:${row.consent_id}`, row.link_source]),
+  const existingLinks = await loadCandidatePairRows(
+    supabase,
+    tenantId,
+    projectId,
+    assetIds,
+    consentIds,
+    "asset_consent_links",
+    "asset_id, consent_id, link_source",
+    "face_match_link_lookup_failed",
+    "Unable to load existing consent links.",
   );
 
-  const { data: suppressedRows, error: suppressedRowsError } = await supabase
-    .from("asset_consent_link_suppressions")
-    .select("asset_id, consent_id")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .in("asset_id", assetIds)
-    .in("consent_id", consentIds);
+  const existingLinkSourceByPair = new Map<string, string>(
+    (existingLinks ?? [])
+      .filter((row): row is { asset_id: string; consent_id: string; link_source: string } => Boolean(row.link_source))
+      .map((row) => [`${row.asset_id}:${row.consent_id}`, row.link_source]),
+  );
 
-  if (suppressedRowsError) {
-    throw new HttpError(500, "face_match_suppression_lookup_failed", "Unable to load matching suppressions.");
-  }
+  const suppressedRows = await loadCandidatePairRows(
+    supabase,
+    tenantId,
+    projectId,
+    assetIds,
+    consentIds,
+    "asset_consent_link_suppressions",
+    "asset_id, consent_id",
+    "face_match_suppression_lookup_failed",
+    "Unable to load matching suppressions.",
+  );
 
   const suppressedPairs = new Set(
     (suppressedRows ?? [])
@@ -1108,7 +1305,422 @@ async function resolveJobCandidates(
   throw new HttpError(400, "face_match_invalid_job_type", "Unsupported face-match job type.");
 }
 
-async function processClaimedFaceMatchJob(
+async function completeJobWithMetrics(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  startedAt: number,
+  fields: Record<string, unknown>,
+  result: ProcessClaimedFaceMatchJobResult,
+) {
+  await completeFaceMatchJob(supabase, job.job_id);
+  logWorkerDevelopment("job_metrics", {
+    jobId: job.job_id,
+    jobType: job.job_type,
+    totalMs: Math.round(performance.now() - startedAt),
+    ...fields,
+  });
+  return result;
+}
+
+async function enqueueMaterializeJobForIntake(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+): Promise<ProcessClaimedFaceMatchJobResult> {
+  const startedAt = performance.now();
+  const materializerVersion = getAutoMatchMaterializerVersion();
+
+  if (job.job_type === "photo_uploaded") {
+    if (!job.scope_asset_id) {
+      return completeJobWithMetrics(
+        supabase,
+        job,
+        startedAt,
+        { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+        { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+      );
+    }
+
+    const eligiblePhoto = await loadEligiblePhotoAsset(supabase, job.tenant_id, job.project_id, job.scope_asset_id);
+    if (!eligiblePhoto) {
+      return completeJobWithMetrics(
+        supabase,
+        job,
+        startedAt,
+        { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+        { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+      );
+    }
+
+    const enqueueResult = await enqueueMaterializeAssetFacesJob({
+      tenantId: job.tenant_id,
+      projectId: job.project_id,
+      assetId: job.scope_asset_id,
+      materializerVersion,
+      payload: {
+        sourceJobId: job.job_id,
+        sourceJobType: job.job_type,
+      },
+      supabase,
+    });
+
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      {
+        candidateCount: 1,
+        scoredPairs: 0,
+        skippedIneligible: false,
+        pipelineMode: "materialized",
+        enqueuedMaterializeJob: enqueueResult.enqueued,
+      },
+      { skippedIneligible: false, scoredPairs: 0, candidatePairs: 1 },
+    );
+  }
+
+  if (job.job_type === "consent_headshot_ready") {
+    if (!job.scope_consent_id) {
+      return completeJobWithMetrics(
+        supabase,
+        job,
+        startedAt,
+        { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+        { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+      );
+    }
+
+    const eligibleHeadshot = await loadEligibleHeadshotForConsent(
+      supabase,
+      job.tenant_id,
+      job.project_id,
+      job.scope_consent_id,
+    );
+    if (!eligibleHeadshot) {
+      return completeJobWithMetrics(
+        supabase,
+        job,
+        startedAt,
+        { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+        { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+      );
+    }
+
+    const enqueueResult = await enqueueMaterializeAssetFacesJob({
+      tenantId: job.tenant_id,
+      projectId: job.project_id,
+      assetId: eligibleHeadshot.headshotAssetId,
+      materializerVersion,
+      payload: {
+        sourceJobId: job.job_id,
+        sourceJobType: job.job_type,
+        consentId: job.scope_consent_id,
+      },
+      supabase,
+    });
+
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      {
+        candidateCount: 1,
+        scoredPairs: 0,
+        skippedIneligible: false,
+        pipelineMode: "materialized",
+        enqueuedMaterializeJob: enqueueResult.enqueued,
+      },
+      { skippedIneligible: false, scoredPairs: 0, candidatePairs: 1 },
+    );
+  }
+
+  if (job.job_type === "reconcile_project") {
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      { candidateCount: 0, scoredPairs: 0, skippedIneligible: false, pipelineMode: "materialized" },
+      { skippedIneligible: false, scoredPairs: 0, candidatePairs: 0 },
+    );
+  }
+
+  throw new HttpError(400, "face_match_invalid_job_type", "Unsupported materialized intake job type.");
+}
+
+async function processMaterializeAssetFacesJob(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  matcher: AutoMatcher,
+  maxComparisonsPerJob: number,
+): Promise<ProcessClaimedFaceMatchJobResult> {
+  const startedAt = performance.now();
+  if (!job.scope_asset_id) {
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+      { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+    );
+  }
+
+  const materializerVersion = parseMaterializeAssetFacesPayload(job.payload).materializerVersion;
+  const ensured = await ensureAssetFaceMaterialization({
+    supabase,
+    matcher,
+    tenantId: job.tenant_id,
+    projectId: job.project_id,
+    assetId: job.scope_asset_id,
+    materializerVersion,
+  });
+
+  if (!ensured) {
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+      { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+    );
+  }
+
+  const compareVersion = getAutoMatchCompareVersion();
+  let enqueuedCompareJobs = 0;
+
+  if (ensured.asset.assetType === "photo") {
+    const headshotMaterializations = await loadEligibleConsentHeadshotMaterializations(
+      supabase,
+      job.tenant_id,
+      job.project_id,
+      maxComparisonsPerJob,
+      materializerVersion,
+    );
+
+    for (const headshot of headshotMaterializations.slice(0, maxComparisonsPerJob)) {
+      const enqueueResult = await enqueueCompareMaterializedPairJob({
+        tenantId: job.tenant_id,
+        projectId: job.project_id,
+        consentId: headshot.consentId,
+        assetId: ensured.asset.assetId,
+        headshotMaterializationId: headshot.materialization.id,
+        assetMaterializationId: ensured.materialization.id,
+        compareVersion,
+        payload: {
+          sourceJobId: job.job_id,
+          sourceJobType: job.job_type,
+          materializerVersion,
+        },
+        supabase,
+      });
+      if (enqueueResult.enqueued) {
+        enqueuedCompareJobs += 1;
+      }
+    }
+  } else {
+    const consentIds = await loadEligibleConsentsForHeadshotAsset(
+      supabase,
+      job.tenant_id,
+      job.project_id,
+      ensured.asset.assetId,
+    );
+    const photoMaterializations = await loadEligiblePhotoMaterializations(
+      supabase,
+      job.tenant_id,
+      job.project_id,
+      maxComparisonsPerJob,
+      materializerVersion,
+    );
+
+    let scheduledPairs = 0;
+    for (const consentId of consentIds) {
+      for (const photo of photoMaterializations) {
+        if (scheduledPairs >= maxComparisonsPerJob) {
+          break;
+        }
+
+        const enqueueResult = await enqueueCompareMaterializedPairJob({
+          tenantId: job.tenant_id,
+          projectId: job.project_id,
+          consentId,
+          assetId: photo.assetId,
+          headshotMaterializationId: ensured.materialization.id,
+          assetMaterializationId: photo.materialization.id,
+          compareVersion,
+          payload: {
+            sourceJobId: job.job_id,
+            sourceJobType: job.job_type,
+            materializerVersion,
+          },
+          supabase,
+        });
+        if (enqueueResult.enqueued) {
+          enqueuedCompareJobs += 1;
+        }
+        scheduledPairs += 1;
+      }
+
+      if (scheduledPairs >= maxComparisonsPerJob) {
+        break;
+      }
+    }
+  }
+
+  return completeJobWithMetrics(
+    supabase,
+    job,
+    startedAt,
+    {
+      candidateCount: enqueuedCompareJobs,
+      scoredPairs: 0,
+      skippedIneligible: false,
+      pipelineMode: "materialized",
+      materializedAssetType: ensured.asset.assetType,
+      faceCount: ensured.materialization.face_count,
+      usableForCompare: ensured.materialization.usable_for_compare,
+    },
+    { skippedIneligible: false, scoredPairs: 0, candidatePairs: enqueuedCompareJobs },
+  );
+}
+
+async function isCurrentMaterializedPair(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  headshotMaterialization: AssetFaceMaterializationRow,
+  assetMaterialization: AssetFaceMaterializationRow,
+) {
+  if (!job.scope_consent_id || !job.scope_asset_id) {
+    return false;
+  }
+
+  const currentHeadshot = await loadConsentHeadshotMaterialization(
+    supabase,
+    job.tenant_id,
+    job.project_id,
+    job.scope_consent_id,
+    headshotMaterialization.materializer_version,
+  );
+  if (!currentHeadshot || currentHeadshot.materialization.id !== headshotMaterialization.id) {
+    return false;
+  }
+
+  const currentAsset = await loadCurrentAssetFaceMaterialization(
+    supabase,
+    job.tenant_id,
+    job.project_id,
+    job.scope_asset_id,
+    assetMaterialization.materializer_version,
+  );
+  if (!currentAsset || currentAsset.materialization.id !== assetMaterialization.id) {
+    return false;
+  }
+
+  return true;
+}
+
+async function processCompareMaterializedPairJob(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  matcher: AutoMatcher,
+  confidenceThreshold: number,
+  reviewMinConfidence: number,
+  persistResults: boolean,
+  persistFaceEvidence: boolean,
+  resultsMaxPerJob: number | null,
+): Promise<ProcessClaimedFaceMatchJobResult> {
+  const startedAt = performance.now();
+  if (!job.scope_asset_id || !job.scope_consent_id) {
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+      { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+    );
+  }
+
+  const payload = parseCompareMaterializedPairPayload(job.payload);
+  const compare = await ensureMaterializedFaceCompare({
+    supabase,
+    matcher,
+    tenantId: job.tenant_id,
+    projectId: job.project_id,
+    consentId: job.scope_consent_id,
+    assetId: job.scope_asset_id,
+    headshotMaterializationId: payload.headshotMaterializationId,
+    assetMaterializationId: payload.assetMaterializationId,
+    compareVersion: payload.compareVersion,
+  });
+
+  const pipelineMode = getAutoMatchPipelineMode();
+  const isCurrent = await isCurrentMaterializedPair(
+    supabase,
+    job,
+    compare.headshotMaterialization,
+    compare.assetMaterialization,
+  );
+
+  if (pipelineMode === "materialized_apply" && isCurrent) {
+    const match = buildMaterializedMatchFromCompare({
+      assetId: job.scope_asset_id,
+      consentId: job.scope_consent_id,
+      confidence: compare.compare.winning_similarity,
+      providerMetadata: toAutoMatcherProviderMetadata(
+        compare.compare.provider,
+        compare.compare.provider_mode,
+        compare.compare.provider_plugin_versions,
+      ),
+      headshotFace: compare.headshotFace,
+      winningAssetFace: compare.winningAssetFace,
+    });
+
+    const candidate: AutoMatcherCandidate = {
+      assetId: job.scope_asset_id,
+      consentId: job.scope_consent_id,
+      photo: {
+        storageBucket: "__materialized__",
+        storagePath: compare.assetMaterialization.id,
+      },
+      headshot: {
+        storageBucket: "__materialized__",
+        storagePath: compare.headshotMaterialization.id,
+      },
+    };
+
+    await applyAutoMatches(
+      supabase,
+      job.tenant_id,
+      job.project_id,
+      job.job_id,
+      job.job_type,
+      [candidate],
+      matcher.version,
+      confidenceThreshold,
+      reviewMinConfidence,
+      persistResults,
+      persistFaceEvidence,
+      resultsMaxPerJob,
+      [match],
+    );
+  }
+
+  return completeJobWithMetrics(
+    supabase,
+    job,
+    startedAt,
+    {
+      candidateCount: 1,
+      scoredPairs: 1,
+      skippedIneligible: false,
+      pipelineMode,
+      compareStatus: compare.compare.compare_status,
+      currentVersionedPair: isCurrent,
+      winningSimilarity: compare.compare.winning_similarity,
+      winningAssetFaceRank: compare.compare.winning_asset_face_rank,
+    },
+    { skippedIneligible: false, scoredPairs: 1, candidatePairs: 1 },
+  );
+}
+
+async function processClaimedFaceMatchJobRaw(
   supabase: SupabaseClient,
   job: ClaimedFaceMatchJobRow,
   matcher: AutoMatcher,
@@ -1118,7 +1730,7 @@ async function processClaimedFaceMatchJob(
   persistFaceEvidence: boolean,
   resultsMaxPerJob: number | null,
   maxComparisonsPerJob: number,
-) {
+): Promise<ProcessClaimedFaceMatchJobResult> {
   const startedAt = performance.now();
   const resolved = await resolveJobCandidates(supabase, job, maxComparisonsPerJob);
 
@@ -1184,9 +1796,121 @@ async function processClaimedFaceMatchJob(
   };
 }
 
+async function processClaimedFaceMatchJob(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  matcher: AutoMatcher,
+  confidenceThreshold: number,
+  reviewMinConfidence: number,
+  persistResults: boolean,
+  persistFaceEvidence: boolean,
+  resultsMaxPerJob: number | null,
+  maxComparisonsPerJob: number,
+): Promise<ProcessClaimedFaceMatchJobResult> {
+  const pipelineMode = getAutoMatchPipelineMode();
+  if (pipelineMode === "raw") {
+    return processClaimedFaceMatchJobRaw(
+      supabase,
+      job,
+      matcher,
+      confidenceThreshold,
+      reviewMinConfidence,
+      persistResults,
+      persistFaceEvidence,
+      resultsMaxPerJob,
+      maxComparisonsPerJob,
+    );
+  }
+
+  if (job.job_type === "photo_uploaded" || job.job_type === "consent_headshot_ready" || job.job_type === "reconcile_project") {
+    return enqueueMaterializeJobForIntake(supabase, job);
+  }
+
+  if (job.job_type === "materialize_asset_faces") {
+    return processMaterializeAssetFacesJob(supabase, job, matcher, maxComparisonsPerJob);
+  }
+
+  if (job.job_type === "compare_materialized_pair") {
+    return processCompareMaterializedPairJob(
+      supabase,
+      job,
+      matcher,
+      confidenceThreshold,
+      reviewMinConfidence,
+      persistResults,
+      persistFaceEvidence,
+      resultsMaxPerJob,
+    );
+  }
+
+  throw new HttpError(400, "face_match_invalid_job_type", "Unsupported face-match job type.");
+}
+
+async function executeClaimedFaceMatchJob(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  matcher: AutoMatcher,
+  confidenceThreshold: number,
+  reviewMinConfidence: number,
+  persistResults: boolean,
+  persistFaceEvidence: boolean,
+  resultsMaxPerJob: number | null,
+  maxComparisonsPerJob: number,
+): Promise<ExecuteClaimedFaceMatchJobResult> {
+  const startedAt = performance.now();
+
+  try {
+    const result = await processClaimedFaceMatchJob(
+      supabase,
+      job,
+      matcher,
+      confidenceThreshold,
+      reviewMinConfidence,
+      persistResults,
+      persistFaceEvidence,
+      resultsMaxPerJob,
+      maxComparisonsPerJob,
+    );
+
+    return {
+      outcome: result.skippedIneligible ? "skipped_ineligible" : "succeeded",
+      scoredPairs: result.scoredPairs,
+      candidatePairs: result.candidatePairs,
+    };
+  } catch (error) {
+    const retryable = isRetryableError(error);
+    const failedJob = await failFaceMatchJob(
+      supabase,
+      job.job_id,
+      toSafeErrorCode(error),
+      toSafeErrorMessage(error),
+      retryable,
+    );
+    const outcome = failedJob.status === "queued" ? "retried" : "dead";
+
+    logWorkerDevelopment("job_failure", {
+      jobId: job.job_id,
+      jobType: job.job_type,
+      outcome,
+      retryable,
+      errorCode: failedJob.last_error_code,
+      totalMs: Math.round(performance.now() - startedAt),
+      attemptCount: failedJob.attempt_count,
+      maxAttempts: failedJob.max_attempts,
+    });
+
+    return {
+      outcome,
+      scoredPairs: 0,
+      candidatePairs: 0,
+    };
+  }
+}
+
 export async function runAutoMatchWorker(
   input: RunAutoMatchWorkerInput,
 ): Promise<RunAutoMatchWorkerResult> {
+  const runStartedAt = performance.now();
   const supabase = getInternalSupabaseClient(input.supabase);
   const batchSize = normalizeBatchSize(input.batchSize);
   const confidenceThreshold = normalizeThreshold(input.confidenceThreshold);
@@ -1210,8 +1934,10 @@ export async function runAutoMatchWorker(
   }
 
   const claimedJobs = await claimFaceMatchJobs(supabase, workerId, batchSize);
+  const workerConcurrency = normalizeWorkerConcurrency(claimedJobs.length);
   const counters: RunAutoMatchWorkerResult = {
     claimed: claimedJobs.length,
+    workerConcurrency,
     succeeded: 0,
     retried: 0,
     dead: 0,
@@ -1220,9 +1946,11 @@ export async function runAutoMatchWorker(
     candidatePairs: 0,
   };
 
-  for (const job of claimedJobs) {
-    try {
-      const result = await processClaimedFaceMatchJob(
+  const jobResults = await mapWithConcurrency(
+    claimedJobs,
+    workerConcurrency,
+    async (job) =>
+      executeClaimedFaceMatchJob(
         supabase,
         job,
         matcher,
@@ -1232,31 +1960,43 @@ export async function runAutoMatchWorker(
         persistFaceEvidence,
         resultsMaxPerJob,
         maxComparisonsPerJob,
-      );
-      if (result.skippedIneligible) {
-        counters.skippedIneligible += 1;
-      } else {
-        counters.succeeded += 1;
-      }
-      counters.scoredPairs += result.scoredPairs;
-      counters.candidatePairs += result.candidatePairs;
-    } catch (error) {
-      const retryable = isRetryableError(error);
-      const failedJob = await failFaceMatchJob(
-        supabase,
-        job.job_id,
-        toSafeErrorCode(error),
-        toSafeErrorMessage(error),
-        retryable,
-      );
+      ),
+  );
 
-      if (failedJob.status === "queued") {
-        counters.retried += 1;
-      } else if (failedJob.status === "dead") {
-        counters.dead += 1;
-      }
+  jobResults.forEach((result) => {
+    if (result.outcome === "succeeded") {
+      counters.succeeded += 1;
+    } else if (result.outcome === "skipped_ineligible") {
+      counters.skippedIneligible += 1;
+    } else if (result.outcome === "retried") {
+      counters.retried += 1;
+    } else if (result.outcome === "dead") {
+      counters.dead += 1;
     }
-  }
+
+    counters.scoredPairs += result.scoredPairs;
+    counters.candidatePairs += result.candidatePairs;
+  });
+
+  logWorkerDevelopment("worker_run_summary", {
+    workerId,
+    batchSize,
+    pipelineMode: getAutoMatchPipelineMode(),
+    claimed: counters.claimed,
+    configuredWorkerConcurrency: getAutoMatchWorkerConcurrency(),
+    workerConcurrency,
+    succeeded: counters.succeeded,
+    retried: counters.retried,
+    dead: counters.dead,
+    skippedIneligible: counters.skippedIneligible,
+    scoredPairs: counters.scoredPairs,
+    candidatePairs: counters.candidatePairs,
+    totalMs: Math.round(performance.now() - runStartedAt),
+    pairsPerSecond:
+      counters.scoredPairs > 0
+        ? Number(((counters.scoredPairs * 1000) / Math.max(1, performance.now() - runStartedAt)).toFixed(2))
+        : 0,
+  });
 
   return counters;
 }

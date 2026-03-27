@@ -39,6 +39,38 @@ export type AutoMatcherProviderMetadata = {
   providerPluginVersions?: Record<string, unknown> | null;
 };
 
+export type AutoMatcherMaterializedFace = {
+  faceRank: number;
+  providerFaceIndex?: number | null;
+  detectionProbability?: number | null;
+  faceBox: AutoMatcherFaceBox;
+  embedding: number[];
+};
+
+export type AutoMatcherMaterializationInput = {
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  assetType: "photo" | "headshot";
+  storage: AutoMatcherStorageRef;
+  supabase?: SupabaseClient;
+};
+
+export type AutoMatcherMaterializationResult = {
+  faces: AutoMatcherMaterializedFace[];
+  providerMetadata: AutoMatcherProviderMetadata;
+};
+
+export type AutoMatcherEmbeddingCompareInput = {
+  sourceEmbedding: number[];
+  targetEmbeddings: number[][];
+};
+
+export type AutoMatcherEmbeddingCompareResult = {
+  targetSimilarities: number[];
+  providerMetadata: AutoMatcherProviderMetadata;
+};
+
 export type AutoMatcherMatch = {
   assetId: string;
   consentId: string;
@@ -58,12 +90,34 @@ export type AutoMatcherInput = {
 export type AutoMatcher = {
   version: string;
   match: (input: AutoMatcherInput) => Promise<AutoMatcherMatch[]>;
+  materializeAssetFaces?: (input: AutoMatcherMaterializationInput) => Promise<AutoMatcherMaterializationResult>;
+  compareEmbeddings?: (input: AutoMatcherEmbeddingCompareInput) => Promise<AutoMatcherEmbeddingCompareResult>;
 };
 
 const stubAutoMatcher: AutoMatcher = {
   version: "stub",
   async match() {
     return [];
+  },
+  async materializeAssetFaces() {
+    return {
+      faces: [],
+      providerMetadata: {
+        provider: "stub",
+        providerMode: "detection",
+        providerPluginVersions: null,
+      },
+    };
+  },
+  async compareEmbeddings(input) {
+    return {
+      targetSimilarities: input.targetEmbeddings.map(() => 0),
+      providerMetadata: {
+        provider: "stub",
+        providerMode: "verification_embeddings",
+        providerPluginVersions: null,
+      },
+    };
   },
 };
 

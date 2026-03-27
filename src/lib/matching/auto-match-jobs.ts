@@ -6,6 +6,8 @@ export const FACE_MATCH_JOB_TYPES = [
   "photo_uploaded",
   "consent_headshot_ready",
   "reconcile_project",
+  "materialize_asset_faces",
+  "compare_materialized_pair",
 ] as const;
 
 export type FaceMatchJobType = (typeof FACE_MATCH_JOB_TYPES)[number];
@@ -81,6 +83,20 @@ export function buildConsentHeadshotReadyDedupeKey(consentId: string, headshotAs
 
 export function buildReconcileProjectDedupeKey(projectId: string, windowKey: string) {
   return `reconcile_project:${normalizeDedupeSegment(projectId)}:${normalizeDedupeSegment(windowKey)}`;
+}
+
+export function buildMaterializeAssetFacesDedupeKey(assetId: string, materializerVersion: string) {
+  return `materialize_asset_faces:${normalizeDedupeSegment(assetId)}:${normalizeDedupeSegment(materializerVersion)}`;
+}
+
+export function buildCompareMaterializedPairDedupeKey(
+  consentId: string,
+  assetId: string,
+  headshotMaterializationId: string,
+  assetMaterializationId: string,
+  compareVersion: string,
+) {
+  return `compare_materialized_pair:${normalizeDedupeSegment(consentId)}:${normalizeDedupeSegment(assetId)}:${normalizeDedupeSegment(headshotMaterializationId)}:${normalizeDedupeSegment(assetMaterializationId)}:${normalizeDedupeSegment(compareVersion)}`;
 }
 
 export async function enqueueFaceMatchJob(
@@ -177,6 +193,69 @@ export async function enqueueReconcileProjectJob(input: EnqueueReconcileProjectI
     jobType: "reconcile_project",
     dedupeKey,
     payload: input.payload ?? null,
+    supabase: input.supabase,
+  });
+}
+
+type EnqueueMaterializeAssetFacesInput = {
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  materializerVersion: string;
+  payload?: Record<string, unknown> | null;
+  supabase?: SupabaseClient;
+};
+
+export async function enqueueMaterializeAssetFacesJob(input: EnqueueMaterializeAssetFacesInput) {
+  const dedupeKey = buildMaterializeAssetFacesDedupeKey(input.assetId, input.materializerVersion);
+  return enqueueFaceMatchJob({
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    jobType: "materialize_asset_faces",
+    dedupeKey,
+    scopeAssetId: input.assetId,
+    payload: {
+      materializerVersion: input.materializerVersion,
+      ...(input.payload ?? {}),
+    },
+    supabase: input.supabase,
+  });
+}
+
+type EnqueueCompareMaterializedPairInput = {
+  tenantId: string;
+  projectId: string;
+  consentId: string;
+  assetId: string;
+  headshotMaterializationId: string;
+  assetMaterializationId: string;
+  compareVersion: string;
+  payload?: Record<string, unknown> | null;
+  supabase?: SupabaseClient;
+};
+
+export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMaterializedPairInput) {
+  const dedupeKey = buildCompareMaterializedPairDedupeKey(
+    input.consentId,
+    input.assetId,
+    input.headshotMaterializationId,
+    input.assetMaterializationId,
+    input.compareVersion,
+  );
+
+  return enqueueFaceMatchJob({
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    jobType: "compare_materialized_pair",
+    dedupeKey,
+    scopeAssetId: input.assetId,
+    scopeConsentId: input.consentId,
+    payload: {
+      headshotMaterializationId: input.headshotMaterializationId,
+      assetMaterializationId: input.assetMaterializationId,
+      compareVersion: input.compareVersion,
+      ...(input.payload ?? {}),
+    },
     supabase: input.supabase,
   });
 }

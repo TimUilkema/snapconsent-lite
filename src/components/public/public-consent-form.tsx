@@ -134,6 +134,11 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         return;
       }
 
+      if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
+        setError("Unable to prepare headshot upload.");
+        return;
+      }
+
       await uploadWithProgress(file, createPayload.signedUrl, (loaded) => {
         const percent = file.size > 0 ? Math.round((loaded / file.size) * 100) : 0;
         setProgressPercent(percent);

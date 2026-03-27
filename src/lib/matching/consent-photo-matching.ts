@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
-import { getAutoMatchConfidenceThreshold, getAutoMatchReviewMinConfidence } from "@/lib/matching/auto-match-config";
+import { getAutoMatchConfidenceThreshold } from "@/lib/matching/auto-match-config";
+import { runChunkedMutation, runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type MatchingScopeInput = {
   supabase: SupabaseClient;
@@ -59,9 +60,11 @@ type LinkedPhotoRow = {
 
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 100;
+const MAX_REQUEST_ASSET_IDS = 100;
+const LIKELY_REVIEW_MIN_CONFIDENCE = 0.25;
 
 function normalizeUniqueAssetIds(assetIds: string[]) {
-  return Array.from(
+  const unique = Array.from(
     new Set(
       assetIds
         .filter((assetId) => typeof assetId === "string")
@@ -69,6 +72,10 @@ function normalizeUniqueAssetIds(assetIds: string[]) {
         .filter((assetId) => assetId.length > 0),
     ),
   );
+  if (unique.length > MAX_REQUEST_ASSET_IDS) {
+    throw new HttpError(400, "invalid_asset_ids_too_large", "Too many asset IDs were provided.");
+  }
+  return unique;
 }
 
 function normalizeListLimit(value: number | null | undefined) {
@@ -126,23 +133,28 @@ async function validatePhotoAssetIdsInProject(
     return [];
   }
 
-  let query = input.supabase
-    .from("assets")
-    .select("id, status, archived_at")
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("asset_type", "photo")
-    .in("id", assetIds);
+  const assets = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    let query = input.supabase
+      .from("assets")
+      .select("id, status, archived_at")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_type", "photo")
+      // safe-in-filter: consent asset validation is request-bounded and chunked by shared helper.
+      .in("id", assetIdChunk);
 
-  if (requireUploadedAndNotArchived) {
-    query = query.eq("status", "uploaded").is("archived_at", null);
-  }
+    if (requireUploadedAndNotArchived) {
+      query = query.eq("status", "uploaded").is("archived_at", null);
+    }
 
-  const { data: assets, error } = await query;
+    const { data, error } = await query;
 
-  if (error) {
-    throw new HttpError(500, "asset_lookup_failed", "Unable to validate assets.");
-  }
+    if (error) {
+      throw new HttpError(500, "asset_lookup_failed", "Unable to validate assets.");
+    }
+
+    return (data ?? []) as Array<{ id: string; status: string; archived_at: string | null }>;
+  });
 
   const foundAssetIds = new Set((assets ?? []).map((asset) => asset.id));
   const missingAssetIds = assetIds.filter((assetId) => !foundAssetIds.has(assetId));
@@ -170,7 +182,9 @@ async function listDefaultMatchableProjectPhotosForConsent(
   input: ListMatchableProjectPhotosInput,
 ): Promise<MatchablePhotoRow[]> {
   const queryText = normalizeQuery(input.query);
-  const limit = normalizeListLimit(input.limit);
+  const limit = Number.isFinite(input.limit) && input.limit !== null && input.limit !== undefined
+    ? normalizeListLimit(input.limit)
+    : null;
 
   let query = input.supabase
     .from("assets")
@@ -182,8 +196,7 @@ async function listDefaultMatchableProjectPhotosForConsent(
     .eq("asset_type", "photo")
     .eq("status", "uploaded")
     .is("archived_at", null)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("created_at", { ascending: false });
 
   if (queryText) {
     query = query.ilike("original_filename", `%${queryText}%`);
@@ -201,20 +214,25 @@ async function listDefaultMatchableProjectPhotosForConsent(
     return [];
   }
 
-  const { data: links, error: linksError } = await input.supabase
-    .from("asset_consent_links")
-    .select("asset_id")
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId)
-    .in("asset_id", assetIds);
+  const links = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    // safe-in-filter: default matching list follow-up reads are page-bounded and chunked by shared helper.
+    const { data, error } = await input.supabase
+      .from("asset_consent_links")
+      .select("asset_id")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("consent_id", input.consentId)
+      .in("asset_id", assetIdChunk);
 
-  if (linksError) {
-    throw new HttpError(500, "link_lookup_failed", "Unable to load existing matches.");
-  }
+    if (error) {
+      throw new HttpError(500, "link_lookup_failed", "Unable to load existing matches.");
+    }
+
+    return (data ?? []) as Array<{ asset_id: string }>;
+  });
 
   const linkedAssetIds = new Set((links ?? []).map((link) => link.asset_id));
-  return assetRows
+  const unlinkedAssets = assetRows
     .filter((asset) => !linkedAssetIds.has(asset.id))
     .map((asset) => ({
       id: asset.id,
@@ -231,11 +249,13 @@ async function listDefaultMatchableProjectPhotosForConsent(
       candidate_last_scored_at: null,
       candidate_matcher_version: null,
     }));
+
+  return limit === null ? unlinkedAssets : unlinkedAssets.slice(0, limit);
 }
 
 type LikelyCandidateRow = {
   asset_id: string;
-  confidence: number;
+  confidence: number | string;
   matcher_version: string | null;
   last_scored_at: string;
 };
@@ -246,7 +266,7 @@ async function listLikelyMatchableProjectPhotosForConsent(
   const limit = normalizeListLimit(input.limit);
   const queryText = normalizeQuery(input.query);
   const confidenceThreshold = getAutoMatchConfidenceThreshold();
-  const reviewMinConfidence = Math.min(getAutoMatchReviewMinConfidence(), confidenceThreshold);
+  const reviewMinConfidence = Math.min(LIKELY_REVIEW_MIN_CONFIDENCE, confidenceThreshold);
   if (reviewMinConfidence >= confidenceThreshold) {
     return [];
   }
@@ -268,7 +288,17 @@ async function listLikelyMatchableProjectPhotosForConsent(
     throw new HttpError(500, "match_candidate_lookup_failed", "Unable to load likely-match candidates.");
   }
 
-  const candidateRows = (candidates as LikelyCandidateRow[] | null) ?? [];
+  const candidateRows = ((candidates as LikelyCandidateRow[] | null) ?? [])
+    .map((candidate) => ({
+      ...candidate,
+      confidence: Number(candidate.confidence),
+    }))
+    .filter(
+      (candidate) =>
+        Number.isFinite(candidate.confidence) &&
+        candidate.confidence >= reviewMinConfidence &&
+        candidate.confidence < confidenceThreshold,
+    );
   if (candidateRows.length === 0) {
     return [];
   }
@@ -276,26 +306,31 @@ async function listLikelyMatchableProjectPhotosForConsent(
   const candidateByAssetId = new Map(candidateRows.map((candidate) => [candidate.asset_id, candidate]));
   const candidateAssetIds = candidateRows.map((candidate) => candidate.asset_id);
 
-  let assetsQuery = input.supabase
-    .from("assets")
-    .select(
-      "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
-    )
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("asset_type", "photo")
-    .eq("status", "uploaded")
-    .is("archived_at", null)
-    .in("id", candidateAssetIds);
+  const assets = await runChunkedRead(candidateAssetIds, async (candidateAssetIdChunk) => {
+    let assetsQuery = input.supabase
+      .from("assets")
+      .select(
+        "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_type", "photo")
+      .eq("status", "uploaded")
+      .is("archived_at", null)
+      // safe-in-filter: likely-candidate asset fetch is candidate-bounded and chunked by shared helper.
+      .in("id", candidateAssetIdChunk);
 
-  if (queryText) {
-    assetsQuery = assetsQuery.ilike("original_filename", `%${queryText}%`);
-  }
+    if (queryText) {
+      assetsQuery = assetsQuery.ilike("original_filename", `%${queryText}%`);
+    }
 
-  const { data: assets, error: assetsError } = await assetsQuery;
-  if (assetsError) {
-    throw new HttpError(500, "asset_lookup_failed", "Unable to load likely-match assets.");
-  }
+    const { data, error } = await assetsQuery;
+    if (error) {
+      throw new HttpError(500, "asset_lookup_failed", "Unable to load likely-match assets.");
+    }
+
+    return (data ?? []) as MatchablePhotoRow[];
+  });
 
   const assetRows = assets ?? [];
   const assetIds = assetRows.map((asset) => asset.id);
@@ -303,27 +338,35 @@ async function listLikelyMatchableProjectPhotosForConsent(
     return [];
   }
 
-  const { data: links, error: linksError } = await input.supabase
-    .from("asset_consent_links")
-    .select("asset_id")
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId)
-    .in("asset_id", assetIds);
-  if (linksError) {
-    throw new HttpError(500, "link_lookup_failed", "Unable to load existing matches.");
-  }
+  const links = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    // safe-in-filter: likely-candidate link lookup is candidate-bounded and chunked by shared helper.
+    const { data, error } = await input.supabase
+      .from("asset_consent_links")
+      .select("asset_id")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("consent_id", input.consentId)
+      .in("asset_id", assetIdChunk);
+    if (error) {
+      throw new HttpError(500, "link_lookup_failed", "Unable to load existing matches.");
+    }
+    return (data ?? []) as Array<{ asset_id: string }>;
+  });
 
-  const { data: suppressionRows, error: suppressionError } = await input.supabase
-    .from("asset_consent_link_suppressions")
-    .select("asset_id")
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId)
-    .in("asset_id", assetIds);
-  if (suppressionError) {
-    throw new HttpError(500, "link_lookup_failed", "Unable to load matching suppressions.");
-  }
+  const suppressionRows = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    // safe-in-filter: likely-candidate suppression lookup is candidate-bounded and chunked by shared helper.
+    const { data, error } = await input.supabase
+      .from("asset_consent_link_suppressions")
+      .select("asset_id")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("consent_id", input.consentId)
+      .in("asset_id", assetIdChunk);
+    if (error) {
+      throw new HttpError(500, "link_lookup_failed", "Unable to load matching suppressions.");
+    }
+    return (data ?? []) as Array<{ asset_id: string }>;
+  });
 
   const linkedAssetIds = new Set((links ?? []).map((link) => link.asset_id));
   const suppressedAssetIds = new Set((suppressionRows ?? []).map((row) => row.asset_id));
@@ -382,22 +425,30 @@ export async function listLinkedPhotosForConsent(
   const linkedAssetIds = Array.from(new Set(linkRows.map((link) => link.asset_id)));
   const linkDataByAssetId = new Map(linkRows.map((link) => [link.asset_id, link]));
 
-  const { data: assets, error: assetsError } = await input.supabase
-    .from("assets")
-    .select(
-      "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
-    )
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("asset_type", "photo")
-    .in("id", linkedAssetIds)
-    .order("created_at", { ascending: false });
+  const assets = await runChunkedRead(linkedAssetIds, async (assetIdChunk) => {
+    // safe-in-filter: linked-photo lookup can be large and is chunked by shared helper.
+    const { data, error } = await input.supabase
+      .from("assets")
+      .select(
+        "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_type", "photo")
+      // safe-in-filter: linked-photo asset reads are request-bounded and chunked by shared helper.
+      .in("id", assetIdChunk)
+      .order("created_at", { ascending: false });
 
-  if (assetsError) {
-    throw new HttpError(500, "asset_lookup_failed", "Unable to load linked photo assets.");
-  }
+    if (error) {
+      throw new HttpError(500, "asset_lookup_failed", "Unable to load linked photo assets.");
+    }
 
-  return (assets ?? []).map((asset) => {
+    return (data ?? []) as LinkedPhotoRow[];
+  });
+
+  return (assets ?? [])
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .map((asset) => {
     const linkData = linkDataByAssetId.get(asset.id);
     return {
       id: asset.id,
@@ -450,17 +501,21 @@ export async function linkPhotosToConsent(input: ModifyConsentPhotoLinksInput) {
     throw new HttpError(500, "link_create_failed", "Unable to link assets to consent.");
   }
 
-  const { error: suppressionDeleteError } = await input.supabase
-    .from("asset_consent_link_suppressions")
-    .delete()
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId)
-    .in("asset_id", uniqueAssetIds);
+  await runChunkedMutation(uniqueAssetIds, async (assetIdChunk) => {
+    // safe-in-filter: manual link suppression cleanup is request-bounded and chunked by shared helper.
+    const { error: suppressionDeleteError } = await input.supabase
+      .from("asset_consent_link_suppressions")
+      .delete()
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("consent_id", input.consentId)
+      // safe-in-filter: suppression cleanup is request-bounded and chunked by shared helper.
+      .in("asset_id", assetIdChunk);
 
-  if (suppressionDeleteError) {
-    throw new HttpError(500, "link_create_failed", "Unable to clear matching suppression.");
-  }
+    if (suppressionDeleteError) {
+      throw new HttpError(500, "link_create_failed", "Unable to clear matching suppression.");
+    }
+  });
 
   return { linkedCount: uniqueAssetIds.length };
 }
@@ -490,17 +545,20 @@ export async function unlinkPhotosFromConsent(input: ModifyConsentPhotoLinksInpu
 
   await validatePhotoAssetIdsInProject(input, uniqueAssetIds, false);
 
-  const { error } = await input.supabase
-    .from("asset_consent_links")
-    .delete()
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId)
-    .in("asset_id", uniqueAssetIds);
+  await runChunkedMutation(uniqueAssetIds, async (assetIdChunk) => {
+    // safe-in-filter: manual unlink delete is request-bounded and chunked by shared helper.
+    const { error } = await input.supabase
+      .from("asset_consent_links")
+      .delete()
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("consent_id", input.consentId)
+      .in("asset_id", assetIdChunk);
 
-  if (error) {
-    throw new HttpError(500, "link_delete_failed", "Unable to unlink assets from consent.");
-  }
+    if (error) {
+      throw new HttpError(500, "link_delete_failed", "Unable to unlink assets from consent.");
+    }
+  });
 
   const suppressionRows = uniqueAssetIds.map((assetId) => ({
     asset_id: assetId,

@@ -2,9 +2,15 @@
 
 This repository uses a **Research → Plan → Implement (RPI)** workflow for all non-trivial changes.
 
-The goal is to keep changes **well reasoned, incremental, and reviewable**, especially when using AI agents such as Codex.
+The goal is to keep work **well reasoned, incremental, and reviewable** by separating:
+- understanding the problem
+- deciding the implementation approach
+- executing the work
 
-Each feature or task should have its own folder.
+Each phase should have a clear outcome before moving to the next one.
+
+Each feature or task gets its own folder:
+
 
 Example:
 
@@ -17,7 +23,7 @@ docs/rpi/002-consent-template-crud/
 
 ## 1. Research
 
-Goal: Understand the current system before writing code.
+Purpose: understand the problem and the current system before proposing changes.
 
 Create:
 

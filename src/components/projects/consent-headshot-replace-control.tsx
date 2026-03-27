@@ -100,6 +100,11 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
         return;
       }
 
+      if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
+        setError("Unable to create replacement upload.");
+        return;
+      }
+
       await uploadWithProgress(file, createPayload.signedUrl, (loaded) => {
         const percent = file.size > 0 ? Math.round((loaded / file.size) * 100) : 0;
         setProgressPercent(percent);

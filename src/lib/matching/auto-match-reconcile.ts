@@ -6,6 +6,7 @@ import {
   enqueuePhotoUploadedJob,
   type EnqueueFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
+import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type RunAutoMatchReconcileInput = {
   lookbackMinutes?: number;
@@ -99,28 +100,31 @@ async function loadEligibleHeadshotForConsent(
   }
 
   const nowIso = new Date().toISOString();
-  const { data: headshots, error: headshotsError } = await supabase
-    .from("assets")
-    .select("id, uploaded_at")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("asset_type", "headshot")
-    .eq("status", "uploaded")
-    .is("archived_at", null)
-    .in("id", assetIds)
-    .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`)
-    .order("uploaded_at", { ascending: false })
-    .limit(1);
+  const headshots = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    // safe-in-filter: reconcile headshot validation is batch-windowed and chunked by shared helper.
+    const { data, error } = await supabase
+      .from("assets")
+      .select("id, uploaded_at")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("asset_type", "headshot")
+      .eq("status", "uploaded")
+      .is("archived_at", null)
+      .in("id", assetIdChunk)
+      .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`);
 
-  if (headshotsError) {
-    throw new HttpError(
-      500,
-      "face_match_reconcile_headshot_lookup_failed",
-      "Unable to validate consent headshots.",
-    );
-  }
+    if (error) {
+      throw new HttpError(
+        500,
+        "face_match_reconcile_headshot_lookup_failed",
+        "Unable to validate consent headshots.",
+      );
+    }
 
-  return headshots?.[0]?.id ?? null;
+    return (data ?? []) as Array<{ id: string; uploaded_at: string | null }>;
+  });
+
+  return headshots.sort((left, right) => (right.uploaded_at ?? "").localeCompare(left.uploaded_at ?? ""))[0]?.id ?? null;
 }
 
 export async function runAutoMatchReconcile(
@@ -243,22 +247,27 @@ export async function runAutoMatchReconcile(
       continue;
     }
 
-    const { data: eligibleConsents, error: eligibleConsentsError } = await supabase
-      .from("consents")
-      .select("id")
-      .eq("tenant_id", headshot.tenant_id)
-      .eq("project_id", headshot.project_id)
-      .eq("face_match_opt_in", true)
-      .is("revoked_at", null)
-      .in("id", linkedConsentIds);
+    const eligibleConsents = await runChunkedRead(linkedConsentIds, async (consentIdChunk) => {
+      // safe-in-filter: reconcile consent validation is batch-windowed and chunked by shared helper.
+      const { data, error } = await supabase
+        .from("consents")
+        .select("id")
+        .eq("tenant_id", headshot.tenant_id)
+        .eq("project_id", headshot.project_id)
+        .eq("face_match_opt_in", true)
+        .is("revoked_at", null)
+        .in("id", consentIdChunk);
 
-    if (eligibleConsentsError) {
-      throw new HttpError(
-        500,
-        "face_match_reconcile_headshot_scan_failed",
-        "Unable to validate replacement headshot consents.",
-      );
-    }
+      if (error) {
+        throw new HttpError(
+          500,
+          "face_match_reconcile_headshot_scan_failed",
+          "Unable to validate replacement headshot consents.",
+        );
+      }
+
+      return (data ?? []) as Array<{ id: string }>;
+    });
 
     for (const consent of eligibleConsents ?? []) {
       counters.scanned += 1;

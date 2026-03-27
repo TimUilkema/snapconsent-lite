@@ -125,9 +125,9 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
       if (query.trim().length > 0) {
         params.set("q", query.trim());
       }
-      params.set("limit", "50");
       if (mode === "likely") {
         params.set("mode", "likely");
+        params.set("limit", "50");
       }
 
       const response = await fetch(
@@ -224,6 +224,11 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
 
         if ("skipUpload" in createPayload && createPayload.skipUpload) {
           continue;
+        }
+
+        if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
+          setError("Unable to prepare upload.");
+          return;
         }
 
         await uploadFileToSignedUrl(file, createPayload.signedUrl);

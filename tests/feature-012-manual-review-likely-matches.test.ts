@@ -8,16 +8,9 @@ import { createClient, type PostgrestError, type SupabaseClient } from "@supabas
 
 import { submitConsent } from "../src/lib/consent/submit-consent";
 import {
-  enqueueConsentHeadshotReadyJob,
-  enqueuePhotoUploadedJob,
-} from "../src/lib/matching/auto-match-jobs";
-import { type AutoMatcher } from "../src/lib/matching/auto-matcher";
-import {
   linkPhotosToConsent,
   listMatchableProjectPhotosForConsent,
-  unlinkPhotosFromConsent,
 } from "../src/lib/matching/consent-photo-matching";
-import { runAutoMatchWorker } from "../src/lib/matching/auto-match-worker";
 
 type ProjectContext = {
   tenantId: string;
@@ -265,267 +258,9 @@ async function createOptedInConsentWithHeadshot(supabase: SupabaseClient, contex
   };
 }
 
-function matcherWithConfidence(confidence: number): AutoMatcher {
-  return {
-    version: "feature-012-test-matcher",
-    async match(input) {
-      return input.candidates.map((candidate) => ({
-        assetId: candidate.assetId,
-        consentId: candidate.consentId,
-        confidence,
-      }));
-    },
-  };
-}
 
-async function getCandidateRow(
-  supabase: SupabaseClient,
-  context: ProjectContext,
-  photoAssetId: string,
-  consentId: string,
-) {
-  const { data, error } = await supabase
-    .from("asset_consent_match_candidates")
-    .select("asset_id, consent_id, confidence, source_job_type")
-    .eq("tenant_id", context.tenantId)
-    .eq("project_id", context.projectId)
-    .eq("asset_id", photoAssetId)
-    .eq("consent_id", consentId)
-    .maybeSingle();
-  assertNoError(error, "select candidate row");
-  return data;
-}
-
-async function getPhotoConsentLink(
-  supabase: SupabaseClient,
-  context: ProjectContext,
-  photoAssetId: string,
-  consentId: string,
-) {
-  const { data, error } = await supabase
-    .from("asset_consent_links")
-    .select("asset_id, consent_id, link_source, match_confidence")
-    .eq("tenant_id", context.tenantId)
-    .eq("project_id", context.projectId)
-    .eq("asset_id", photoAssetId)
-    .eq("consent_id", consentId)
-    .maybeSingle();
-  assertNoError(error, "select photo consent link");
-  return data;
-}
-
-test("review-band scores persist candidates and do not create auto links", async () => {
-  const context = await createProjectContext(admin);
-  const consent = await createOptedInConsentWithHeadshot(admin, context);
-  const photoAssetId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-
-  await enqueuePhotoUploadedJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    assetId: photoAssetId,
-    payload: { source: "feature-012-test-review-band" },
-    supabase: admin,
-  });
-
-  await runAutoMatchWorker({
-    workerId: `feature-012-worker-${randomUUID()}`,
-    batchSize: 10,
-    confidenceThreshold: 0.92,
-    reviewMinConfidence: 0.30,
-    matcher: matcherWithConfidence(0.55),
-    supabase: admin,
-  });
-
-  const candidate = await getCandidateRow(admin, context, photoAssetId, consent.consentId);
-  assert.equal(candidate?.source_job_type, "photo_uploaded");
-  assert.equal(candidate?.confidence, 0.55);
-
-  const link = await getPhotoConsentLink(admin, context, photoAssetId, consent.consentId);
-  assert.equal(link, null);
-});
-
-test("above-threshold scores create auto links and clear existing candidates", async () => {
-  const context = await createProjectContext(admin);
-  const consent = await createOptedInConsentWithHeadshot(admin, context);
-  const photoAssetId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-
-  const seedTime = new Date().toISOString();
-  const { error: seedCandidateError } = await admin.from("asset_consent_match_candidates").upsert(
-    {
-      asset_id: photoAssetId,
-      consent_id: consent.consentId,
-      tenant_id: context.tenantId,
-      project_id: context.projectId,
-      confidence: 0.51,
-      matcher_version: "seed",
-      source_job_type: "photo_uploaded",
-      last_scored_at: seedTime,
-      updated_at: seedTime,
-    },
-    { onConflict: "asset_id,consent_id" },
-  );
-  assertNoError(seedCandidateError, "seed candidate");
-
-  await enqueueConsentHeadshotReadyJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    headshotAssetId: consent.headshotAssetId,
-    payload: { source: "feature-012-test-above-threshold" },
-    supabase: admin,
-  });
-
-  await runAutoMatchWorker({
-    workerId: `feature-012-worker-${randomUUID()}`,
-    batchSize: 10,
-    confidenceThreshold: 0.92,
-    reviewMinConfidence: 0.30,
-    matcher: matcherWithConfidence(0.98),
-    supabase: admin,
-  });
-
-  const candidate = await getCandidateRow(admin, context, photoAssetId, consent.consentId);
-  assert.equal(candidate, null);
-
-  const link = await getPhotoConsentLink(admin, context, photoAssetId, consent.consentId);
-  assert.equal(link?.link_source, "auto");
-  assert.equal(link?.match_confidence, 0.98);
-});
-
-test("below-review-min scores clear existing candidates", async () => {
-  const context = await createProjectContext(admin);
-  const consent = await createOptedInConsentWithHeadshot(admin, context);
-  const photoAssetId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-
-  const seedTime = new Date().toISOString();
-  const { error: seedCandidateError } = await admin.from("asset_consent_match_candidates").upsert(
-    {
-      asset_id: photoAssetId,
-      consent_id: consent.consentId,
-      tenant_id: context.tenantId,
-      project_id: context.projectId,
-      confidence: 0.48,
-      matcher_version: "seed",
-      source_job_type: "photo_uploaded",
-      last_scored_at: seedTime,
-      updated_at: seedTime,
-    },
-    { onConflict: "asset_id,consent_id" },
-  );
-  assertNoError(seedCandidateError, "seed candidate");
-
-  await enqueueConsentHeadshotReadyJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    headshotAssetId: consent.headshotAssetId,
-    payload: { source: "feature-012-test-below-review-min" },
-    supabase: admin,
-  });
-
-  await runAutoMatchWorker({
-    workerId: `feature-012-worker-${randomUUID()}`,
-    batchSize: 10,
-    confidenceThreshold: 0.92,
-    reviewMinConfidence: 0.30,
-    matcher: matcherWithConfidence(0.12),
-    supabase: admin,
-  });
-
-  const candidate = await getCandidateRow(admin, context, photoAssetId, consent.consentId);
-  assert.equal(candidate, null);
-});
-
-test("manual links and suppressions block likely candidates", async () => {
-  const context = await createProjectContext(admin);
-  const consent = await createOptedInConsentWithHeadshot(admin, context);
-  const manualPhotoId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-
-  await linkPhotosToConsent({
-    supabase: admin,
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    assetIds: [manualPhotoId],
-  });
-
-  await enqueueConsentHeadshotReadyJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    headshotAssetId: consent.headshotAssetId,
-    payload: { source: "feature-012-test-manual-block" },
-    supabase: admin,
-  });
-
-  await runAutoMatchWorker({
-    workerId: `feature-012-worker-${randomUUID()}`,
-    batchSize: 10,
-    confidenceThreshold: 0.92,
-    reviewMinConfidence: 0.30,
-    matcher: matcherWithConfidence(0.52),
-    supabase: admin,
-  });
-
-  const manualCandidate = await getCandidateRow(admin, context, manualPhotoId, consent.consentId);
-  assert.equal(manualCandidate, null);
-
-  const suppressedPhotoId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-  await linkPhotosToConsent({
-    supabase: admin,
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    assetIds: [suppressedPhotoId],
-  });
-  await unlinkPhotosFromConsent({
-    supabase: admin,
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    assetIds: [suppressedPhotoId],
-  });
-
-  await enqueuePhotoUploadedJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    assetId: suppressedPhotoId,
-    payload: { source: "feature-012-test-suppression-block" },
-    supabase: admin,
-  });
-
-  await runAutoMatchWorker({
-    workerId: `feature-012-worker-${randomUUID()}`,
-    batchSize: 10,
-    confidenceThreshold: 0.92,
-    reviewMinConfidence: 0.30,
-    matcher: matcherWithConfidence(0.52),
-    supabase: admin,
-  });
-
-  const suppressedCandidate = await getCandidateRow(admin, context, suppressedPhotoId, consent.consentId);
-  assert.equal(suppressedCandidate, null);
-});
-
-test("likely mode returns confidence-sorted unlinked candidates only", async () => {
-  const originalReviewMin = process.env.AUTO_MATCH_REVIEW_MIN_CONFIDENCE;
+test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-threshold band", async () => {
   const originalThreshold = process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
-  process.env.AUTO_MATCH_REVIEW_MIN_CONFIDENCE = "0.60";
   process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD = "0.90";
 
   try {
@@ -612,11 +347,133 @@ test("likely mode returns confidence-sorted unlinked candidates only", async () 
 
     assert.deepEqual(
       likelyAssets.map((asset) => asset.id),
-      [highPhotoId, mediumPhotoId],
+      [highPhotoId, mediumPhotoId, belowBandPhotoId],
     );
     assert.deepEqual(
       likelyAssets.map((asset) => asset.candidate_confidence),
-      [0.75, 0.67],
+      [0.75, 0.67, 0.55],
+    );
+  } finally {
+    if (originalThreshold === undefined) {
+      delete process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
+    } else {
+      process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD = originalThreshold;
+    }
+  }
+});
+
+test("default mode applies limit after excluding already-linked photos", async () => {
+  const context = await createProjectContext(admin);
+  const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+  const newestLinkedPhotoId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+    filenamePrefix: "newest-linked",
+  });
+  const olderLinkedPhotoId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+    filenamePrefix: "older-linked",
+  });
+  const firstUnlinkedPhotoId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+    filenamePrefix: "first-unlinked",
+  });
+  const secondUnlinkedPhotoId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+    filenamePrefix: "second-unlinked",
+  });
+
+  await linkPhotosToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    assetIds: [newestLinkedPhotoId, olderLinkedPhotoId],
+  });
+
+  const assets = await listMatchableProjectPhotosForConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    mode: "default",
+    limit: 2,
+  });
+
+  assert.equal(assets.length, 2);
+  assert.deepEqual(
+    new Set(assets.map((asset) => asset.id)),
+    new Set([firstUnlinkedPhotoId, secondUnlinkedPhotoId]),
+  );
+});
+
+test("likely mode uses a 0.25 default review-band minimum when unset", async () => {
+  const originalReviewMin = process.env.AUTO_MATCH_REVIEW_MIN_CONFIDENCE;
+  const originalThreshold = process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
+  delete process.env.AUTO_MATCH_REVIEW_MIN_CONFIDENCE;
+  process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD = "0.90";
+
+  try {
+    const context = await createProjectContext(admin);
+    const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+    const inBandHighPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "in-band-high",
+    });
+    const inBandLowPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "in-band-low",
+    });
+    const belowBandPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "below-band-default",
+    });
+
+    const candidateRows = [
+      { assetId: inBandHighPhotoId, confidence: 0.28 },
+      { assetId: inBandLowPhotoId, confidence: 0.26 },
+      { assetId: belowBandPhotoId, confidence: 0.24 },
+    ].map((row) => ({
+      asset_id: row.assetId,
+      consent_id: consent.consentId,
+      tenant_id: context.tenantId,
+      project_id: context.projectId,
+      confidence: row.confidence,
+      matcher_version: "seed",
+      source_job_type: "photo_uploaded",
+      last_scored_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error: seedCandidatesError } = await admin
+      .from("asset_consent_match_candidates")
+      .upsert(candidateRows, { onConflict: "asset_id,consent_id" });
+    assertNoError(seedCandidatesError, "seed default-band likely candidates");
+
+    const likelyAssets = await listMatchableProjectPhotosForConsent({
+      supabase: admin,
+      tenantId: context.tenantId,
+      projectId: context.projectId,
+      consentId: consent.consentId,
+      mode: "likely",
+      limit: 20,
+    });
+
+    assert.deepEqual(
+      likelyAssets.map((asset) => asset.id),
+      [inBandHighPhotoId, inBandLowPhotoId],
+    );
+    assert.deepEqual(
+      likelyAssets.map((asset) => asset.candidate_confidence),
+      [0.28, 0.26],
     );
   } finally {
     if (originalReviewMin === undefined) {

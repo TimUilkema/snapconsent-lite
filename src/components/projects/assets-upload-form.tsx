@@ -251,6 +251,11 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           continue;
         }
 
+        if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
+          setError("Unable to create asset upload.");
+          return;
+        }
+
         setProgressLabel(`Uploading ${entry.file.name}`);
         await uploadWithProgress(entry.file, createPayload.signedUrl, (loaded) => {
           const percent =

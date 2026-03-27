@@ -1,13 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 const STORAGE_BUCKET = "project-assets";
-const SIGNED_URL_TTL_SECONDS = 60;
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_HEADSHOT_RETENTION_DAYS = 90;
 const ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_REQUEST_CONSENT_IDS = 50;
 
 export type AssetType = "photo" | "headshot";
 
@@ -59,6 +59,14 @@ function sanitizeFilename(filename: string) {
   return trimmed.length > 120 ? trimmed.slice(0, 120) : trimmed;
 }
 
+function normalizeConsentIds(consentIds: string[]) {
+  const unique = Array.from(new Set(consentIds.map((consentId) => String(consentId ?? "").trim()).filter(Boolean)));
+  if (unique.length > MAX_REQUEST_CONSENT_IDS) {
+    throw new HttpError(400, "invalid_consent_ids_too_large", "Too many consent IDs were provided.");
+  }
+  return unique;
+}
+
 async function validateConsents(
   supabase: SupabaseClient,
   tenantId: string,
@@ -69,16 +77,21 @@ async function validateConsents(
     return;
   }
 
-  const { data, error } = await supabase
-    .from("consents")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .in("id", consentIds);
+  const data = await runChunkedRead(consentIds, async (consentIdChunk) => {
+    // safe-in-filter: asset consent validation is request-bounded and chunked by shared helper.
+    const { data: rows, error } = await supabase
+      .from("consents")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .in("id", consentIdChunk);
 
-  if (error) {
-    throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
-  }
+    if (error) {
+      throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
+    }
+
+    return (rows ?? []) as Array<{ id: string }>;
+  });
 
   const found = new Set((data ?? []).map((row) => row.id));
   const missing = consentIds.filter((id) => !found.has(id));
@@ -187,7 +200,7 @@ function getRetentionExpiresAt(assetType: AssetType) {
 export async function createAssetWithIdempotency(
   input: CreateAssetInput,
 ): Promise<CreateAssetResult> {
-  input.consentIds = Array.from(new Set(input.consentIds));
+  input.consentIds = normalizeConsentIds(input.consentIds);
   validateFileMetadata(input.originalFilename, input.contentType, input.fileSizeBytes);
   await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
   await validateConsents(input.supabase, input.tenantId, input.projectId, input.consentIds);
@@ -200,6 +213,7 @@ export async function createAssetWithIdempotency(
   }
 
   const operation = `create_project_asset:${input.projectId}`;
+  const { createAdminClient } = await import("@/lib/supabase/admin");
   const admin = createAdminClient();
 
   const { data: existingIdempotency, error: idempotencyReadError } = await input.supabase
@@ -234,7 +248,7 @@ export async function createAssetWithIdempotency(
 
     const { data: signedData, error: signedError } = await admin.storage
       .from(payload.storageBucket)
-      .createSignedUploadUrl(payload.storagePath, SIGNED_URL_TTL_SECONDS);
+      .createSignedUploadUrl(payload.storagePath);
 
     if (signedError || !signedData?.signedUrl) {
       throw new HttpError(500, "signed_url_failed", "Unable to create upload URL.");
@@ -349,7 +363,7 @@ export async function createAssetWithIdempotency(
 
   const { data: signedData, error: signedError } = await admin.storage
     .from(STORAGE_BUCKET)
-    .createSignedUploadUrl(storagePath, SIGNED_URL_TTL_SECONDS);
+    .createSignedUploadUrl(storagePath);
 
   if (signedError || !signedData?.signedUrl) {
     throw new HttpError(500, "signed_url_failed", "Unable to create upload URL.");

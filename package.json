@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts"
+    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts",
+    "check:in-filters": "node scripts/check-unsafe-in-filters.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.9.0",

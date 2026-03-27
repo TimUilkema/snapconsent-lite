@@ -18,6 +18,19 @@ type CreateHeadshotBody = {
   duplicatePolicy?: string;
 };
 
+function parseDuplicatePolicy(value: unknown) {
+  if (typeof value !== "string") {
+    return "upload_anyway" as const;
+  }
+
+  const normalized = value.trim();
+  if (normalized === "overwrite" || normalized === "ignore") {
+    return normalized;
+  }
+
+  return "upload_anyway" as const;
+}
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { token } = await context.params;
@@ -46,10 +59,7 @@ export async function POST(request: Request, context: RouteContext) {
       contentHash: typeof body.contentHash === "string" ? body.contentHash.trim() : null,
       contentHashAlgo: typeof body.contentHashAlgo === "string" ? body.contentHashAlgo.trim() : null,
       assetType: "headshot",
-      duplicatePolicy:
-        typeof body.duplicatePolicy === "string" && body.duplicatePolicy.trim().length > 0
-          ? body.duplicatePolicy.trim()
-          : "upload_anyway",
+      duplicatePolicy: parseDuplicatePolicy(body.duplicatePolicy),
     });
 
     return Response.json(result.payload, { status: result.status });

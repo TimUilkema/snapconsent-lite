@@ -45,6 +45,7 @@ export async function POST(request: Request) {
       {
         ok: true,
         claimed: result.claimed,
+        worker_concurrency: result.workerConcurrency,
         succeeded: result.succeeded,
         retried: result.retried,
         dead: result.dead,

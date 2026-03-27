@@ -1,15 +1,21 @@
 import { HttpError } from "@/lib/http/errors";
 
 const DEFAULT_THRESHOLD = 0.92;
-const DEFAULT_REVIEW_MIN_CONFIDENCE = 0.3;
+const DEFAULT_REVIEW_MIN_CONFIDENCE = 0.25;
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_TIMEOUT_MS = 60_000;
-const DEFAULT_PROVIDER_CONCURRENCY = 4;
+const DEFAULT_PROVIDER_CONCURRENCY = 2;
 const MAX_PROVIDER_CONCURRENCY = 16;
+const DEFAULT_WORKER_CONCURRENCY = 1;
+const MAX_WORKER_CONCURRENCY = 8;
 const DEFAULT_PROVIDER = "stub";
+const DEFAULT_PIPELINE_MODE = "raw";
 const MAX_RESULTS_PER_JOB = 5_000;
+const MATERIALIZER_VERSION = "face-materializer-v1";
+const COMPARE_VERSION = "embedding-compare-v1";
 
 export type AutoMatchProvider = "stub" | "compreface";
+export type AutoMatchPipelineMode = "raw" | "materialized_shadow" | "materialized_apply";
 
 function normalizeProvider(raw: string | undefined): AutoMatchProvider {
   const provider = String(raw ?? DEFAULT_PROVIDER)
@@ -55,6 +61,22 @@ export function getAutoMatchProvider(): AutoMatchProvider {
   return normalizeProvider(process.env.AUTO_MATCH_PROVIDER);
 }
 
+export function getAutoMatchPipelineMode(): AutoMatchPipelineMode {
+  const normalized = String(process.env.AUTO_MATCH_PIPELINE_MODE ?? DEFAULT_PIPELINE_MODE)
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "materialized_shadow") {
+    return "materialized_shadow";
+  }
+
+  if (normalized === "materialized_apply") {
+    return "materialized_apply";
+  }
+
+  return "raw";
+}
+
 export function getAutoMatchConfidenceThreshold() {
   return parseBoundedNumber(process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD, DEFAULT_THRESHOLD, 0, 1);
 }
@@ -79,6 +101,17 @@ export function getAutoMatchProviderConcurrency() {
       DEFAULT_PROVIDER_CONCURRENCY,
       1,
       MAX_PROVIDER_CONCURRENCY,
+    ),
+  );
+}
+
+export function getAutoMatchWorkerConcurrency() {
+  return Math.floor(
+    parseBoundedNumber(
+      process.env.AUTO_MATCH_WORKER_CONCURRENCY,
+      DEFAULT_WORKER_CONCURRENCY,
+      1,
+      MAX_WORKER_CONCURRENCY,
     ),
   );
 }
@@ -121,8 +154,14 @@ export function getAutoMatchResultsMaxPerJob() {
 
 export function getCompreFaceConfig() {
   const baseUrl = String(process.env.COMPREFACE_BASE_URL ?? "").trim().replace(/\/+$/, "");
-  const apiKey = String(process.env.COMPREFACE_API_KEY ?? "").trim();
-  if (!baseUrl || !apiKey) {
+  const verificationApiKey = String(
+    process.env.COMPREFACE_VERIFICATION_API_KEY ?? process.env.COMPREFACE_API_KEY ?? "",
+  ).trim();
+  const detectionApiKey = String(
+    process.env.COMPREFACE_DETECTION_API_KEY ?? verificationApiKey,
+  ).trim();
+
+  if (!baseUrl || !verificationApiKey || !detectionApiKey) {
     throw new HttpError(
       500,
       "face_match_provider_not_configured",
@@ -132,7 +171,16 @@ export function getCompreFaceConfig() {
 
   return {
     baseUrl,
-    apiKey,
+    verificationApiKey,
+    detectionApiKey,
     timeoutMs: getAutoMatchProviderTimeoutMs(),
   };
+}
+
+export function getAutoMatchMaterializerVersion() {
+  return MATERIALIZER_VERSION;
+}
+
+export function getAutoMatchCompareVersion() {
+  return COMPARE_VERSION;
 }

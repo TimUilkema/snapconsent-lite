@@ -232,13 +232,14 @@ async function loadBenchmarkCandidates(
 async function run() {
   const args = parseArgs();
   const envFromFile = loadEnvFromLocalFile();
+  const processEnv = process.env as Record<string, string | undefined>;
 
   const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", envFromFile);
   const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY", envFromFile);
-  process.env.NODE_ENV = process.env.NODE_ENV ?? "production";
-  process.env.COMPREFACE_BASE_URL = requireEnv("COMPREFACE_BASE_URL", envFromFile);
-  process.env.COMPREFACE_API_KEY = requireEnv("COMPREFACE_API_KEY", envFromFile);
-  process.env.AUTO_MATCH_PROVIDER_TIMEOUT_MS = process.env.AUTO_MATCH_PROVIDER_TIMEOUT_MS ?? "30000";
+  processEnv.NODE_ENV = processEnv.NODE_ENV ?? "production";
+  processEnv.COMPREFACE_BASE_URL = requireEnv("COMPREFACE_BASE_URL", envFromFile);
+  processEnv.COMPREFACE_API_KEY = requireEnv("COMPREFACE_API_KEY", envFromFile);
+  processEnv.AUTO_MATCH_PROVIDER_TIMEOUT_MS = processEnv.AUTO_MATCH_PROVIDER_TIMEOUT_MS ?? "30000";
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },

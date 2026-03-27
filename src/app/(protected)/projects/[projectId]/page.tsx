@@ -7,9 +7,13 @@ import { AssetsUploadForm } from "@/components/projects/assets-upload-form";
 import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-matching-panel";
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
 import { PreviewableImage } from "@/components/projects/previewable-image";
+import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { InviteActions } from "@/components/projects/invite-actions";
 import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
+import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
+import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
@@ -46,6 +50,50 @@ type InviteRow = {
   }> | null;
 };
 
+type RawInviteRow = {
+  id: string;
+  status: string;
+  expires_at: string | null;
+  used_count: number;
+  max_uses: number;
+  created_at: string;
+  consent_template?:
+    | {
+        template_key: string;
+        version: string;
+      }
+    | Array<{
+        template_key: string;
+        version: string;
+      }>
+    | null;
+  consents?: Array<{
+    id: string;
+    signed_at: string;
+    consent_text: string;
+    consent_version: string;
+    face_match_opt_in: boolean;
+    subjects?:
+      | {
+          email: string;
+          full_name: string;
+        }
+      | Array<{
+          email: string;
+          full_name: string;
+        }>
+      | null;
+  }> | null;
+};
+
+function firstRelation<T>(value: T | T[] | null | undefined) {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+
+  return value ?? null;
+}
+
 type ConsentTemplateOption = {
   id: string;
   template_key: string;
@@ -64,6 +112,7 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
   const requestHeaders = await headers();
   const requestHostHeader = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
   const supabase = await createClient();
+  const adminSupabase = createAdminClient();
   const tenantId = await resolveTenantId(supabase);
 
   if (!tenantId) {
@@ -105,6 +154,26 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
     .neq("status", "revoked")
     .order("created_at", { ascending: false });
 
+  const inviteRows: InviteRow[] = ((invites as RawInviteRow[] | null) ?? []).map((invite) => ({
+    id: invite.id,
+    status: invite.status,
+    expires_at: invite.expires_at,
+    used_count: invite.used_count,
+    max_uses: invite.max_uses,
+    created_at: invite.created_at,
+    consent_template: firstRelation(invite.consent_template),
+    consents: Array.isArray(invite.consents)
+      ? invite.consents.map((consent) => ({
+          id: consent.id,
+          signed_at: consent.signed_at,
+          consent_text: consent.consent_text,
+          consent_version: consent.consent_version,
+          face_match_opt_in: consent.face_match_opt_in,
+          subjects: firstRelation(consent.subjects),
+        }))
+      : null,
+  }));
+
   const { data: idempotencyRows } = await supabase
     .from("idempotency_keys")
     .select("idempotency_key, response_json")
@@ -125,24 +194,20 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId);
 
-  const inviteCount = (invites as InviteRow[] | null)?.length ?? 0;
+  const inviteCount = inviteRows.length;
+  const matchingProgress = await getProjectMatchingProgress(adminSupabase, tenantId, project.id);
 
-  const { data: consentRows } = await supabase
-    .from("consents")
-    .select("id, signed_at, face_match_opt_in, subjects(email, full_name)")
-    .eq("project_id", project.id)
-    .eq("tenant_id", tenantId)
-    .order("signed_at", { ascending: false });
-
-  const optedInConsentIds = (consentRows ?? [])
-    .filter((consent) => consent.face_match_opt_in)
-    .map((consent) => consent.id);
+  const currentHeadshots = await loadCurrentProjectConsentHeadshots(adminSupabase, tenantId, project.id, {
+    optInOnly: true,
+    notRevokedOnly: false,
+    limit: null,
+  });
 
   const consentHeadshotLinkMap = new Map<string, string>();
   const consentHeadshotAssetMap = new Map<string, HeadshotAssetRow>();
   const consentHeadshotThumbnailMap = new Map<string, string | null>();
 
-  if (optedInConsentIds.length > 0) {
+  if (currentHeadshots.length > 0) {
     const { data: headshotAssets } = await supabase
       .from("assets")
       .select("id, status, storage_bucket, storage_path")
@@ -154,26 +219,21 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
 
     const headshotRows = (headshotAssets as HeadshotAssetRow[] | null) ?? [];
     const headshotAssetIds = headshotRows.map((asset) => asset.id);
+    const headshotAssetIdSet = new Set(headshotAssetIds);
     const headshotAssetMap = new Map<string, HeadshotAssetRow>(
       headshotRows.map((asset) => [asset.id, asset]),
     );
 
     if (headshotAssetIds.length > 0) {
-      const { data: headshotLinks } = await supabase
-        .from("asset_consent_links")
-        .select("consent_id, asset_id")
-        .eq("tenant_id", tenantId)
-        .eq("project_id", project.id)
-        .in("consent_id", optedInConsentIds)
-        .in("asset_id", headshotAssetIds);
+      currentHeadshots.forEach((headshot) => {
+        if (!headshotAssetIdSet.has(headshot.headshotAssetId)) {
+          return;
+        }
 
-      (headshotLinks ?? []).forEach((link) => {
-        if (!consentHeadshotLinkMap.has(link.consent_id)) {
-          consentHeadshotLinkMap.set(link.consent_id, link.asset_id);
-          const linkedHeadshotAsset = headshotAssetMap.get(link.asset_id);
-          if (linkedHeadshotAsset) {
-            consentHeadshotAssetMap.set(link.consent_id, linkedHeadshotAsset);
-          }
+        consentHeadshotLinkMap.set(headshot.consentId, headshot.headshotAssetId);
+        const linkedHeadshotAsset = headshotAssetMap.get(headshot.headshotAssetId);
+        if (linkedHeadshotAsset) {
+          consentHeadshotAssetMap.set(headshot.consentId, linkedHeadshotAsset);
         }
       });
 
@@ -265,6 +325,11 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
               </div>
             </div>
           </div>
+
+          <ProjectMatchingProgress
+            projectId={project.id}
+            initialProgress={matchingProgress}
+          />
         </div>
       </section>
 
@@ -278,9 +343,9 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
               </p>
             </div>
           </div>
-          {(invites as InviteRow[] | null)?.length ? (
+          {inviteRows.length ? (
             <ul className="space-y-2 text-sm">
-              {(invites as InviteRow[]).map((invite) => (
+              {inviteRows.map((invite) => (
                 <li key={invite.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-col gap-2">
                     <div className="flex items-start justify-between gap-3">

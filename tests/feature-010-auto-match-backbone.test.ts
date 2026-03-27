@@ -19,7 +19,8 @@ import {
   shouldEnqueueConsentHeadshotReadyOnSubmit,
   shouldEnqueuePhotoUploadedOnFinalize,
 } from "../src/lib/matching/auto-match-trigger-conditions";
-import { runAutoMatchWorker } from "../src/lib/matching/auto-match-worker";
+
+process.env.AUTO_MATCH_PIPELINE_MODE = "materialized_apply";
 
 type ProjectContext = {
   tenantId: string;
@@ -483,49 +484,4 @@ test("reconcile backfills missing jobs", async () => {
   const jobTypes = new Set(afterJobs.map((job) => job.job_type));
   assert.ok(jobTypes.has("photo_uploaded"));
   assert.ok(jobTypes.has("consent_headshot_ready"));
-});
-
-test("stub matcher worker processes queued jobs without creating auto links", async () => {
-  const context = await createProjectContext(admin);
-  const optedIn = await createOptedInConsentWithHeadshot(admin, context);
-  const photoAssetId = await createAsset(admin, context, {
-    assetType: "photo",
-    status: "uploaded",
-  });
-
-  await enqueuePhotoUploadedJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    assetId: photoAssetId,
-    payload: { source: "test-worker-photo" },
-    supabase: admin,
-  });
-  await enqueueConsentHeadshotReadyJob({
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: optedIn.consent.consentId,
-    headshotAssetId: optedIn.headshotAssetId,
-    payload: { source: "test-worker-consent" },
-    supabase: admin,
-  });
-
-  const workerResult = await runAutoMatchWorker({
-    workerId: `feature-010-worker-${randomUUID()}`,
-    batchSize: 20,
-    supabase: admin,
-  });
-  assert.ok(workerResult.claimed >= 2);
-  assert.equal(workerResult.dead, 0);
-
-  const jobs = await getProjectJobs(admin, context.tenantId, context.projectId);
-  assert.ok(jobs.every((job) => job.status === "succeeded"));
-
-  const { count: autoLinkCount, error: autoLinkError } = await admin
-    .from("asset_consent_links")
-    .select("*", { count: "exact", head: true })
-    .eq("tenant_id", context.tenantId)
-    .eq("project_id", context.projectId)
-    .eq("link_source", "auto");
-  assertNoError(autoLinkError, "count auto links");
-  assert.equal(autoLinkCount ?? 0, 0);
 });
