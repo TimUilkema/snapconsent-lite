@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { clearConsentPhotoSuppressions } from "@/lib/matching/consent-photo-matching";
 import { createClient } from "@/lib/supabase/server";
@@ -202,6 +203,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     try {
+      const boundary = await getPhotoFanoutBoundary(supabase, tenantId, projectId);
       await enqueueConsentHeadshotReadyJob({
         tenantId,
         projectId,
@@ -209,6 +211,10 @@ export async function POST(request: Request, context: RouteContext) {
         headshotAssetId: assetId,
         payload: {
           source: "headshot_replace",
+          headshotAssetId: assetId,
+          boundarySnapshotAt: boundary.boundarySnapshotAt,
+          boundaryPhotoUploadedAt: boundary.boundaryPhotoUploadedAt,
+          boundaryPhotoAssetId: boundary.boundaryPhotoAssetId,
           replaced_asset_ids: existingHeadshotIds,
         },
       });

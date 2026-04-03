@@ -13,6 +13,7 @@ import {
   buildPhotoUploadedDedupeKey,
   enqueueConsentHeadshotReadyJob,
   enqueuePhotoUploadedJob,
+  type RepairFaceMatchJobResult,
 } from "../src/lib/matching/auto-match-jobs";
 import { runAutoMatchReconcile } from "../src/lib/matching/auto-match-reconcile";
 import {
@@ -287,6 +288,13 @@ async function getProjectJobs(supabase: SupabaseClient, tenantId: string, projec
   return data ?? [];
 }
 
+function assertRepairResultShape(result: RepairFaceMatchJobResult) {
+  assert.equal(typeof result.enqueued, "boolean");
+  assert.equal(typeof result.requeued, "boolean");
+  assert.equal(typeof result.alreadyProcessing, "boolean");
+  assert.equal(typeof result.alreadyQueued, "boolean");
+}
+
 test("photo finalize path enqueues photo_uploaded job", async () => {
   const context = await createProjectContext(admin);
   const photoAssetId = await createAsset(admin, context, {
@@ -478,10 +486,224 @@ test("reconcile backfills missing jobs", async () => {
     batchSize: 100,
     supabase: admin,
   });
-  assert.ok(reconcileResult.enqueued >= 1);
+  assert.ok(reconcileResult.enqueued + reconcileResult.requeued >= 1);
 
   const afterJobs = await getProjectJobs(admin, context.tenantId, context.projectId);
   const jobTypes = new Set(afterJobs.map((job) => job.job_type));
   assert.ok(jobTypes.has("photo_uploaded"));
   assert.ok(jobTypes.has("consent_headshot_ready"));
+});
+
+test("stale processing jobs are reclaimed with a new lock token and stale workers cannot finalize them", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+  });
+
+  const initialJob = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    supabase: admin,
+  });
+  assert.equal(initialJob.enqueued, true);
+
+  const { data: firstClaim, error: firstClaimError } = await admin.rpc("claim_face_match_jobs", {
+    p_locked_by: "feature010-worker-a",
+    p_batch_size: 200,
+    p_lease_seconds: 60,
+  });
+  assertNoError(firstClaimError, "claim first worker");
+  const firstClaimedJob = (firstClaim ?? []).find((row) => row.job_id === initialJob.jobId);
+  assert.ok(firstClaimedJob);
+  assert.equal(firstClaimedJob?.reclaimed, false);
+  assert.ok(firstClaimedJob?.lock_token);
+
+  const staleAt = new Date(Date.now() - 60_000).toISOString();
+  const { error: staleUpdateError } = await admin
+    .from("face_match_jobs")
+    .update({
+      lease_expires_at: staleAt,
+      locked_at: staleAt,
+      updated_at: staleAt,
+    })
+    .eq("id", firstClaimedJob?.job_id ?? "");
+  assertNoError(staleUpdateError, "expire first lease");
+
+  const { data: secondClaim, error: secondClaimError } = await admin.rpc("claim_face_match_jobs", {
+    p_locked_by: "feature010-worker-b",
+    p_batch_size: 200,
+    p_lease_seconds: 60,
+  });
+  assertNoError(secondClaimError, "claim second worker");
+  const secondClaimedJob = (secondClaim ?? []).find((row) => row.job_id === initialJob.jobId);
+  assert.ok(secondClaimedJob);
+  assert.equal(secondClaimedJob?.reclaimed, true);
+  assert.notEqual(secondClaimedJob?.lock_token, firstClaimedJob?.lock_token);
+
+  const { data: lostComplete, error: lostCompleteError } = await admin.rpc("complete_face_match_job", {
+    p_job_id: firstClaimedJob?.job_id ?? "",
+    p_lock_token: firstClaimedJob?.lock_token ?? "",
+  });
+  assertNoError(lostCompleteError, "complete old lease");
+  assert.equal(lostComplete?.[0]?.outcome, "lost_lease");
+
+  const { data: lostFail, error: lostFailError } = await admin.rpc("fail_face_match_job", {
+    p_job_id: firstClaimedJob?.job_id ?? "",
+    p_lock_token: firstClaimedJob?.lock_token ?? "",
+    p_error_code: "feature010_stale_worker",
+    p_error_message: "stale worker",
+    p_retryable: true,
+    p_retry_delay_seconds: 15,
+  });
+  assertNoError(lostFailError, "fail old lease");
+  assert.equal(lostFail?.[0]?.outcome, "lost_lease");
+
+  const { data: finalComplete, error: finalCompleteError } = await admin.rpc("complete_face_match_job", {
+    p_job_id: secondClaimedJob?.job_id ?? "",
+    p_lock_token: secondClaimedJob?.lock_token ?? "",
+  });
+  assertNoError(finalCompleteError, "complete current lease");
+  assert.equal(finalComplete?.[0]?.outcome, "completed");
+
+  const { data: finalJob, error: finalJobError } = await admin
+    .from("face_match_jobs")
+    .select("status, reclaim_count, lock_token")
+    .eq("id", secondClaimedJob?.job_id ?? "")
+    .single();
+  assertNoError(finalJobError, "select reclaimed job");
+  assert.equal(finalJob.status, "succeeded");
+  assert.equal(finalJob.reclaim_count, 1);
+  assert.equal(finalJob.lock_token, null);
+});
+
+test("repair requeue preserves active processing rows and can reset terminal rows while normal enqueue remains deduped", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+  });
+
+  const firstEnqueue = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    supabase: admin,
+  });
+  assert.equal(firstEnqueue.enqueued, true);
+
+  const dedupedEnqueue = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    supabase: admin,
+  });
+  assert.equal(dedupedEnqueue.enqueued, false);
+
+  const { error: markSucceededError } = await admin
+    .from("face_match_jobs")
+    .update({
+      status: "succeeded",
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", firstEnqueue.jobId);
+  assertNoError(markSucceededError, "mark photo job succeeded");
+
+  const stillDeduped = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    supabase: admin,
+  });
+  assert.equal(stillDeduped.enqueued, false);
+
+  const repaired = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    mode: "repair_requeue",
+    requeueReason: "feature010_terminal_repair",
+    supabase: admin,
+  });
+  assertRepairResultShape(repaired);
+  assert.equal(repaired.requeued, true);
+  assert.equal(repaired.status, "queued");
+
+  const { data: claimed, error: claimedError } = await admin.rpc("claim_face_match_jobs", {
+    p_locked_by: "feature010-active-worker",
+    p_batch_size: 200,
+    p_lease_seconds: 600,
+  });
+  assertNoError(claimedError, "claim repaired row");
+  const claimedJob = (claimed ?? []).find((row) => row.job_id === firstEnqueue.jobId);
+  assert.ok(claimedJob);
+
+  const activeRepair = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    mode: "repair_requeue",
+    requeueReason: "feature010_active_processing_repair",
+    supabase: admin,
+  });
+  assertRepairResultShape(activeRepair);
+  assert.equal(activeRepair.alreadyProcessing, true);
+
+  const { data: repairedRow, error: repairedRowError } = await admin
+    .from("face_match_jobs")
+    .select("status, requeue_count, locked_by, last_requeue_reason")
+    .eq("id", firstEnqueue.jobId)
+    .single();
+  assertNoError(repairedRowError, "select repaired row");
+  assert.equal(repairedRow.status, "processing");
+  assert.equal(repairedRow.locked_by, "feature010-active-worker");
+  assert.equal(repairedRow.requeue_count, 1);
+  assert.equal(repairedRow.last_requeue_reason, "feature010_terminal_repair");
+});
+
+test("reconcile can repair recent deduped intake rows without broadening its scan scope", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+  });
+
+  const firstEnqueue = await enqueuePhotoUploadedJob({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    supabase: admin,
+  });
+  assert.equal(firstEnqueue.enqueued, true);
+
+  const { error: deadError } = await admin
+    .from("face_match_jobs")
+    .update({
+      status: "dead",
+      attempt_count: 5,
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", firstEnqueue.jobId);
+  assertNoError(deadError, "mark reconcile job dead");
+
+  const reconcileResult = await runAutoMatchReconcile({
+    lookbackMinutes: 24 * 60,
+    batchSize: 100,
+    supabase: admin,
+  });
+  assert.ok(reconcileResult.requeued >= 1);
+
+  const { data: repairedRow, error: repairedRowError } = await admin
+    .from("face_match_jobs")
+    .select("status, attempt_count, requeue_count, last_requeue_reason")
+    .eq("id", firstEnqueue.jobId)
+    .single();
+  assertNoError(repairedRowError, "select reconcile repaired row");
+  assert.equal(repairedRow.status, "queued");
+  assert.equal(repairedRow.attempt_count, 0);
+  assert.equal(repairedRow.requeue_count, 1);
+  assert.equal(repairedRow.last_requeue_reason, "reconcile_recent_photo");
 });

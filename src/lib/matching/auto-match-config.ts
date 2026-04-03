@@ -8,8 +8,11 @@ const DEFAULT_PROVIDER_CONCURRENCY = 2;
 const MAX_PROVIDER_CONCURRENCY = 16;
 const DEFAULT_WORKER_CONCURRENCY = 1;
 const MAX_WORKER_CONCURRENCY = 8;
+const DEFAULT_JOB_LEASE_SECONDS = 900;
+const MIN_JOB_LEASE_SECONDS = 60;
+const MAX_JOB_LEASE_SECONDS = 3600;
 const DEFAULT_PROVIDER = "stub";
-const DEFAULT_PIPELINE_MODE = "raw";
+const DEFAULT_PIPELINE_MODE = "materialized_apply";
 const MAX_RESULTS_PER_JOB = 5_000;
 const MATERIALIZER_VERSION = "face-materializer-v1";
 const COMPARE_VERSION = "embedding-compare-v1";
@@ -66,6 +69,10 @@ export function getAutoMatchPipelineMode(): AutoMatchPipelineMode {
     .trim()
     .toLowerCase();
 
+  if (normalized === "raw") {
+    return "materialized_apply";
+  }
+
   if (normalized === "materialized_shadow") {
     return "materialized_shadow";
   }
@@ -112,6 +119,17 @@ export function getAutoMatchWorkerConcurrency() {
       DEFAULT_WORKER_CONCURRENCY,
       1,
       MAX_WORKER_CONCURRENCY,
+    ),
+  );
+}
+
+export function getAutoMatchJobLeaseSeconds() {
+  return Math.floor(
+    parseBoundedNumber(
+      process.env.AUTO_MATCH_JOB_LEASE_SECONDS,
+      DEFAULT_JOB_LEASE_SECONDS,
+      MIN_JOB_LEASE_SECONDS,
+      MAX_JOB_LEASE_SECONDS,
     ),
   );
 }

@@ -21,6 +21,8 @@ type PreflightBody = {
   files?: PreflightFile[];
 };
 
+const MAX_PREFLIGHT_FILES = 2000;
+
 function normalizeAssetType(value: unknown): "photo" | "headshot" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized || normalized === "photo") {
@@ -77,6 +79,12 @@ export async function POST(request: Request, context: RouteContext) {
 
     const assetType = normalizeAssetType(body.assetType);
     const files = Array.isArray(body.files) ? body.files : [];
+    if (files.length === 0) {
+      throw new HttpError(400, "invalid_files", "At least one file is required.");
+    }
+    if (files.length > MAX_PREFLIGHT_FILES) {
+      throw new HttpError(400, "files_too_large", "Too many files were provided.");
+    }
     const sizes = files
       .map((file) => normalizeSize(file.size))
       .filter((size): size is number => size !== null);

@@ -55,7 +55,9 @@ export async function POST(request: Request) {
         ok: true,
         scanned: result.scanned,
         enqueued: result.enqueued,
-        already_present: result.alreadyPresent,
+        requeued: result.requeued,
+        already_processing: result.alreadyProcessing,
+        already_queued: result.alreadyQueued,
       },
       { status: 200 },
     );

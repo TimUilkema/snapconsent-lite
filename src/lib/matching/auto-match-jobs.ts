@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 
 export const FACE_MATCH_JOB_TYPES = [
   "photo_uploaded",
@@ -25,6 +26,10 @@ type EnqueueFaceMatchJobInput = {
   supabase?: SupabaseClient;
 };
 
+type RequeueFaceMatchJobInput = EnqueueFaceMatchJobInput & {
+  requeueReason: string;
+};
+
 type EnqueueResultRow = {
   job_id: string;
   status: string;
@@ -42,6 +47,32 @@ export type EnqueueFaceMatchJobResult = {
   runAfter: string;
   enqueued: boolean;
 };
+
+type RequeueResultRow = {
+  job_id: string;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  run_after: string;
+  enqueued: boolean;
+  requeued: boolean;
+  already_processing: boolean;
+  already_queued: boolean;
+};
+
+export type RepairFaceMatchJobResult = {
+  jobId: string;
+  status: string;
+  attemptCount: number;
+  maxAttempts: number;
+  runAfter: string;
+  enqueued: boolean;
+  requeued: boolean;
+  alreadyProcessing: boolean;
+  alreadyQueued: boolean;
+};
+
+export type FaceMatchJobDispatchMode = "enqueue" | "repair_requeue";
 
 function createServiceRoleClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -134,17 +165,59 @@ export async function enqueueFaceMatchJob(
   };
 }
 
+export async function requeueFaceMatchJob(
+  input: RequeueFaceMatchJobInput,
+): Promise<RepairFaceMatchJobResult> {
+  const supabase = getInternalSupabaseClient(input.supabase);
+  const { data, error } = await supabase.rpc("requeue_face_match_job", {
+    p_tenant_id: normalizeUuid(input.tenantId),
+    p_project_id: normalizeUuid(input.projectId),
+    p_job_type: input.jobType,
+    p_dedupe_key: String(input.dedupeKey).trim(),
+    p_scope_asset_id: input.scopeAssetId ? normalizeUuid(input.scopeAssetId) : null,
+    p_scope_consent_id: input.scopeConsentId ? normalizeUuid(input.scopeConsentId) : null,
+    p_payload: input.payload ?? {},
+    p_max_attempts: input.maxAttempts ?? 5,
+    p_run_after: input.runAfter ?? null,
+    p_requeue_reason: String(input.requeueReason).trim(),
+  });
+
+  if (error) {
+    const normalized = normalizePostgrestError(error, "face_match_requeue_failed");
+    throw new HttpError(500, "face_match_requeue_failed", `Unable to requeue face-match job: ${normalized.code}`);
+  }
+
+  const row = (data?.[0] ?? null) as RequeueResultRow | null;
+  if (!row) {
+    throw new HttpError(500, "face_match_requeue_failed", "Unable to requeue face-match job.");
+  }
+
+  return {
+    jobId: row.job_id,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    runAfter: row.run_after,
+    enqueued: row.enqueued,
+    requeued: row.requeued,
+    alreadyProcessing: row.already_processing,
+    alreadyQueued: row.already_queued,
+  };
+}
+
 type EnqueuePhotoUploadedInput = {
   tenantId: string;
   projectId: string;
   assetId: string;
   payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
   supabase?: SupabaseClient;
 };
 
 export async function enqueuePhotoUploadedJob(input: EnqueuePhotoUploadedInput) {
   const dedupeKey = buildPhotoUploadedDedupeKey(input.assetId);
-  return enqueueFaceMatchJob({
+  const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
     jobType: "photo_uploaded",
@@ -152,7 +225,16 @@ export async function enqueuePhotoUploadedJob(input: EnqueuePhotoUploadedInput) 
     scopeAssetId: input.assetId,
     payload: input.payload ?? null,
     supabase: input.supabase,
-  });
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(input.requeueReason ?? "repair:photo_uploaded"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
 }
 
 type EnqueueConsentHeadshotReadyInput = {
@@ -161,20 +243,34 @@ type EnqueueConsentHeadshotReadyInput = {
   consentId: string;
   headshotAssetId?: string | null;
   payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
   supabase?: SupabaseClient;
 };
 
 export async function enqueueConsentHeadshotReadyJob(input: EnqueueConsentHeadshotReadyInput) {
   const dedupeKey = buildConsentHeadshotReadyDedupeKey(input.consentId, input.headshotAssetId ?? null);
-  return enqueueFaceMatchJob({
+  const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
     jobType: "consent_headshot_ready",
     dedupeKey,
     scopeConsentId: input.consentId,
-    payload: input.payload ?? null,
+    payload: {
+      headshotAssetId: input.headshotAssetId ?? null,
+      ...(input.payload ?? {}),
+    },
     supabase: input.supabase,
-  });
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(input.requeueReason ?? "repair:consent_headshot_ready"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
 }
 
 type EnqueueReconcileProjectInput = {
@@ -182,19 +278,30 @@ type EnqueueReconcileProjectInput = {
   projectId: string;
   windowKey: string;
   payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
   supabase?: SupabaseClient;
 };
 
 export async function enqueueReconcileProjectJob(input: EnqueueReconcileProjectInput) {
   const dedupeKey = buildReconcileProjectDedupeKey(input.projectId, input.windowKey);
-  return enqueueFaceMatchJob({
+  const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
     jobType: "reconcile_project",
     dedupeKey,
     payload: input.payload ?? null,
     supabase: input.supabase,
-  });
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(input.requeueReason ?? "repair:reconcile_project"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
 }
 
 type EnqueueMaterializeAssetFacesInput = {
@@ -203,12 +310,14 @@ type EnqueueMaterializeAssetFacesInput = {
   assetId: string;
   materializerVersion: string;
   payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
   supabase?: SupabaseClient;
 };
 
 export async function enqueueMaterializeAssetFacesJob(input: EnqueueMaterializeAssetFacesInput) {
   const dedupeKey = buildMaterializeAssetFacesDedupeKey(input.assetId, input.materializerVersion);
-  return enqueueFaceMatchJob({
+  const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
     jobType: "materialize_asset_faces",
@@ -219,7 +328,16 @@ export async function enqueueMaterializeAssetFacesJob(input: EnqueueMaterializeA
       ...(input.payload ?? {}),
     },
     supabase: input.supabase,
-  });
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(input.requeueReason ?? "repair:materialize_asset_faces"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
 }
 
 type EnqueueCompareMaterializedPairInput = {
@@ -231,6 +349,8 @@ type EnqueueCompareMaterializedPairInput = {
   assetMaterializationId: string;
   compareVersion: string;
   payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
   supabase?: SupabaseClient;
 };
 
@@ -243,7 +363,7 @@ export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMat
     input.compareVersion,
   );
 
-  return enqueueFaceMatchJob({
+  const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
     jobType: "compare_materialized_pair",
@@ -257,5 +377,14 @@ export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMat
       ...(input.payload ?? {}),
     },
     supabase: input.supabase,
-  });
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(input.requeueReason ?? "repair:compare_materialized_pair"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
 }

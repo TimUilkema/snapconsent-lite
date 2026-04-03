@@ -1,6 +1,7 @@
 import { markReceiptSent, submitConsent } from "@/lib/consent/submit-consent";
 import { sendConsentReceiptEmail } from "@/lib/email/send-receipt";
 import { HttpError } from "@/lib/http/errors";
+import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
 import { redirectRelative } from "@/lib/http/redirect-relative";
@@ -76,6 +77,7 @@ export async function POST(request: Request, context: RouteContext) {
       })
     ) {
       try {
+        const boundary = await getPhotoFanoutBoundary(supabase, consent.tenantId, consent.projectId);
         await enqueueConsentHeadshotReadyJob({
           tenantId: consent.tenantId,
           projectId: consent.projectId,
@@ -83,6 +85,10 @@ export async function POST(request: Request, context: RouteContext) {
           headshotAssetId,
           payload: {
             source: "consent_submit",
+            headshotAssetId,
+            boundarySnapshotAt: boundary.boundarySnapshotAt,
+            boundaryPhotoUploadedAt: boundary.boundaryPhotoUploadedAt,
+            boundaryPhotoAssetId: boundary.boundaryPhotoAssetId,
           },
         });
       } catch {

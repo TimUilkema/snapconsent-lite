@@ -263,7 +263,7 @@ export async function GET(request: Request, context: RouteContext) {
       .eq("project_id", projectId)
       .eq("tenant_id", tenantId)
       .eq("asset_type", "photo")
-      .neq("status", "archived");
+      .eq("status", "uploaded");
 
     if (queryText) {
       query = query.ilike("original_filename", `%${queryText}%`);

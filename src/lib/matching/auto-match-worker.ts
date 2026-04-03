@@ -5,6 +5,7 @@ import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 import {
   getAutoMatchCompareVersion,
   getAutoMatchConfidenceThreshold,
+  getAutoMatchJobLeaseSeconds,
   getAutoMatchMaterializerVersion,
   getAutoMatchMaxComparisonsPerJob,
   getAutoMatchPipelineMode,
@@ -15,18 +16,23 @@ import {
   getAutoMatchWorkerConcurrency,
 } from "@/lib/matching/auto-match-config";
 import {
-  enqueueCompareMaterializedPairJob,
   enqueueMaterializeAssetFacesJob,
   type FaceMatchJobType,
 } from "@/lib/matching/auto-match-jobs";
+import {
+  claimFaceMatchFanoutContinuations,
+  completeFaceMatchFanoutContinuationBatch,
+  createOrResetFanoutContinuationsForMaterializedAsset,
+  failFaceMatchFanoutContinuation,
+  loadConsentEligibility,
+  processClaimedFanoutContinuation,
+  type ClaimedFanoutContinuationRow,
+} from "@/lib/matching/auto-match-fanout-continuations";
 import {
   ensureAssetFaceMaterialization,
   loadConsentHeadshotMaterialization,
   loadCurrentProjectConsentHeadshots,
   loadCurrentAssetFaceMaterialization,
-  loadEligibleConsentHeadshotMaterializations,
-  loadEligibleConsentsForHeadshotAsset,
-  loadEligiblePhotoMaterializations,
   type AssetFaceMaterializationFaceRow,
   type AssetFaceMaterializationRow,
 } from "@/lib/matching/face-materialization";
@@ -57,6 +63,9 @@ type ClaimedFaceMatchJobRow = {
   run_after: string;
   locked_at: string | null;
   locked_by: string | null;
+  lock_token: string | null;
+  lease_expires_at: string | null;
+  reclaimed: boolean;
   started_at: string | null;
   completed_at: string | null;
   last_error_code: string | null;
@@ -66,16 +75,25 @@ type ClaimedFaceMatchJobRow = {
   updated_at: string;
 };
 
+type CompleteFaceMatchJobRow = {
+  job_id: string;
+  status: string | null;
+  completed_at: string | null;
+  updated_at: string;
+  outcome: "completed" | "lost_lease" | "missing" | "not_processing";
+};
+
 type FailFaceMatchJobRow = {
   job_id: string;
-  status: string;
-  attempt_count: number;
-  max_attempts: number;
-  run_after: string;
+  status: string | null;
+  attempt_count: number | null;
+  max_attempts: number | null;
+  run_after: string | null;
   last_error_code: string | null;
   last_error_message: string | null;
   last_error_at: string | null;
   updated_at: string;
+  outcome: "retried" | "dead" | "lost_lease" | "missing" | "not_processing";
 };
 
 type RunAutoMatchWorkerInput = {
@@ -118,16 +136,18 @@ type ProcessClaimedFaceMatchJobResult = {
   skippedIneligible: boolean;
   scoredPairs: number;
   candidatePairs: number;
+  lostLease?: boolean;
 };
 
 type ExecuteClaimedFaceMatchJobResult = {
-  outcome: "succeeded" | "skipped_ineligible" | "retried" | "dead";
+  outcome: "succeeded" | "skipped_ineligible" | "retried" | "dead" | "lost_lease";
   scoredPairs: number;
   candidatePairs: number;
 };
 
 type MaterializeAssetFacesPayload = {
   materializerVersion: string;
+  repairRequested: boolean;
 };
 
 type CompareMaterializedPairPayload = {
@@ -157,6 +177,10 @@ function logWorkerDevelopment(event: string, fields: Record<string, unknown>) {
     return;
   }
 
+  console.info(`[matching][worker] ${event}`, fields);
+}
+
+function logWorkerOperational(event: string, fields: Record<string, unknown>) {
   console.info(`[matching][worker] ${event}`, fields);
 }
 
@@ -221,6 +245,26 @@ function isRetryableError(error: unknown) {
   }
 
   return true;
+}
+
+function toContinuationSafeErrorMessage(error: unknown) {
+  return toSafeErrorMessage(error);
+}
+
+function toContinuationSafeErrorCode(error: unknown) {
+  return toSafeErrorCode(error);
+}
+
+function isRetryableContinuationError(error: unknown) {
+  if (error instanceof MatcherProviderError) {
+    return error.retryable;
+  }
+
+  if (error instanceof HttpError) {
+    return error.status >= 500;
+  }
+
+  return isRetryableError(error);
 }
 
 function normalizeBatchSize(value: number | undefined) {
@@ -305,9 +349,21 @@ function normalizeVersionToken(value: unknown, fallback: string) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+function parseBooleanFlag(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
 function parseMaterializeAssetFacesPayload(payload: Record<string, unknown> | null | undefined): MaterializeAssetFacesPayload {
   return {
     materializerVersion: normalizeVersionToken(payload?.materializerVersion, getAutoMatchMaterializerVersion()),
+    repairRequested: parseBooleanFlag(payload?.repairRequested),
   };
 }
 
@@ -438,6 +494,7 @@ async function claimFaceMatchJobs(
   const { data, error } = await supabase.rpc("claim_face_match_jobs", {
     p_locked_by: workerId,
     p_batch_size: batchSize,
+    p_lease_seconds: getAutoMatchJobLeaseSeconds(),
   });
 
   if (error) {
@@ -447,29 +504,43 @@ async function claimFaceMatchJobs(
   return (data as ClaimedFaceMatchJobRow[] | null) ?? [];
 }
 
-async function completeFaceMatchJob(supabase: SupabaseClient, jobId: string) {
+async function completeFaceMatchJob(supabase: SupabaseClient, jobId: string, lockToken: string | null) {
+  if (!lockToken) {
+    throw new HttpError(409, "face_match_complete_conflict", "Face-match job lock token is missing.");
+  }
+
   const { data, error } = await supabase.rpc("complete_face_match_job", {
     p_job_id: jobId,
+    p_lock_token: lockToken,
   });
 
   if (error) {
     throw new HttpError(500, "face_match_complete_failed", "Unable to complete face-match job.");
   }
 
-  if (!data?.[0]) {
-    throw new HttpError(409, "face_match_complete_conflict", "Face-match job was not in processing state.");
+  const row = (data?.[0] ?? null) as CompleteFaceMatchJobRow | null;
+  if (!row) {
+    throw new HttpError(409, "face_match_complete_conflict", "Face-match job completion returned no row.");
   }
+
+  return row;
 }
 
 async function failFaceMatchJob(
   supabase: SupabaseClient,
   jobId: string,
+  lockToken: string | null,
   errorCode: string,
   errorMessage: string,
   retryable: boolean,
 ) {
+  if (!lockToken) {
+    throw new HttpError(409, "face_match_fail_conflict", "Face-match job lock token is missing.");
+  }
+
   const { data, error } = await supabase.rpc("fail_face_match_job", {
     p_job_id: jobId,
+    p_lock_token: lockToken,
     p_error_code: errorCode,
     p_error_message: errorMessage,
     p_retryable: retryable,
@@ -482,7 +553,7 @@ async function failFaceMatchJob(
 
   const row = (data?.[0] ?? null) as FailFaceMatchJobRow | null;
   if (!row) {
-    throw new HttpError(409, "face_match_fail_conflict", "Face-match job was not in processing state.");
+    throw new HttpError(409, "face_match_fail_conflict", "Face-match job failure update returned no row.");
   }
 
   return row;
@@ -1312,14 +1383,134 @@ async function completeJobWithMetrics(
   fields: Record<string, unknown>,
   result: ProcessClaimedFaceMatchJobResult,
 ) {
-  await completeFaceMatchJob(supabase, job.job_id);
+  const completedJob = await completeFaceMatchJob(supabase, job.job_id, job.lock_token);
+  if (completedJob.outcome !== "completed") {
+    logWorkerOperational("complete_lost_lease", {
+      jobId: job.job_id,
+      jobType: job.job_type,
+      outcome: completedJob.outcome,
+      lockedBy: job.locked_by,
+      reclaimed: job.reclaimed,
+    });
+    return {
+      ...result,
+      lostLease: true,
+    };
+  }
+
   logWorkerDevelopment("job_metrics", {
     jobId: job.job_id,
     jobType: job.job_type,
+    reclaimed: job.reclaimed,
     totalMs: Math.round(performance.now() - startedAt),
     ...fields,
   });
   return result;
+}
+
+async function processClaimedFaceMatchFanoutContinuation(
+  supabase: SupabaseClient,
+  continuation: ClaimedFanoutContinuationRow,
+  maxComparisonsPerJob: number,
+) {
+  const batchResult = await processClaimedFanoutContinuation(supabase, continuation, maxComparisonsPerJob);
+  const lastStatus = batchResult.superseded
+    ? "superseded"
+    : batchResult.completed
+      ? "completed"
+      : "queued";
+
+  const completion = await completeFaceMatchFanoutContinuationBatch(supabase, {
+    continuationId: continuation.continuation_id,
+    lockToken: continuation.lock_token,
+    nextStatus: lastStatus,
+    cursorSortAt: batchResult.nextCursorSortAt,
+    cursorAssetId: batchResult.nextCursorAssetId,
+    cursorConsentId: batchResult.nextCursorConsentId,
+  });
+
+  if (completion.outcome !== "completed") {
+    logWorkerOperational("fanout_complete_lost_lease", {
+      continuationId: continuation.continuation_id,
+      direction: continuation.direction,
+      outcome: completion.outcome,
+      lockedBy: continuation.locked_by,
+      reclaimed: continuation.reclaimed,
+    });
+    return { outcome: "lost_lease" as const, ...batchResult };
+  }
+
+  return {
+    outcome: batchResult.skippedIneligible ? ("skipped_ineligible" as const) : ("succeeded" as const),
+    ...batchResult,
+  };
+}
+
+async function executeClaimedFaceMatchFanoutContinuation(
+  supabase: SupabaseClient,
+  continuation: ClaimedFanoutContinuationRow,
+  maxComparisonsPerJob: number,
+) {
+  const startedAt = performance.now();
+
+  try {
+    return await processClaimedFaceMatchFanoutContinuation(supabase, continuation, maxComparisonsPerJob);
+  } catch (error) {
+    const retryable = isRetryableContinuationError(error);
+    const failed = await failFaceMatchFanoutContinuation(supabase, {
+      continuationId: continuation.continuation_id,
+      lockToken: continuation.lock_token,
+      errorCode: toContinuationSafeErrorCode(error),
+      errorMessage: toContinuationSafeErrorMessage(error),
+      retryable,
+    });
+
+    if (failed.outcome === "lost_lease" || failed.outcome === "missing" || failed.outcome === "not_processing") {
+      logWorkerOperational("fanout_fail_lost_lease", {
+        continuationId: continuation.continuation_id,
+        direction: continuation.direction,
+        outcome: failed.outcome,
+        reclaimed: continuation.reclaimed,
+      });
+      return {
+        outcome: "lost_lease" as const,
+        skippedIneligible: false,
+        itemsExamined: 0,
+        compareJobsScheduled: 0,
+        materializeJobsScheduled: 0,
+        completed: false,
+        superseded: false,
+        nextCursorSortAt: continuation.cursor_sort_at,
+        nextCursorAssetId: continuation.cursor_asset_id,
+        nextCursorConsentId: continuation.cursor_consent_id,
+      };
+    }
+
+    logWorkerDevelopment("fanout_failure", {
+      continuationId: continuation.continuation_id,
+      direction: continuation.direction,
+      outcome: failed.outcome,
+      retryable,
+      errorCode: failed.last_error_code,
+      totalMs: Math.round(performance.now() - startedAt),
+      attemptCount: failed.attempt_count,
+      maxAttempts: failed.max_attempts,
+      reclaimed: continuation.reclaimed,
+    });
+
+    return {
+      outcome: failed.outcome === "retried" ? ("retried" as const) : ("dead" as const),
+      skippedIneligible: false,
+      itemsExamined: 0,
+      compareJobsScheduled: 0,
+      materializeJobsScheduled: 0,
+      completed: false,
+      superseded: false,
+      nextCursorSortAt: continuation.cursor_sort_at,
+      nextCursorAssetId: continuation.cursor_asset_id,
+      nextCursorConsentId: continuation.cursor_consent_id,
+    };
+  }
 }
 
 async function enqueueMaterializeJobForIntake(
@@ -1450,7 +1641,6 @@ async function processMaterializeAssetFacesJob(
   supabase: SupabaseClient,
   job: ClaimedFaceMatchJobRow,
   matcher: AutoMatcher,
-  maxComparisonsPerJob: number,
 ): Promise<ProcessClaimedFaceMatchJobResult> {
   const startedAt = performance.now();
   if (!job.scope_asset_id) {
@@ -1463,7 +1653,8 @@ async function processMaterializeAssetFacesJob(
     );
   }
 
-  const materializerVersion = parseMaterializeAssetFacesPayload(job.payload).materializerVersion;
+  const materializePayload = parseMaterializeAssetFacesPayload(job.payload);
+  const materializerVersion = materializePayload.materializerVersion;
   const ensured = await ensureAssetFaceMaterialization({
     supabase,
     matcher,
@@ -1471,6 +1662,7 @@ async function processMaterializeAssetFacesJob(
     projectId: job.project_id,
     assetId: job.scope_asset_id,
     materializerVersion,
+    includeFaces: false,
   });
 
   if (!ensured) {
@@ -1483,101 +1675,32 @@ async function processMaterializeAssetFacesJob(
     );
   }
 
-  const compareVersion = getAutoMatchCompareVersion();
-  let enqueuedCompareJobs = 0;
-
-  if (ensured.asset.assetType === "photo") {
-    const headshotMaterializations = await loadEligibleConsentHeadshotMaterializations(
-      supabase,
-      job.tenant_id,
-      job.project_id,
-      maxComparisonsPerJob,
-      materializerVersion,
-    );
-
-    for (const headshot of headshotMaterializations.slice(0, maxComparisonsPerJob)) {
-      const enqueueResult = await enqueueCompareMaterializedPairJob({
-        tenantId: job.tenant_id,
-        projectId: job.project_id,
-        consentId: headshot.consentId,
-        assetId: ensured.asset.assetId,
-        headshotMaterializationId: headshot.materialization.id,
-        assetMaterializationId: ensured.materialization.id,
-        compareVersion,
-        payload: {
-          sourceJobId: job.job_id,
-          sourceJobType: job.job_type,
-          materializerVersion,
-        },
-        supabase,
-      });
-      if (enqueueResult.enqueued) {
-        enqueuedCompareJobs += 1;
-      }
-    }
-  } else {
-    const consentIds = await loadEligibleConsentsForHeadshotAsset(
-      supabase,
-      job.tenant_id,
-      job.project_id,
-      ensured.asset.assetId,
-    );
-    const photoMaterializations = await loadEligiblePhotoMaterializations(
-      supabase,
-      job.tenant_id,
-      job.project_id,
-      maxComparisonsPerJob,
-      materializerVersion,
-    );
-
-    let scheduledPairs = 0;
-    for (const consentId of consentIds) {
-      for (const photo of photoMaterializations) {
-        if (scheduledPairs >= maxComparisonsPerJob) {
-          break;
-        }
-
-        const enqueueResult = await enqueueCompareMaterializedPairJob({
-          tenantId: job.tenant_id,
-          projectId: job.project_id,
-          consentId,
-          assetId: photo.assetId,
-          headshotMaterializationId: ensured.materialization.id,
-          assetMaterializationId: photo.materialization.id,
-          compareVersion,
-          payload: {
-            sourceJobId: job.job_id,
-            sourceJobType: job.job_type,
-            materializerVersion,
-          },
-          supabase,
-        });
-        if (enqueueResult.enqueued) {
-          enqueuedCompareJobs += 1;
-        }
-        scheduledPairs += 1;
-      }
-
-      if (scheduledPairs >= maxComparisonsPerJob) {
-        break;
-      }
-    }
-  }
+  const continuationCount = await createOrResetFanoutContinuationsForMaterializedAsset(supabase, {
+    tenantId: job.tenant_id,
+    projectId: job.project_id,
+    assetId: ensured.asset.assetId,
+    assetType: ensured.asset.assetType,
+    sourceMaterializationId: ensured.materialization.id,
+    sourceMaterializerVersion: materializerVersion,
+    compareVersion: getAutoMatchCompareVersion(),
+    repairRequested: materializePayload.repairRequested,
+  });
 
   return completeJobWithMetrics(
     supabase,
     job,
     startedAt,
     {
-      candidateCount: enqueuedCompareJobs,
+      candidateCount: continuationCount,
       scoredPairs: 0,
       skippedIneligible: false,
       pipelineMode: "materialized",
       materializedAssetType: ensured.asset.assetType,
       faceCount: ensured.materialization.face_count,
       usableForCompare: ensured.materialization.usable_for_compare,
+      repairRequested: materializePayload.repairRequested,
     },
-    { skippedIneligible: false, scoredPairs: 0, candidatePairs: enqueuedCompareJobs },
+    { skippedIneligible: false, scoredPairs: 0, candidatePairs: continuationCount },
   );
 }
 
@@ -1597,6 +1720,7 @@ async function isCurrentMaterializedPair(
     job.project_id,
     job.scope_consent_id,
     headshotMaterialization.materializer_version,
+    { includeFaces: false },
   );
   if (!currentHeadshot || currentHeadshot.materialization.id !== headshotMaterialization.id) {
     return false;
@@ -1608,6 +1732,7 @@ async function isCurrentMaterializedPair(
     job.project_id,
     job.scope_asset_id,
     assetMaterialization.materializer_version,
+    { includeFaces: false },
   );
   if (!currentAsset || currentAsset.materialization.id !== assetMaterialization.id) {
     return false;
@@ -1657,8 +1782,14 @@ async function processCompareMaterializedPairJob(
     compare.headshotMaterialization,
     compare.assetMaterialization,
   );
+  const consentEligible = await loadConsentEligibility(
+    supabase,
+    job.tenant_id,
+    job.project_id,
+    job.scope_consent_id,
+  );
 
-  if (pipelineMode === "materialized_apply" && isCurrent) {
+  if (pipelineMode === "materialized_apply" && isCurrent && consentEligible) {
     const match = buildMaterializedMatchFromCompare({
       assetId: job.scope_asset_id,
       consentId: job.scope_consent_id,
@@ -1713,6 +1844,7 @@ async function processCompareMaterializedPairJob(
       pipelineMode,
       compareStatus: compare.compare.compare_status,
       currentVersionedPair: isCurrent,
+      consentEligible,
       winningSimilarity: compare.compare.winning_similarity,
       winningAssetFaceRank: compare.compare.winning_asset_face_rank,
     },
@@ -1735,10 +1867,22 @@ async function processClaimedFaceMatchJobRaw(
   const resolved = await resolveJobCandidates(supabase, job, maxComparisonsPerJob);
 
   if (!resolved.eligible) {
-    await completeFaceMatchJob(supabase, job.job_id);
+    const completedJob = await completeFaceMatchJob(supabase, job.job_id, job.lock_token);
+    if (completedJob.outcome !== "completed") {
+      logWorkerOperational("complete_lost_lease", {
+        jobId: job.job_id,
+        jobType: job.job_type,
+        outcome: completedJob.outcome,
+        lockedBy: job.locked_by,
+        reclaimed: job.reclaimed,
+      });
+      return { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0, lostLease: true };
+    }
+
     logWorkerDevelopment("job_metrics", {
       jobId: job.job_id,
       jobType: job.job_type,
+      reclaimed: job.reclaimed,
       candidateCount: 0,
       scoredPairs: 0,
       skippedIneligible: true,
@@ -1774,7 +1918,22 @@ async function processClaimedFaceMatchJobRaw(
     matches,
   );
   const writesDurationMs = performance.now() - writesStartedAt;
-  await completeFaceMatchJob(supabase, job.job_id);
+  const completedJob = await completeFaceMatchJob(supabase, job.job_id, job.lock_token);
+  if (completedJob.outcome !== "completed") {
+    logWorkerOperational("complete_lost_lease", {
+      jobId: job.job_id,
+      jobType: job.job_type,
+      outcome: completedJob.outcome,
+      lockedBy: job.locked_by,
+      reclaimed: job.reclaimed,
+    });
+    return {
+      skippedIneligible: false,
+      scoredPairs: 0,
+      candidatePairs: 0,
+      lostLease: true,
+    };
+  }
 
   const scoredPairs = normalizeAutoMatcherMatches(matches).length;
   const totalDurationMs = performance.now() - startedAt;
@@ -1782,6 +1941,7 @@ async function processClaimedFaceMatchJobRaw(
   logWorkerDevelopment("job_metrics", {
     jobId: job.job_id,
     jobType: job.job_type,
+    reclaimed: job.reclaimed,
     candidateCount: resolved.candidates.length,
     scoredPairs,
     matcherMs: Math.round(matcherDurationMs),
@@ -1827,7 +1987,7 @@ async function processClaimedFaceMatchJob(
   }
 
   if (job.job_type === "materialize_asset_faces") {
-    return processMaterializeAssetFacesJob(supabase, job, matcher, maxComparisonsPerJob);
+    return processMaterializeAssetFacesJob(supabase, job, matcher);
   }
 
   if (job.job_type === "compare_materialized_pair") {
@@ -1872,6 +2032,14 @@ async function executeClaimedFaceMatchJob(
       maxComparisonsPerJob,
     );
 
+    if (result.lostLease) {
+      return {
+        outcome: "lost_lease",
+        scoredPairs: 0,
+        candidatePairs: 0,
+      };
+    }
+
     return {
       outcome: result.skippedIneligible ? "skipped_ineligible" : "succeeded",
       scoredPairs: result.scoredPairs,
@@ -1882,11 +2050,28 @@ async function executeClaimedFaceMatchJob(
     const failedJob = await failFaceMatchJob(
       supabase,
       job.job_id,
+      job.lock_token,
       toSafeErrorCode(error),
       toSafeErrorMessage(error),
       retryable,
     );
-    const outcome = failedJob.status === "queued" ? "retried" : "dead";
+    if (failedJob.outcome === "lost_lease" || failedJob.outcome === "missing" || failedJob.outcome === "not_processing") {
+      logWorkerOperational("fail_lost_lease", {
+        jobId: job.job_id,
+        jobType: job.job_type,
+        outcome: failedJob.outcome,
+        retryable,
+        reclaimed: job.reclaimed,
+      });
+
+      return {
+        outcome: "lost_lease",
+        scoredPairs: 0,
+        candidatePairs: 0,
+      };
+    }
+
+    const outcome = failedJob.outcome === "retried" ? "retried" : "dead";
 
     logWorkerDevelopment("job_failure", {
       jobId: job.job_id,
@@ -1897,6 +2082,7 @@ async function executeClaimedFaceMatchJob(
       totalMs: Math.round(performance.now() - startedAt),
       attemptCount: failedJob.attempt_count,
       maxAttempts: failedJob.max_attempts,
+      reclaimed: job.reclaimed,
     });
 
     return {
@@ -1934,6 +2120,17 @@ export async function runAutoMatchWorker(
   }
 
   const claimedJobs = await claimFaceMatchJobs(supabase, workerId, batchSize);
+  claimedJobs
+    .filter((job) => job.reclaimed)
+    .forEach((job) => {
+      logWorkerOperational("job_reclaimed", {
+        workerId,
+        jobId: job.job_id,
+        jobType: job.job_type,
+        leaseExpiresAt: job.lease_expires_at,
+        lockToken: job.lock_token,
+      });
+    });
   const workerConcurrency = normalizeWorkerConcurrency(claimedJobs.length);
   const counters: RunAutoMatchWorkerResult = {
     claimed: claimedJobs.length,
@@ -1948,7 +2145,7 @@ export async function runAutoMatchWorker(
 
   const jobResults = await mapWithConcurrency(
     claimedJobs,
-    workerConcurrency,
+    normalizeWorkerConcurrency(claimedJobs.length),
     async (job) =>
       executeClaimedFaceMatchJob(
         supabase,
@@ -1976,6 +2173,68 @@ export async function runAutoMatchWorker(
 
     counters.scoredPairs += result.scoredPairs;
     counters.candidatePairs += result.candidatePairs;
+  });
+  const shouldClaimContinuationsThisRun = claimedJobs.every(
+    (job) => job.job_type === "compare_materialized_pair",
+  );
+
+  let claimedContinuations: ClaimedFanoutContinuationRow[] = [];
+  let continuationResults: Array<
+    Awaited<ReturnType<typeof executeClaimedFaceMatchFanoutContinuation>>
+  > = [];
+
+  if (shouldClaimContinuationsThisRun) {
+    claimedContinuations = await claimFaceMatchFanoutContinuations(
+      supabase,
+      workerId,
+      batchSize,
+      getAutoMatchJobLeaseSeconds(),
+    );
+    claimedContinuations
+      .filter((continuation) => continuation.reclaimed)
+      .forEach((continuation) => {
+        logWorkerOperational("fanout_reclaimed", {
+          workerId,
+          continuationId: continuation.continuation_id,
+          direction: continuation.direction,
+          leaseExpiresAt: continuation.lease_expires_at,
+          lockToken: continuation.lock_token,
+        });
+      });
+
+    continuationResults = await mapWithConcurrency(
+      claimedContinuations,
+      normalizeWorkerConcurrency(claimedContinuations.length),
+      async (continuation) =>
+        executeClaimedFaceMatchFanoutContinuation(
+          supabase,
+          continuation,
+          maxComparisonsPerJob,
+        ),
+    );
+  }
+
+  counters.claimed += claimedContinuations.length;
+  counters.workerConcurrency = normalizeWorkerConcurrency(counters.claimed);
+
+  continuationResults.forEach((result) => {
+    if (result.outcome === "lost_lease") {
+      return;
+    }
+    if (result.outcome === "retried") {
+      counters.retried += 1;
+      return;
+    }
+    if (result.outcome === "dead") {
+      counters.dead += 1;
+      return;
+    }
+    if (result.outcome === "skipped_ineligible") {
+      counters.skippedIneligible += 1;
+    } else {
+      counters.succeeded += 1;
+    }
+    counters.candidatePairs += result.itemsExamined;
   });
 
   logWorkerDevelopment("worker_run_summary", {

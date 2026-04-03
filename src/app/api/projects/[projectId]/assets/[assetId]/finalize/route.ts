@@ -1,5 +1,6 @@
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { getCurrentConsentHeadshotFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueuePhotoUploadedOnFinalize } from "@/lib/matching/auto-match-trigger-conditions";
 import { createClient } from "@/lib/supabase/server";
@@ -55,6 +56,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (shouldEnqueuePhotoUploadedOnFinalize(finalizedAsset.assetType)) {
       try {
+        const boundary = await getCurrentConsentHeadshotFanoutBoundary(supabase, tenantId, projectId);
         await enqueuePhotoUploadedJob({
           tenantId,
           projectId,
@@ -62,6 +64,9 @@ export async function POST(request: Request, context: RouteContext) {
           payload: {
             source: "photo_finalize",
             consent_ids: consentIds,
+            boundarySnapshotAt: boundary.boundarySnapshotAt,
+            boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
+            boundaryConsentId: boundary.boundaryConsentId,
           },
         });
       } catch {

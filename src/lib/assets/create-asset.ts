@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
@@ -25,6 +25,7 @@ type CreateAssetInput = {
   contentHashAlgo?: string | null;
   assetType?: string | null;
   duplicatePolicy: "upload_anyway" | "overwrite" | "ignore";
+  projectAccessValidated?: boolean;
 };
 
 type IdempotencyPayload = {
@@ -100,7 +101,7 @@ async function validateConsents(
   }
 }
 
-async function ensureProjectAccess(
+export async function ensureProjectAccess(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
@@ -197,13 +198,30 @@ function getRetentionExpiresAt(assetType: AssetType) {
   return expiresAt.toISOString();
 }
 
+function createStorageAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new HttpError(500, "supabase_admin_not_configured", "Missing Supabase service role configuration.");
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
 export async function createAssetWithIdempotency(
   input: CreateAssetInput,
 ): Promise<CreateAssetResult> {
-  input.consentIds = normalizeConsentIds(input.consentIds);
+  const consentIds = normalizeConsentIds(input.consentIds);
   validateFileMetadata(input.originalFilename, input.contentType, input.fileSizeBytes);
-  await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
-  await validateConsents(input.supabase, input.tenantId, input.projectId, input.consentIds);
+  if (!input.projectAccessValidated) {
+    await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
+  }
+  await validateConsents(input.supabase, input.tenantId, input.projectId, consentIds);
 
   const assetType = normalizeAssetType(input.assetType ?? "photo");
   const contentHash = normalizeContentHash(input.contentHash ?? null);
@@ -213,8 +231,7 @@ export async function createAssetWithIdempotency(
   }
 
   const operation = `create_project_asset:${input.projectId}`;
-  const { createAdminClient } = await import("@/lib/supabase/admin");
-  const admin = createAdminClient();
+  const admin = createStorageAdminClient();
 
   const { data: existingIdempotency, error: idempotencyReadError } = await input.supabase
     .from("idempotency_keys")

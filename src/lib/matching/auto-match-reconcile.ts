@@ -2,9 +2,13 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import {
+  getCurrentConsentHeadshotFanoutBoundary,
+  getPhotoFanoutBoundary,
+} from "@/lib/matching/auto-match-fanout-continuations";
+import {
   enqueueConsentHeadshotReadyJob,
   enqueuePhotoUploadedJob,
-  type EnqueueFaceMatchJobResult,
+  type RepairFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
@@ -17,7 +21,9 @@ type RunAutoMatchReconcileInput = {
 export type RunAutoMatchReconcileResult = {
   scanned: number;
   enqueued: number;
-  alreadyPresent: number;
+  requeued: number;
+  alreadyProcessing: number;
+  alreadyQueued: number;
 };
 
 const DEFAULT_LOOKBACK_MINUTES = 180;
@@ -69,11 +75,28 @@ function normalizeLookbackMinutes(value: number | undefined) {
   return Math.min(parsed, MAX_LOOKBACK_MINUTES);
 }
 
-function consumeEnqueueResult(counters: RunAutoMatchReconcileResult, result: EnqueueFaceMatchJobResult) {
+function logReconcile(event: string, fields: Record<string, unknown>) {
+  console.info(`[matching][reconcile] ${event}`, fields);
+}
+
+function consumeRepairResult(counters: RunAutoMatchReconcileResult, result: RepairFaceMatchJobResult) {
   if (result.enqueued) {
     counters.enqueued += 1;
-  } else {
-    counters.alreadyPresent += 1;
+    return;
+  }
+
+  if (result.requeued) {
+    counters.requeued += 1;
+    return;
+  }
+
+  if (result.alreadyProcessing) {
+    counters.alreadyProcessing += 1;
+    return;
+  }
+
+  if (result.alreadyQueued) {
+    counters.alreadyQueued += 1;
   }
 }
 
@@ -137,7 +160,9 @@ export async function runAutoMatchReconcile(
   const counters: RunAutoMatchReconcileResult = {
     scanned: 0,
     enqueued: 0,
-    alreadyPresent: 0,
+    requeued: 0,
+    alreadyProcessing: 0,
+    alreadyQueued: 0,
   };
 
   const { data: photos, error: photosError } = await supabase
@@ -156,17 +181,23 @@ export async function runAutoMatchReconcile(
 
   for (const photo of photos ?? []) {
     counters.scanned += 1;
+    const boundary = await getCurrentConsentHeadshotFanoutBoundary(supabase, photo.tenant_id, photo.project_id);
     const enqueueResult = await enqueuePhotoUploadedJob({
       tenantId: photo.tenant_id,
       projectId: photo.project_id,
       assetId: photo.id,
+      mode: "repair_requeue",
+      requeueReason: "reconcile_recent_photo",
       payload: {
         source: "reconcile",
         scannedFrom: sinceIso,
+        boundarySnapshotAt: boundary.boundarySnapshotAt,
+        boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
+        boundaryConsentId: boundary.boundaryConsentId,
       },
       supabase,
     });
-    consumeEnqueueResult(counters, enqueueResult);
+    consumeRepairResult(counters, enqueueResult);
   }
 
   const { data: consents, error: consentsError } = await supabase
@@ -194,18 +225,25 @@ export async function runAutoMatchReconcile(
       continue;
     }
 
+    const boundary = await getPhotoFanoutBoundary(supabase, consent.tenant_id, consent.project_id);
     const enqueueResult = await enqueueConsentHeadshotReadyJob({
       tenantId: consent.tenant_id,
       projectId: consent.project_id,
       consentId: consent.id,
       headshotAssetId,
+      mode: "repair_requeue",
+      requeueReason: "reconcile_recent_consent",
       payload: {
         source: "reconcile",
         scannedFrom: sinceIso,
+        headshotAssetId,
+        boundarySnapshotAt: boundary.boundarySnapshotAt,
+        boundaryPhotoUploadedAt: boundary.boundaryPhotoUploadedAt,
+        boundaryPhotoAssetId: boundary.boundaryPhotoAssetId,
       },
       supabase,
     });
-    consumeEnqueueResult(counters, enqueueResult);
+    consumeRepairResult(counters, enqueueResult);
   }
 
   const { data: recentHeadshots, error: recentHeadshotsError } = await supabase
@@ -271,20 +309,33 @@ export async function runAutoMatchReconcile(
 
     for (const consent of eligibleConsents ?? []) {
       counters.scanned += 1;
+      const boundary = await getPhotoFanoutBoundary(supabase, headshot.tenant_id, headshot.project_id);
       const enqueueResult = await enqueueConsentHeadshotReadyJob({
         tenantId: headshot.tenant_id,
         projectId: headshot.project_id,
         consentId: consent.id,
         headshotAssetId: headshot.id,
+        mode: "repair_requeue",
+        requeueReason: "reconcile_recent_headshot",
         payload: {
           source: "reconcile",
           scannedFrom: sinceIso,
+          headshotAssetId: headshot.id,
+          boundarySnapshotAt: boundary.boundarySnapshotAt,
+          boundaryPhotoUploadedAt: boundary.boundaryPhotoUploadedAt,
+          boundaryPhotoAssetId: boundary.boundaryPhotoAssetId,
         },
         supabase,
       });
-      consumeEnqueueResult(counters, enqueueResult);
+      consumeRepairResult(counters, enqueueResult);
     }
   }
+
+  logReconcile("summary", {
+    lookbackMinutes,
+    batchSize,
+    ...counters,
+  });
 
   return counters;
 }
