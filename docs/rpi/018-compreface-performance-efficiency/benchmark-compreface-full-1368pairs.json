@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-03-20T14:49:38.710Z",
+  "tenantId": "bf4bdb9b-85b1-48c5-aa2a-60c4b3d2bab8",
+  "projectId": "4505d97a-fd3b-4033-9c47-909be1e071a9",
+  "consentId": "636184dd-a498-4bff-aa92-d664f26eb69e",
+  "candidateCount": 1368,
+  "results": [
+    {
+      "concurrency": 4,
+      "durationMs": 122304.7029,
+      "pairsPerSecond": 11.185179045146922,
+      "positiveMatches": 1367
+    },
+    {
+      "concurrency": 8,
+      "durationMs": 122530.07079999999,
+      "pairsPerSecond": 11.164606296791597,
+      "positiveMatches": 1367
+    },
+    {
+      "concurrency": 12,
+      "durationMs": 122551.71059999999,
+      "pairsPerSecond": 11.162634885326522,
+      "positiveMatches": 1367
+    },
+    {
+      "concurrency": 16,
+      "durationMs": 122471.3272,
+      "pairsPerSecond": 11.169961420978217,
+      "positiveMatches": 1367
+    }
+  ]
+}

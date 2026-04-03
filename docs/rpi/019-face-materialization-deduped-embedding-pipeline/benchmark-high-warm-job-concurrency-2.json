@@ -1,0 +1,29 @@
+{
+  "generatedAt": "2026-03-20T18:10:21.395Z",
+  "results": [
+    {
+      "jobConcurrency": 64,
+      "pairCount": 400,
+      "durationMs": 1022,
+      "pairsPerSecond": 391.537
+    },
+    {
+      "jobConcurrency": 96,
+      "pairCount": 400,
+      "durationMs": 855,
+      "pairsPerSecond": 467.756
+    },
+    {
+      "jobConcurrency": 128,
+      "pairCount": 400,
+      "durationMs": 2190,
+      "pairsPerSecond": 182.665
+    },
+    {
+      "jobConcurrency": 192,
+      "pairCount": 400,
+      "durationMs": 919,
+      "pairsPerSecond": 435.18
+    }
+  ]
+}

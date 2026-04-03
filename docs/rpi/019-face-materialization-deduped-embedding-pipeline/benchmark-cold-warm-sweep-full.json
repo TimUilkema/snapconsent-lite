@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-03-20T15:31:32.140Z",
+  "benchmarkType": "materialized-cold-warm-sweep",
+  "scope": {
+    "projectId": "4505d97a-fd3b-4033-9c47-909be1e071a9",
+    "tenantId": "bf4bdb9b-85b1-48c5-aa2a-60c4b3d2bab8",
+    "photoCount": 1368,
+    "providerConcurrency": "12",
+    "benchmarkConcurrency": 4,
+    "materializerVersion": "bench-019-coldwarm-v3",
+    "compareVersion": "bench-019-coldwarm-v3"
+  },
+  "results": [
+    {
+      "label": "consent_a_cold",
+      "pairCount": 1368,
+      "durationMs": 86575,
+      "pairsPerSecond": 15.801,
+      "materializationRowsAdded": 1369,
+      "compareRowsAdded": 1368,
+      "matched": 1367,
+      "targetEmpty": 1,
+      "noMatch": 0,
+      "sourceUnusable": 0
+    },
+    {
+      "label": "consent_b_warm_assets",
+      "pairCount": 1368,
+      "durationMs": 25432,
+      "pairsPerSecond": 53.791,
+      "materializationRowsAdded": 1,
+      "compareRowsAdded": 1368,
+      "matched": 1367,
+      "targetEmpty": 1,
+      "noMatch": 0,
+      "sourceUnusable": 0
+    },
+    {
+      "label": "consent_b_rerun_same_versions",
+      "pairCount": 1368,
+      "durationMs": 7791,
+      "pairsPerSecond": 175.577,
+      "materializationRowsAdded": 0,
+      "compareRowsAdded": 0,
+      "matched": 1367,
+      "targetEmpty": 1,
+      "noMatch": 0,
+      "sourceUnusable": 0
+    }
+  ]
+}

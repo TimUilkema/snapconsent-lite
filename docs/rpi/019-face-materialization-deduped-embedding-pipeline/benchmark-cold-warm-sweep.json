@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2026-03-20T15:26:28.722Z",
+  "benchmarkType": "materialized-cold-warm-sweep",
+  "scope": {
+    "projectId": "4505d97a-fd3b-4033-9c47-909be1e071a9",
+    "tenantId": "bf4bdb9b-85b1-48c5-aa2a-60c4b3d2bab8",
+    "photoCount": 1000,
+    "providerConcurrency": "12",
+    "benchmarkConcurrency": 4
+  },
+  "results": [
+    {
+      "label": "consent_a_cold",
+      "consentId": "fd7b536e-3842-47a9-ae68-c1c331f456c7",
+      "headshotAssetId": "501b8cdf-bc66-436d-b40b-3ad8fa930e6a",
+      "materializerVersion": "bench-019-coldwarm-v1",
+      "compareVersion": "bench-019-coldwarm-v1",
+      "pairCount": 1000,
+      "durationMs": 64642,
+      "pairsPerSecond": 15.47,
+      "materializationRowsAdded": 1001,
+      "compareRowsAdded": 1000,
+      "matched": 999,
+      "sourceUnusable": 0,
+      "targetEmpty": 1,
+      "noMatch": 0
+    },
+    {
+      "label": "consent_b_warm_assets",
+      "consentId": "524638f6-c773-4b50-a62f-0619e5e969ce",
+      "headshotAssetId": "b7edc67a-2f31-4b68-8ac8-669a2a39638e",
+      "materializerVersion": "bench-019-coldwarm-v1",
+      "compareVersion": "bench-019-coldwarm-v1",
+      "pairCount": 1000,
+      "durationMs": 18557,
+      "pairsPerSecond": 53.889,
+      "materializationRowsAdded": 1,
+      "compareRowsAdded": 1000,
+      "matched": 999,
+      "sourceUnusable": 0,
+      "targetEmpty": 1,
+      "noMatch": 0
+    },
+    {
+      "label": "consent_b_rerun_same_versions",
+      "consentId": "524638f6-c773-4b50-a62f-0619e5e969ce",
+      "headshotAssetId": "b7edc67a-2f31-4b68-8ac8-669a2a39638e",
+      "materializerVersion": "bench-019-coldwarm-v1",
+      "compareVersion": "bench-019-coldwarm-v1",
+      "pairCount": 1000,
+      "durationMs": 5795,
+      "pairsPerSecond": 172.565,
+      "materializationRowsAdded": 0,
+      "compareRowsAdded": 0,
+      "matched": 999,
+      "sourceUnusable": 0,
+      "targetEmpty": 1,
+      "noMatch": 0
+    }
+  ]
+}

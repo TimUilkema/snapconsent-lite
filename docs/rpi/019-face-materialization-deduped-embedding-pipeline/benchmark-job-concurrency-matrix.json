@@ -1,0 +1,114 @@
+{
+  "generatedAt": "2026-03-20T16:40:41.125Z",
+  "benchmarkType": "materialized-job-concurrency-matrix",
+  "scope": {
+    "projectId": "4505d97a-fd3b-4033-9c47-909be1e071a9",
+    "tenantId": "bf4bdb9b-85b1-48c5-aa2a-60c4b3d2bab8",
+    "photoCount": 400,
+    "note": "Materialized path ignores AUTO_MATCH_PROVIDER_CONCURRENCY for direct detect/compare jobs; jobConcurrency is the meaningful tuning lever here."
+  },
+  "rows": [
+    {
+      "jobConcurrency": 1,
+      "cold": {
+        "label": "cold",
+        "pairCount": 400,
+        "durationMs": 71249,
+        "pairsPerSecond": 5.614,
+        "materializationRowsAdded": 401,
+        "compareRowsAdded": 400
+      },
+      "warm": {
+        "label": "warm",
+        "pairCount": 400,
+        "durationMs": 29111,
+        "pairsPerSecond": 13.741,
+        "materializationRowsAdded": 1,
+        "compareRowsAdded": 400
+      }
+    },
+    {
+      "jobConcurrency": 2,
+      "cold": {
+        "label": "cold",
+        "pairCount": 400,
+        "durationMs": 39072,
+        "pairsPerSecond": 10.237,
+        "materializationRowsAdded": 401,
+        "compareRowsAdded": 400
+      },
+      "warm": {
+        "label": "warm",
+        "pairCount": 400,
+        "durationMs": 14298,
+        "pairsPerSecond": 27.977,
+        "materializationRowsAdded": 1,
+        "compareRowsAdded": 400
+      }
+    },
+    {
+      "jobConcurrency": 4,
+      "cold": {
+        "label": "cold",
+        "pairCount": 400,
+        "durationMs": 24817,
+        "pairsPerSecond": 16.118,
+        "materializationRowsAdded": 401,
+        "compareRowsAdded": 400
+      },
+      "warm": {
+        "label": "warm",
+        "pairCount": 400,
+        "durationMs": 7258,
+        "pairsPerSecond": 55.113,
+        "materializationRowsAdded": 1,
+        "compareRowsAdded": 400
+      }
+    },
+    {
+      "jobConcurrency": 8,
+      "cold": {
+        "label": "cold",
+        "pairCount": 400,
+        "durationMs": 24082,
+        "pairsPerSecond": 16.61,
+        "materializationRowsAdded": 401,
+        "compareRowsAdded": 400
+      },
+      "warm": {
+        "label": "warm",
+        "pairCount": 400,
+        "durationMs": 3795,
+        "pairsPerSecond": 105.403,
+        "materializationRowsAdded": 1,
+        "compareRowsAdded": 400
+      }
+    }
+  ],
+  "summary": [
+    {
+      "jobConcurrency": 8,
+      "coldPairsPerSecond": 16.61,
+      "warmPairsPerSecond": 105.403,
+      "warmVsColdMultiplier": 6.346
+    },
+    {
+      "jobConcurrency": 4,
+      "coldPairsPerSecond": 16.118,
+      "warmPairsPerSecond": 55.113,
+      "warmVsColdMultiplier": 3.419
+    },
+    {
+      "jobConcurrency": 2,
+      "coldPairsPerSecond": 10.237,
+      "warmPairsPerSecond": 27.977,
+      "warmVsColdMultiplier": 2.733
+    },
+    {
+      "jobConcurrency": 1,
+      "coldPairsPerSecond": 5.614,
+      "warmPairsPerSecond": 13.741,
+      "warmVsColdMultiplier": 2.448
+    }
+  ]
+}

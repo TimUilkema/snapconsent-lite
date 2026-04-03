@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-03-20T18:11:11.770Z",
+  "rows": [
+    {
+      "jobConcurrency": 64,
+      "runs": [
+        390.532,
+        420.401,
+        430.686
+      ],
+      "avgPairsPerSecond": 413.873
+    },
+    {
+      "jobConcurrency": 96,
+      "runs": [
+        457.216,
+        467.875,
+        476.368
+      ],
+      "avgPairsPerSecond": 467.153
+    },
+    {
+      "jobConcurrency": 128,
+      "runs": [
+        444.717,
+        481.003,
+        469.594
+      ],
+      "avgPairsPerSecond": 465.105
+    },
+    {
+      "jobConcurrency": 192,
+      "runs": [
+        234.598,
+        447.578,
+        310.5
+      ],
+      "avgPairsPerSecond": 330.892
+    }
+  ]
+}

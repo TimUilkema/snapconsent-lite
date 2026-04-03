@@ -1,0 +1,115 @@
+{
+  "generatedAt": "2026-03-20T18:08:04.582Z",
+  "rows": [
+    {
+      "jobConcurrency": 4,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 24696,
+        "pairsPerSecond": 16.197
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 7343,
+        "pairsPerSecond": 54.474
+      }
+    },
+    {
+      "jobConcurrency": 8,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 23881,
+        "pairsPerSecond": 16.75
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 3787,
+        "pairsPerSecond": 105.613
+      }
+    },
+    {
+      "jobConcurrency": 12,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 23909,
+        "pairsPerSecond": 16.73
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 2790,
+        "pairsPerSecond": 143.375
+      }
+    },
+    {
+      "jobConcurrency": 16,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 24135,
+        "pairsPerSecond": 16.573
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 2162,
+        "pairsPerSecond": 184.977
+      }
+    },
+    {
+      "jobConcurrency": 20,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 23961,
+        "pairsPerSecond": 16.694
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 1839,
+        "pairsPerSecond": 217.537
+      }
+    },
+    {
+      "jobConcurrency": 24,
+      "cold": {
+        "pairCount": 400,
+        "durationMs": 24221,
+        "pairsPerSecond": 16.515
+      },
+      "warm": {
+        "pairCount": 400,
+        "durationMs": 1646,
+        "pairsPerSecond": 243.058
+      }
+    }
+  ],
+  "summary": [
+    {
+      "jobConcurrency": 24,
+      "coldPairsPerSecond": 16.515,
+      "warmPairsPerSecond": 243.058
+    },
+    {
+      "jobConcurrency": 20,
+      "coldPairsPerSecond": 16.694,
+      "warmPairsPerSecond": 217.537
+    },
+    {
+      "jobConcurrency": 16,
+      "coldPairsPerSecond": 16.573,
+      "warmPairsPerSecond": 184.977
+    },
+    {
+      "jobConcurrency": 12,
+      "coldPairsPerSecond": 16.73,
+      "warmPairsPerSecond": 143.375
+    },
+    {
+      "jobConcurrency": 8,
+      "coldPairsPerSecond": 16.75,
+      "warmPairsPerSecond": 105.613
+    },
+    {
+      "jobConcurrency": 4,
+      "coldPairsPerSecond": 16.197,
+      "warmPairsPerSecond": 54.474
+    }
+  ]
+}

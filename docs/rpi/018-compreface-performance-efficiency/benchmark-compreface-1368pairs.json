@@ -1,0 +1,182 @@
+{
+  "generatedAt": "2026-03-20T14:38:54.355Z",
+  "benchmarkType": "compreface-matcher-throughput",
+  "scope": {
+    "tenantId": "bf4bdb9b-85b1-48c5-aa2a-60c4b3d2bab8",
+    "projectId": "4505d97a-fd3b-4033-9c47-909be1e071a9",
+    "consentId": "636184dd-a498-4bff-aa92-d664f26eb69e",
+    "candidateCount": 1000
+  },
+  "config": {
+    "concurrencies": [
+      1,
+      2,
+      4,
+      8,
+      12,
+      16
+    ],
+    "runs": 2,
+    "limit": 1368,
+    "autoMatchProviderConcurrencyAtStart": "16",
+    "providerBaseUrl": "http://localhost:8000"
+  },
+  "summaries": [
+    {
+      "concurrency": 1,
+      "candidateCount": 1000,
+      "avgMs": 188264.09015,
+      "p50Ms": 184591.5157,
+      "p95Ms": 191936.6646,
+      "avgPairsPerSecond": 5.311687423784572,
+      "minPairsPerSecond": 5.210051982949797,
+      "maxPairsPerSecond": 5.417367077830436,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 191936.6646,
+          "pairsPerSecond": 5.210051982949797,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 184591.5157,
+          "pairsPerSecond": 5.417367077830436,
+          "positiveMatches": 999
+        }
+      ]
+    },
+    {
+      "concurrency": 2,
+      "candidateCount": 1000,
+      "avgMs": 99471.59285000002,
+      "p50Ms": 99158.49900000001,
+      "p95Ms": 99784.68670000002,
+      "avgPairsPerSecond": 10.053121412340989,
+      "minPairsPerSecond": 10.021577789851394,
+      "maxPairsPerSecond": 10.084864233372471,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 99784.68670000002,
+          "pairsPerSecond": 10.021577789851394,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 99158.49900000001,
+          "pairsPerSecond": 10.084864233372471,
+          "positiveMatches": 999
+        }
+      ]
+    },
+    {
+      "concurrency": 4,
+      "candidateCount": 1000,
+      "avgMs": 89568.16944999993,
+      "p50Ms": 89546.52339999995,
+      "p95Ms": 89589.81549999991,
+      "avgPairsPerSecond": 11.164680557173101,
+      "minPairsPerSecond": 11.161983026965839,
+      "maxPairsPerSecond": 11.167379391526445,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 89546.52339999995,
+          "pairsPerSecond": 11.167379391526445,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 89589.81549999991,
+          "pairsPerSecond": 11.161983026965839,
+          "positiveMatches": 999
+        }
+      ]
+    },
+    {
+      "concurrency": 8,
+      "candidateCount": 1000,
+      "avgMs": 89470.92475,
+      "p50Ms": 89407.17009999999,
+      "p95Ms": 89534.67940000002,
+      "avgPairsPerSecond": 11.176815292724466,
+      "minPairsPerSecond": 11.168856656452157,
+      "maxPairsPerSecond": 11.184785279318444,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 89534.67940000002,
+          "pairsPerSecond": 11.168856656452157,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 89407.17009999999,
+          "pairsPerSecond": 11.184785279318444,
+          "positiveMatches": 999
+        }
+      ]
+    },
+    {
+      "concurrency": 12,
+      "candidateCount": 1000,
+      "avgMs": 89280.00505000004,
+      "p50Ms": 89235.74390000012,
+      "p95Ms": 89324.26619999995,
+      "avgPairsPerSecond": 11.200716212325075,
+      "minPairsPerSecond": 11.195166135045177,
+      "maxPairsPerSecond": 11.20627179530913,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 89324.26619999995,
+          "pairsPerSecond": 11.195166135045177,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 89235.74390000012,
+          "pairsPerSecond": 11.20627179530913,
+          "positiveMatches": 999
+        }
+      ]
+    },
+    {
+      "concurrency": 16,
+      "candidateCount": 1000,
+      "avgMs": 89598.33149999997,
+      "p50Ms": 89588.65779999993,
+      "p95Ms": 89608.00520000001,
+      "avgPairsPerSecond": 11.160922120519626,
+      "minPairsPerSecond": 11.159717234727594,
+      "maxPairsPerSecond": 11.162127266516553,
+      "avgPositiveMatches": 999,
+      "runs": [
+        {
+          "run": 1,
+          "durationMs": 89608.00520000001,
+          "pairsPerSecond": 11.159717234727594,
+          "positiveMatches": 999
+        },
+        {
+          "run": 2,
+          "durationMs": 89588.65779999993,
+          "pairsPerSecond": 11.162127266516553,
+          "positiveMatches": 999
+        }
+      ]
+    }
+  ],
+  "recommendation": {
+    "bestConcurrency": 12,
+    "bestAvgPairsPerSecond": 11.201,
+    "bestAvgDurationMs": 89280,
+    "saturationConcurrency": null
+  }
+}
