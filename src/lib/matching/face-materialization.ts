@@ -5,6 +5,7 @@ import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 import { getAutoMatchMaterializerVersion } from "@/lib/matching/auto-match-config";
 import type {
   AutoMatcher,
+  AutoMatcherFaceDerivative,
   AutoMatcherMaterializedFace,
   AutoMatcherStorageRef,
 } from "@/lib/matching/auto-matcher";
@@ -35,6 +36,9 @@ export type AssetFaceMaterializationRow = {
   face_count: number;
   usable_for_compare: boolean;
   unusable_reason: string | null;
+  source_image_width: number | null;
+  source_image_height: number | null;
+  source_coordinate_space: string;
   materialized_at: string;
   created_at: string;
 };
@@ -49,7 +53,23 @@ export type AssetFaceMaterializationFaceRow = {
   provider_face_index: number | null;
   detection_probability: number | null;
   face_box: Record<string, unknown>;
+  face_box_normalized: Record<string, unknown> | null;
   embedding: number[];
+  created_at: string;
+};
+
+export type AssetFaceImageDerivativeRow = {
+  id: string;
+  asset_face_id: string;
+  materialization_id: string;
+  asset_id: string;
+  tenant_id: string;
+  project_id: string;
+  derivative_kind: "review_square_256";
+  storage_bucket: string;
+  storage_path: string;
+  width: number;
+  height: number;
   created_at: string;
 };
 
@@ -82,6 +102,7 @@ type EnsureAssetFaceMaterializationInput = {
   assetId: string;
   materializerVersion?: string;
   includeFaces?: boolean;
+  forceRematerialize?: boolean;
 };
 
 type MaterializationLoadOptions = {
@@ -116,6 +137,20 @@ export function __setFaceMaterializationTestHooks(hooks: FaceMaterializationTest
   faceMaterializationTestHooks = hooks;
 }
 
+export function shouldForceRematerializeCurrentMaterialization(
+  materialization: AssetFaceMaterializationRow | null | undefined,
+) {
+  if (!materialization) {
+    return false;
+  }
+
+  if (materialization.asset_type === "photo") {
+    return materialization.face_count <= 0;
+  }
+
+  return !materialization.usable_for_compare;
+}
+
 function requireMaterializer(matcher: AutoMatcher) {
   if (!matcher.materializeAssetFaces) {
     throw new HttpError(
@@ -134,7 +169,7 @@ async function loadMaterializationFaces(
 ): Promise<AssetFaceMaterializationFaceRow[]> {
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
-    .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, embedding, created_at")
+    .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, created_at")
     .eq("materialization_id", materializationId)
     .order("face_rank", { ascending: true });
 
@@ -154,7 +189,7 @@ async function loadAssetFaceMaterialization(
 ) {
   const { data, error } = await supabase
     .from("asset_face_materializations")
-    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, materialized_at, created_at")
+    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("asset_id", assetId)
@@ -249,7 +284,7 @@ async function loadAssetFaceMaterializationHeadersForAssets(
     const { data, error } = await supabase
       .from("asset_face_materializations")
       .select(
-        "id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, materialized_at, created_at",
+        "id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -356,11 +391,127 @@ function normalizeMaterializedFaceBox(face: AutoMatcherMaterializedFace) {
   };
 }
 
+function normalizeMaterializedNormalizedFaceBox(face: AutoMatcherMaterializedFace) {
+  if (!face.normalizedFaceBox) {
+    return null;
+  }
+
+  return {
+    x_min: face.normalizedFaceBox.xMin,
+    y_min: face.normalizedFaceBox.yMin,
+    x_max: face.normalizedFaceBox.xMax,
+    y_max: face.normalizedFaceBox.yMax,
+    probability: face.normalizedFaceBox.probability ?? null,
+  };
+}
+
+const FACE_DERIVATIVE_BUCKET = "asset-face-derivatives";
+
+function buildFaceDerivativeStoragePath(input: {
+  tenantId: string;
+  projectId: string;
+  materializationId: string;
+  assetFaceId: string;
+  derivativeKind: AutoMatcherFaceDerivative["derivativeKind"];
+}) {
+  return `tenant/${input.tenantId}/project/${input.projectId}/materialization/${input.materializationId}/face/${input.assetFaceId}/${input.derivativeKind}.webp`;
+}
+
+async function persistFaceDerivatives(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  materializationId: string;
+  faceRows: AssetFaceMaterializationFaceRow[];
+  providerFaces: AutoMatcherMaterializedFace[];
+}) {
+  const derivatives = input.providerFaces
+    .filter((face) => face.reviewCrop)
+    .map((face) => {
+      const faceRow = input.faceRows.find((row) => row.face_rank === face.faceRank) ?? null;
+      const derivative = face.reviewCrop ?? null;
+      if (!faceRow || !derivative) {
+        return null;
+      }
+
+      return {
+        faceRow,
+        derivative,
+      };
+    })
+    .filter((entry): entry is { faceRow: AssetFaceMaterializationFaceRow; derivative: AutoMatcherFaceDerivative } => Boolean(entry));
+
+  for (const entry of derivatives) {
+    const storagePath = buildFaceDerivativeStoragePath({
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      materializationId: input.materializationId,
+      assetFaceId: entry.faceRow.id,
+      derivativeKind: entry.derivative.derivativeKind,
+    });
+
+    try {
+      const { error: uploadError } = await input.supabase.storage
+        .from(FACE_DERIVATIVE_BUCKET)
+        .upload(storagePath, entry.derivative.data, {
+          contentType: entry.derivative.contentType,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        continue;
+      }
+
+      const { error: derivativeError } = await input.supabase
+        .from("asset_face_image_derivatives")
+        .upsert(
+          {
+            asset_face_id: entry.faceRow.id,
+            materialization_id: input.materializationId,
+            asset_id: input.assetId,
+            tenant_id: input.tenantId,
+            project_id: input.projectId,
+            derivative_kind: entry.derivative.derivativeKind,
+            storage_bucket: FACE_DERIVATIVE_BUCKET,
+            storage_path: storagePath,
+            width: entry.derivative.width,
+            height: entry.derivative.height,
+          },
+          {
+            onConflict: "asset_face_id,derivative_kind",
+          },
+        );
+
+      if (derivativeError) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+  }
+}
+
+async function deleteMaterializationFaces(
+  supabase: SupabaseClient,
+  materializationId: string,
+) {
+  const { error } = await supabase
+    .from("asset_face_materialization_faces")
+    .delete()
+    .eq("materialization_id", materializationId);
+
+  if (error) {
+    throw new HttpError(500, "face_materialization_write_failed", "Unable to replace stale materialized faces.");
+  }
+}
+
 export async function ensureAssetFaceMaterialization(
   input: EnsureAssetFaceMaterializationInput,
 ): Promise<EnsuredAssetFaceMaterialization | null> {
   const materializerVersion = input.materializerVersion ?? getAutoMatchMaterializerVersion();
   const includeFaces = input.includeFaces ?? true;
+  const forceRematerialize = input.forceRematerialize ?? false;
   const asset = await loadEligibleAssetForMaterialization(input.supabase, input.tenantId, input.projectId, input.assetId);
   if (!asset) {
     return null;
@@ -375,7 +526,7 @@ export async function ensureAssetFaceMaterialization(
     source: "ensure_existing_materialization",
     includeFaces,
   });
-  if (existing) {
+  if (existing && !forceRematerialize) {
     return {
       asset,
       materialization: existing,
@@ -418,6 +569,9 @@ export async function ensureAssetFaceMaterialization(
     face_count: providerResult.faces.length,
     usable_for_compare: usability.usableForCompare,
     unusable_reason: usability.unusableReason,
+    source_image_width: providerResult.sourceImage?.width ?? null,
+    source_image_height: providerResult.sourceImage?.height ?? null,
+    source_coordinate_space: providerResult.sourceImage?.coordinateSpace ?? "oriented_original",
     materialized_at: nowIso,
   };
 
@@ -426,11 +580,15 @@ export async function ensureAssetFaceMaterialization(
     .upsert(materializationUpsert, {
       onConflict: "tenant_id,project_id,asset_id,materializer_version",
     })
-    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, materialized_at, created_at")
+    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
     .single();
 
   if (materializationError || !materializationRow) {
     throw new HttpError(500, "face_materialization_write_failed", "Unable to persist face materialization.");
+  }
+
+  if (forceRematerialize && existing?.asset_type === "headshot" && existing.face_count > 0) {
+    await deleteMaterializationFaces(input.supabase, materializationRow.id);
   }
 
   const faceRows = providerResult.faces.map((face) => ({
@@ -442,6 +600,7 @@ export async function ensureAssetFaceMaterialization(
     provider_face_index: face.providerFaceIndex ?? null,
     detection_probability: face.detectionProbability ?? null,
     face_box: normalizeMaterializedFaceBox(face),
+    face_box_normalized: normalizeMaterializedNormalizedFaceBox(face),
     embedding: face.embedding,
   }));
 
@@ -454,17 +613,30 @@ export async function ensureAssetFaceMaterialization(
     }
   }
 
+  const facesNeededForDerivatives = providerResult.faces.some((face) => face.reviewCrop);
+  const loadedFaces = (includeFaces || facesNeededForDerivatives)
+    ? await loadMaterializationFacesWithRetry({
+        supabase: input.supabase,
+        materializationId: materializationRow.id,
+        source: "ensure_post_write_faces",
+        includeFaces: includeFaces || facesNeededForDerivatives,
+      })
+    : [];
+
+  await persistFaceDerivatives({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: asset.assetId,
+    materializationId: materializationRow.id,
+    faceRows: loadedFaces,
+    providerFaces: providerResult.faces,
+  });
+
   return {
     asset,
     materialization: materializationRow as AssetFaceMaterializationRow,
-    faces: includeFaces
-      ? await loadMaterializationFacesWithRetry({
-          supabase: input.supabase,
-          materializationId: materializationRow.id,
-          source: "ensure_post_write_faces",
-          includeFaces,
-        })
-      : [],
+    faces: includeFaces ? loadedFaces : [],
     facesLoaded: includeFaces,
   };
 }
@@ -503,6 +675,38 @@ export async function loadCurrentAssetFaceMaterialization(
       : [],
     facesLoaded: includeFaces,
   };
+}
+
+export async function loadFaceImageDerivativesForFaceIds(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  faceIds: string[],
+  derivativeKind: AssetFaceImageDerivativeRow["derivative_kind"] = "review_square_256",
+) {
+  if (faceIds.length === 0) {
+    return new Map<string, AssetFaceImageDerivativeRow>();
+  }
+
+  const rows = await runChunkedRead(faceIds, async (faceIdChunk) => {
+    const { data, error } = await supabase
+      .from("asset_face_image_derivatives")
+      .select(
+        "id, asset_face_id, materialization_id, asset_id, tenant_id, project_id, derivative_kind, storage_bucket, storage_path, width, height, created_at",
+      )
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("derivative_kind", derivativeKind)
+      .in("asset_face_id", faceIdChunk);
+
+    if (error) {
+      throw new HttpError(500, "face_derivative_lookup_failed", "Unable to load face review derivatives.");
+    }
+
+    return (data as AssetFaceImageDerivativeRow[] | null) ?? [];
+  });
+
+  return new Map(rows.map((row) => [row.asset_face_id, row]));
 }
 
 type EligibleConsentWithHeadshotAsset = {

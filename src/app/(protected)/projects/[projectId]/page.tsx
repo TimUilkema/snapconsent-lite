@@ -1,20 +1,27 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { getLocale, getTranslations } from "next-intl/server";
 
 import { AssetsList } from "@/components/projects/assets-list";
 import { AssetsUploadForm } from "@/components/projects/assets-upload-form";
 import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-matching-panel";
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
-import { PreviewableImage } from "@/components/projects/previewable-image";
-import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
+import { PreviewableImage } from "@/components/projects/previewable-image";
+import { ProjectDefaultTemplateForm } from "@/components/projects/project-default-template-form";
+import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
 import { InviteActions } from "@/components/projects/invite-actions";
 import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
+import { formatDateTime } from "@/lib/i18n/format";
 import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
 import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import {
+  listVisibleTemplatesForTenant,
+  resolveTemplateManagementAccess,
+} from "@/lib/templates/template-service";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -23,6 +30,9 @@ import { buildInvitePath } from "@/lib/url/paths";
 type RouteProps = {
   params: Promise<{
     projectId: string;
+  }>;
+  searchParams: Promise<{
+    openConsentId?: string;
   }>;
 };
 
@@ -34,7 +44,7 @@ type InviteRow = {
   max_uses: number;
   created_at: string;
   consent_template?: {
-    template_key: string;
+    name: string;
     version: string;
   } | null;
   consents?: Array<{
@@ -59,11 +69,11 @@ type RawInviteRow = {
   created_at: string;
   consent_template?:
     | {
-        template_key: string;
+        name: string;
         version: string;
       }
     | Array<{
-        template_key: string;
+        name: string;
         version: string;
       }>
     | null;
@@ -96,8 +106,10 @@ function firstRelation<T>(value: T | T[] | null | undefined) {
 
 type ConsentTemplateOption = {
   id: string;
-  template_key: string;
+  name: string;
   version: string;
+  scope: "app" | "tenant";
+  category: string | null;
 };
 
 type HeadshotAssetRow = {
@@ -107,13 +119,24 @@ type HeadshotAssetRow = {
   storage_path: string | null;
 };
 
-export default async function ProjectDashboardPage({ params }: RouteProps) {
+export default async function ProjectDashboardPage({ params, searchParams }: RouteProps) {
+  const locale = await getLocale();
+  const t = await getTranslations("projects.detail");
   const { projectId } = await params;
+  const resolvedSearchParams = await searchParams;
+  const openConsentId = String(resolvedSearchParams.openConsentId ?? "").trim();
   const requestHeaders = await headers();
   const requestHostHeader = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
   const supabase = await createClient();
   const adminSupabase = createAdminClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   const tenantId = await resolveTenantId(supabase);
+
+  if (!user) {
+    redirect("/login");
+  }
 
   if (!tenantId) {
     redirect("/projects");
@@ -130,24 +153,30 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
     notFound();
   }
 
-  const { data: templates } = await supabase
-    .from("consent_templates")
-    .select("id, template_key, version")
-    .eq("status", "active")
-    .order("template_key", { ascending: true })
-    .order("version", { ascending: false });
+  const [templates, templateAccess] = await Promise.all([
+    listVisibleTemplatesForTenant(supabase, tenantId),
+    resolveTemplateManagementAccess(supabase, tenantId, user.id),
+  ]);
 
-  const templateOptions = (templates as ConsentTemplateOption[] | null) ?? [];
+  const templateOptions: ConsentTemplateOption[] = templates.map((template) => ({
+    id: template.id,
+    name: template.name,
+    version: template.version,
+    scope: template.scope,
+    category: template.category,
+  }));
   const defaultTemplateId =
     templateOptions.find((template) => template.id === project.default_consent_template_id)?.id ??
-    templateOptions.find((template) => template.template_key === "gdpr-general")?.id ??
-    templateOptions[0]?.id ??
     null;
+  const defaultTemplateWarning =
+    project.default_consent_template_id && !defaultTemplateId
+      ? t("defaultTemplateWarning")
+      : null;
 
   const { data: invites } = await supabase
     .from("subject_invites")
     .select(
-      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(template_key, version), consents(id, signed_at, consent_text, consent_version, face_match_opt_in, subjects(email, full_name))",
+      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(name, version), consents(id, signed_at, consent_text, consent_version, face_match_opt_in, subjects(email, full_name))",
     )
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId)
@@ -278,23 +307,23 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-600">
               <Link href="/projects" className="font-medium text-zinc-700 underline underline-offset-4">
-                Projects
+                {t("breadcrumbProjects")}
               </Link>
               <span>/</span>
               <span>{project.name}</span>
             </div>
-            <nav className="flex flex-wrap gap-2" aria-label="Project sections">
+            <nav className="flex flex-wrap gap-2" aria-label={t("projectSectionsAria")}>
               <a
                 href="#project-invites"
                 className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
               >
-                Invites
+                {t("sectionInvites")}
               </a>
               <a
                 href="#project-assets"
                 className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
               >
-                Assets
+                {t("sectionAssets")}
               </a>
             </nav>
           </div>
@@ -303,7 +332,7 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
             <div>
               <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">{project.name}</h1>
               <p className="mt-2 text-sm leading-6 text-zinc-600">
-                Manage consent invites, review subject details, and match project photos to signed consents.
+                {t("subtitle")}
               </p>
               {project.description ? (
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-800">{project.description}</p>
@@ -312,15 +341,15 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
 
             <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
               <div className="rounded-xl border border-zinc-200 bg-white p-3">
-                <p className="text-sm text-zinc-500">Status</p>
+                <p className="text-sm text-zinc-500">{t("statsStatus")}</p>
                 <p className="mt-1 font-medium text-zinc-900">{project.status}</p>
               </div>
               <div className="rounded-xl border border-zinc-200 bg-white p-3">
-                <p className="text-sm text-zinc-500">Invites</p>
+                <p className="text-sm text-zinc-500">{t("statsInvites")}</p>
                 <p className="mt-1 font-medium text-zinc-900">{inviteCount}</p>
               </div>
               <div className="rounded-xl border border-zinc-200 bg-white p-3">
-                <p className="text-sm text-zinc-500">Signed consents</p>
+                <p className="text-sm text-zinc-500">{t("statsSignedConsents")}</p>
                 <p className="mt-1 font-medium text-zinc-900">{consentCount ?? 0}</p>
               </div>
             </div>
@@ -337,9 +366,9 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
         <section id="project-invites" className="section-anchor content-card space-y-4 rounded-2xl p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-zinc-900">Invites</h2>
+              <h2 className="text-lg font-semibold text-zinc-900">{t("invitesTitle")}</h2>
               <p className="mt-1 text-sm text-zinc-600">
-                Sent invites, signed consent details, headshots, and manual matching live here.
+                {t("invitesSubtitle")}
               </p>
             </div>
           </div>
@@ -353,28 +382,33 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                         {invite.consents?.[0] ? (
                           <>
                             <p className="font-medium text-zinc-900">
-                              {invite.consents[0].subjects?.full_name ?? "Unknown subject"}
+                              {invite.consents[0].subjects?.full_name ?? t("unknownSubject")}
                             </p>
                             <p className="text-zinc-700">
-                              {invite.consents[0].subjects?.email ?? "Unknown email"}
+                              {invite.consents[0].subjects?.email ?? t("unknownEmail")}
                             </p>
                           </>
                         ) : (
                           <p>
-                            <span className="font-medium">Invite ID:</span> {invite.id}
+                            <span className="font-medium">{t("inviteIdLabel")}</span> {invite.id}
                           </p>
                         )}
                         <p className="text-zinc-700">
-                          Template:{" "}
+                          {t("templateLabel")}{" "}
                           {invite.consent_template
-                            ? `${invite.consent_template.template_key} ${invite.consent_template.version}`
-                            : "Unknown"}
+                            ? `${invite.consent_template.name} ${invite.consent_template.version}`
+                            : t("unknownValue")}
                         </p>
                         <p className="text-zinc-700">
-                          {invite.status} - uses {invite.used_count}/{invite.max_uses}
+                          {t("inviteUsageLine", {
+                            status: invite.status,
+                            usedCount: invite.used_count,
+                            maxUses: invite.max_uses,
+                          })}
                         </p>
                         <p className="text-zinc-700">
-                          Expires: {invite.expires_at ? new Date(invite.expires_at).toLocaleString() : "None"}
+                          {t("expiresLabel")}{" "}
+                          {invite.expires_at ? formatDateTime(invite.expires_at, locale) : t("noneValue")}
                         </p>
                       </div>
                       {invite.consents?.[0] && consentHeadshotLinkMap.has(invite.consents[0].id) ? (
@@ -382,7 +416,9 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                           <PreviewableImage
                             src={consentHeadshotThumbnailMap.get(invite.consents[0].id) ?? null}
                             previewSrc={consentHeadshotThumbnailMap.get(`${invite.consents[0].id}:preview`) ?? null}
-                            alt={`Headshot of ${invite.consents[0].subjects?.full_name ?? "subject"}`}
+                            alt={t("headshotAlt", {
+                              fullName: invite.consents[0].subjects?.full_name ?? t("subjectFallback"),
+                            })}
                             className="h-full w-full"
                             imageClassName="h-full w-full object-cover"
                           />
@@ -407,9 +443,13 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                       isRevokable={invite.status === "active" && invite.used_count === 0}
                     />
                     {invite.used_count > 0 && invite.consents?.[0] ? (
-                      <details className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                      <details
+                        id={`consent-${invite.consents[0].id}`}
+                        open={invite.consents[0].id === openConsentId}
+                        className="rounded-xl border border-zinc-200 bg-zinc-50 p-3"
+                      >
                         <summary className="cursor-pointer text-sm font-medium text-zinc-900">
-                          View consent details
+                          {t("viewConsentDetails")}
                         </summary>
                         <div className="mt-3 space-y-4 text-sm text-zinc-700">
                           {(() => {
@@ -430,46 +470,46 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                                     <div className="grid gap-3 sm:grid-cols-2">
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Subject name
+                                          {t("subjectNameLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.subjects?.full_name ?? "Unknown"}
+                                          {consent?.subjects?.full_name ?? t("unknownValue")}
                                         </p>
                                       </div>
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Subject email
+                                          {t("subjectEmailLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.subjects?.email ?? "Unknown"}
+                                          {consent?.subjects?.email ?? t("unknownValue")}
                                         </p>
                                       </div>
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Signed at
+                                          {t("signedAtLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
                                           {consent?.signed_at
-                                            ? new Date(consent.signed_at).toLocaleString()
-                                            : "Unknown"}
+                                            ? formatDateTime(consent.signed_at, locale)
+                                            : t("unknownValue")}
                                         </p>
                                       </div>
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Consent version
+                                          {t("consentVersionLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.consent_version ?? "Unknown"}
+                                          {consent?.consent_version ?? t("unknownValue")}
                                         </p>
                                       </div>
                                     </div>
 
                                     <div className="flex flex-1 flex-col rounded-xl border border-zinc-200 bg-zinc-50 p-4">
                                       <p className="text-sm text-zinc-500">
-                                        Consent text
+                                        {t("consentTextLabel")}
                                       </p>
                                       <p className="mt-2 flex-1 whitespace-pre-line leading-6 text-zinc-800">
-                                        {consent?.consent_text ?? "Unknown"}
+                                        {consent?.consent_text ?? t("unknownValue")}
                                       </p>
                                     </div>
                                   </section>
@@ -478,22 +518,22 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Facial matching
+                                          {t("facialMatchingLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.face_match_opt_in ? "Enabled" : "Disabled"}
+                                          {consent?.face_match_opt_in ? t("enabledValue") : t("disabledValue")}
                                         </p>
                                       </div>
                                       <div className="rounded-xl bg-zinc-50 p-3">
                                         <p className="text-sm text-zinc-500">
-                                          Headshot status
+                                          {t("headshotStatusLabel")}
                                         </p>
                                         <p className="mt-1 text-sm font-medium text-zinc-900">
                                           {consent?.face_match_opt_in
                                             ? hasLinkedHeadshot
-                                              ? "Linked"
-                                              : "Missing"
-                                            : "Not applicable"}
+                                              ? t("headshotLinked")
+                                              : t("headshotMissing")
+                                            : t("notApplicableValue")}
                                         </p>
                                       </div>
                                     </div>
@@ -501,13 +541,15 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
                                     {consent?.face_match_opt_in && hasLinkedHeadshot ? (
                                       <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
                                         <p className="text-sm text-zinc-500">
-                                          Headshot preview
+                                          {t("headshotPreviewLabel")}
                                         </p>
                                         <div className="mt-3 h-32 w-32 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
                                           <PreviewableImage
                                             src={headshotThumbnailUrl}
                                             previewSrc={headshotPreviewUrl}
-                                            alt={`Headshot of ${consent?.subjects?.full_name ?? "subject"}`}
+                                            alt={t("headshotAlt", {
+                                              fullName: consent?.subjects?.full_name ?? t("subjectFallback"),
+                                            })}
                                             className="h-full w-full"
                                             imageClassName="h-full w-full object-cover"
                                           />
@@ -541,15 +583,24 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
               ))}
             </ul>
           ) : (
-            <p className="text-sm text-zinc-600">No invites yet.</p>
+            <p className="text-sm text-zinc-600">{t("noInvitesYet")}</p>
           )}
         </section>
 
         <aside>
+          {templateAccess.canManageTemplates ? (
+            <ProjectDefaultTemplateForm
+              projectId={project.id}
+              templates={templateOptions}
+              defaultTemplateId={defaultTemplateId}
+              warning={defaultTemplateWarning}
+            />
+          ) : null}
           <CreateInviteForm
             projectId={project.id}
             templates={templateOptions}
             defaultTemplateId={defaultTemplateId}
+            warning={defaultTemplateWarning}
           />
         </aside>
       </div>
@@ -557,9 +608,9 @@ export default async function ProjectDashboardPage({ params }: RouteProps) {
       <section id="project-assets" className="section-anchor content-card space-y-4 rounded-2xl p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Assets</h2>
+            <h2 className="text-lg font-semibold text-zinc-900">{t("assetsTitle")}</h2>
             <p className="mt-1 text-sm text-zinc-600">
-              Upload project photos, filter large collections, and inspect linked subjects.
+              {t("assetsSubtitle")}
             </p>
           </div>
         </div>

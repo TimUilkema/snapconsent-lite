@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/projects", label: "Projects" },
+  { href: "/dashboard", key: "dashboard" },
+  { href: "/projects", key: "projects" },
+  { href: "/templates", key: "templates" },
 ] as const;
 
 function isActivePath(pathname: string, href: string) {
-  if (href === "/projects") {
-    return pathname === href || pathname.startsWith("/projects/");
+  if (href === "/projects" || href === "/templates") {
+    return pathname === href || pathname.startsWith(`${href}/`);
   }
 
   return pathname === href;
@@ -18,9 +20,10 @@ function isActivePath(pathname: string, href: string) {
 
 export function ProtectedNav() {
   const pathname = usePathname();
+  const t = useTranslations("nav");
 
   return (
-    <nav aria-label="Primary" className="flex flex-wrap items-center gap-2">
+    <nav aria-label={t("ariaPrimary")} className="flex flex-wrap items-center gap-2">
       {NAV_ITEMS.map((item) => {
         const active = isActivePath(pathname, item.href);
 
@@ -35,7 +38,7 @@ export function ProtectedNav() {
                 : "border border-transparent text-zinc-700 hover:border-zinc-200 hover:bg-white"
             }`}
           >
-            {item.label}
+            {t(item.key)}
           </Link>
         );
       })}

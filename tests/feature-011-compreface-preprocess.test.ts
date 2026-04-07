@@ -737,3 +737,185 @@ test("materialization uses the detection key while verify and embedding compare 
     clearEnv();
   }
 });
+
+test("embedding compare realigns ranked response rows back into request target order", async () => {
+  const clearEnv = withMatcherEnv();
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    fetchCalls += 1;
+    const requestUrl = new URL(String(input));
+    assert.ok(requestUrl.pathname.endsWith("/api/v1/verification/embeddings/verify"));
+    const payload = JSON.parse(String(init?.body ?? "{}")) as {
+      source: number[];
+      targets: number[][];
+    };
+
+    assert.deepEqual(payload.source, [0.9, 0.8, 0.7]);
+    assert.deepEqual(payload.targets, [
+      [0.1, 0.2, 0.3],
+      [0.4, 0.5, 0.6],
+      [0.7, 0.8, 0.9],
+    ]);
+
+    return createJsonResponse({
+      result: [
+        { similarity: 0.97, embedding: [0.7, 0.8, 0.9] },
+        { similarity: 0.55, embedding: [0.4, 0.5, 0.6] },
+        { similarity: 0.12, embedding: [0.1, 0.2, 0.3] },
+      ],
+    });
+  };
+
+  try {
+    const matcher = createCompreFaceAutoMatcher();
+    const compared = await matcher.compareEmbeddings?.({
+      sourceEmbedding: [0.9, 0.8, 0.7],
+      targetEmbeddings: [
+        [0.1, 0.2, 0.3],
+        [0.4, 0.5, 0.6],
+        [0.7, 0.8, 0.9],
+      ],
+    });
+
+    assert.deepEqual(compared?.targetSimilarities, [0.12, 0.55, 0.97]);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});
+
+test("embedding compare falls back to one-target requests when a multi-target response cannot be aligned", async () => {
+  const clearEnv = withMatcherEnv();
+
+  const originalFetch = globalThis.fetch;
+  const targetCounts: number[] = [];
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input));
+    assert.ok(requestUrl.pathname.endsWith("/api/v1/verification/embeddings/verify"));
+    const payload = JSON.parse(String(init?.body ?? "{}")) as {
+      targets: number[][];
+    };
+    targetCounts.push(payload.targets.length);
+
+    if (payload.targets.length === 2) {
+      return createJsonResponse({
+        result: [
+          { similarity: 0.91 },
+          { similarity: 0.52 },
+        ],
+      });
+    }
+
+    const [target] = payload.targets;
+    if (JSON.stringify(target) === JSON.stringify([0.1, 0.2, 0.3])) {
+      return createJsonResponse({
+        result: [{ similarity: 0.91 }],
+      });
+    }
+
+    if (JSON.stringify(target) === JSON.stringify([0.4, 0.5, 0.6])) {
+      return createJsonResponse({
+        result: [{ similarity: 0.52 }],
+      });
+    }
+
+    assert.fail(`Unexpected fallback target ${JSON.stringify(target)}`);
+  };
+
+  try {
+    const matcher = createCompreFaceAutoMatcher();
+    const compared = await matcher.compareEmbeddings?.({
+      sourceEmbedding: [0.9, 0.8, 0.7],
+      targetEmbeddings: [
+        [0.1, 0.2, 0.3],
+        [0.4, 0.5, 0.6],
+      ],
+    });
+
+    assert.deepEqual(compared?.targetSimilarities, [0.91, 0.52]);
+    assert.deepEqual(targetCounts, [2, 1, 1]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});
+
+test("materialization returns normalized face geometry and a review crop for detected faces", async () => {
+  const clearEnv = withMatcherEnv();
+  const sourceImage = await createSmallJpegBuffer();
+  const stats: FakeStorageStats = { downloadCalls: 0, uploadCalls: 0, removeCalls: 0 };
+  const supabase = createFakeSupabase(
+    {
+      "project-assets:photo.jpg": sourceImage,
+    },
+    stats,
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input));
+    assert.ok(requestUrl.pathname.endsWith("/api/v1/detection/detect"));
+    const payload = JSON.parse(String(init?.body ?? "{}")) as { file: string };
+    const uploadedImage = decodeBase64Image(payload.file);
+    const metadata = await sharp(uploadedImage).metadata();
+    assert.equal(metadata.width, 240);
+    assert.equal(metadata.height, 240);
+
+    return createJsonResponse({
+      result: [
+        {
+          box: {
+            x_min: 48,
+            y_min: 24,
+            x_max: 192,
+            y_max: 168,
+            probability: 0.97,
+          },
+          embedding: [0.11, 0.22, 0.33],
+        },
+      ],
+    });
+  };
+
+  try {
+    const matcher = createCompreFaceAutoMatcher();
+    const result = await matcher.materializeAssetFaces?.({
+      tenantId: "tenant-id",
+      projectId: "project-id",
+      assetId: "photo-asset-id",
+      assetType: "photo",
+      storage: {
+        storageBucket: "project-assets",
+        storagePath: "photo.jpg",
+      },
+      supabase,
+    });
+
+    assert.ok(result);
+    assert.equal(result?.faces.length, 1);
+    assert.equal(result?.sourceImage?.width, 240);
+    assert.equal(result?.sourceImage?.height, 240);
+    assert.equal(result?.sourceImage?.coordinateSpace, "oriented_original");
+
+    const face = result?.faces[0];
+    assert.ok(face?.normalizedFaceBox);
+    assert.equal(face?.normalizedFaceBox?.xMin, 0.2);
+    assert.equal(face?.normalizedFaceBox?.yMin, 0.1);
+    assert.equal(face?.normalizedFaceBox?.xMax, 0.8);
+    assert.equal(face?.normalizedFaceBox?.yMax, 0.7);
+    assert.ok(face?.reviewCrop);
+    assert.equal(face?.reviewCrop?.derivativeKind, "review_square_256");
+    assert.equal(face?.reviewCrop?.width, 256);
+    assert.equal(face?.reviewCrop?.height, 256);
+    const cropMetadata = await sharp(face?.reviewCrop?.data).metadata();
+    assert.equal(cropMetadata.width, 256);
+    assert.equal(cropMetadata.height, 256);
+    assert.equal(cropMetadata.format, "webp");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});

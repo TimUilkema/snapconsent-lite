@@ -2,10 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ensureProjectAccess } from "@/lib/assets/create-asset";
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
+import { queueProjectAssetPostFinalizeProcessing } from "@/lib/assets/post-finalize-processing";
 import { HttpError } from "@/lib/http/errors";
-import { getCurrentConsentHeadshotFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
-import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
-import { shouldEnqueuePhotoUploadedOnFinalize } from "@/lib/matching/auto-match-trigger-conditions";
 import type {
   ProjectUploadFinalizeItemInput,
   ProjectUploadFinalizeItemResult,
@@ -69,29 +67,15 @@ export async function finalizeProjectAssetBatch(
         consentIds: [],
       });
 
-      if (shouldEnqueuePhotoUploadedOnFinalize(finalized.assetType)) {
-        try {
-          const boundary = await getCurrentConsentHeadshotFanoutBoundary(
-            input.supabase,
-            input.tenantId,
-            input.projectId,
-          );
-          await enqueuePhotoUploadedJob({
-            tenantId: input.tenantId,
-            projectId: input.projectId,
-            assetId: finalized.assetId,
-            payload: {
-              source: "photo_finalize_batch",
-              consent_ids: [],
-              boundarySnapshotAt: boundary.boundarySnapshotAt,
-              boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
-              boundaryConsentId: boundary.boundaryConsentId,
-            },
-          });
-        } catch {
-          // Finalize should remain successful; reconcile can backfill jobs.
-        }
-      }
+      await queueProjectAssetPostFinalizeProcessing({
+        supabase: input.supabase,
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        assetId: finalized.assetId,
+        assetType: finalized.assetType,
+        consentIds: [],
+        source: "photo_finalize_batch",
+      });
 
       results.push({
         clientItemId: item.clientItemId,

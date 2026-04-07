@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
-import { runChunkedMutation, runChunkedRead } from "@/lib/supabase/safe-in-filter";
+import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 const MAX_REQUEST_CONSENT_IDS = 50;
 
@@ -96,7 +96,7 @@ export async function finalizeAsset(input: FinalizeAssetInput): Promise<Finalize
     throw new HttpError(500, "asset_finalize_failed", "Unable to finalize asset.");
   }
 
-  if (input.consentIds.length > 0) {
+  if (input.consentIds.length > 0 && asset.asset_type === "headshot") {
     const rows = input.consentIds.map((consentId) => ({
       asset_id: input.assetId,
       consent_id: consentId,
@@ -116,23 +116,6 @@ export async function finalizeAsset(input: FinalizeAssetInput): Promise<Finalize
 
     if (linkError) {
       throw new HttpError(500, "asset_link_failed", "Unable to link asset to consents.");
-    }
-
-    if (asset.asset_type === "photo") {
-      await runChunkedMutation(input.consentIds, async (consentIdChunk) => {
-        // safe-in-filter: finalize suppression cleanup is request-bounded and chunked by shared helper.
-        const { error: suppressionDeleteError } = await input.supabase
-          .from("asset_consent_link_suppressions")
-          .delete()
-          .eq("tenant_id", input.tenantId)
-          .eq("project_id", input.projectId)
-          .eq("asset_id", input.assetId)
-          .in("consent_id", consentIdChunk);
-
-        if (suppressionDeleteError) {
-          throw new HttpError(500, "asset_link_failed", "Unable to clear matching suppression.");
-        }
-      });
     }
   }
 

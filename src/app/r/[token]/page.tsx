@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
+
+import { LanguageSwitch } from "@/components/i18n/language-switch";
 
 type RevokePageProps = {
   params: Promise<{
@@ -10,38 +13,49 @@ type RevokePageProps = {
   }>;
 };
 
-function getMessage(status?: string, error?: string) {
+type Notice = {
+  tone: "success" | "neutral" | "error";
+  text: string;
+};
+
+function getMessage(
+  status: string | undefined,
+  error: string | undefined,
+  t: Awaited<ReturnType<typeof getTranslations>>,
+): Notice | null {
   if (status === "revoked") {
-    return { tone: "success", text: "Consent revoked successfully." };
+    return { tone: "success", text: t("messages.revoked") };
   }
 
   if (status === "already") {
-    return { tone: "neutral", text: "Consent was already revoked." };
+    return { tone: "neutral", text: t("messages.already") };
   }
 
   if (error === "invalid") {
-    return { tone: "error", text: "This revoke link is invalid." };
+    return { tone: "error", text: t("messages.invalid") };
   }
 
   if (error === "expired") {
-    return { tone: "error", text: "This revoke link has expired." };
+    return { tone: "error", text: t("messages.expired") };
   }
 
   return null;
 }
 
 export default async function RevokePage({ params, searchParams }: RevokePageProps) {
+  const t = await getTranslations("publicRevoke");
   const { token } = await params;
   const resolvedSearchParams = await searchParams;
-  const message = getMessage(resolvedSearchParams.status, resolvedSearchParams.error);
+  const message = getMessage(resolvedSearchParams.status, resolvedSearchParams.error, t);
 
   return (
     <main className="page-frame flex min-h-screen py-8 sm:py-10">
       <section className="app-shell flex w-full flex-col gap-4 rounded-2xl px-5 py-6 sm:px-7 sm:py-7">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Revoke Consent</h1>
-        <p className="text-sm text-zinc-700">
-          Use this page to revoke future processing for your consent.
-        </p>
+        <div className="flex justify-end">
+          <LanguageSwitch />
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t("title")}</h1>
+        <p className="text-sm text-zinc-700">{t("subtitle")}</p>
 
         {message ? (
           <p
@@ -63,7 +77,7 @@ export default async function RevokePage({ params, searchParams }: RevokePagePro
           className="content-card space-y-3 rounded-2xl p-4"
         >
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">Reason (optional)</span>
+            <span className="mb-1 block font-medium">{t("reasonLabel")}</span>
             <textarea
               name="reason"
               className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2"
@@ -75,12 +89,12 @@ export default async function RevokePage({ params, searchParams }: RevokePagePro
             type="submit"
             className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
           >
-            Revoke Consent
+            {t("submit")}
           </button>
         </form>
 
         <Link href="/" className="text-sm text-zinc-700 underline">
-          Return to home
+          {t("backToHome")}
         </Link>
       </section>
     </main>

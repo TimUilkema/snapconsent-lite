@@ -24,6 +24,7 @@ import {
   loadEligibleConsentHeadshotMaterializations,
   loadEligiblePhotoMaterializations,
 } from "../src/lib/matching/face-materialization";
+import { createCompreFaceAutoMatcher } from "../src/lib/matching/providers/compreface";
 
 type ProjectContext = {
   tenantId: string;
@@ -177,9 +178,11 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     .from("consent_templates")
     .insert({
       template_key: templateKey,
+      name: "Feature 019 Template",
       version: "v1",
+      version_number: 1,
       body: "Feature 019 template body",
-      status: "active",
+      status: "published",
       created_by: userId,
     })
     .select("id")
@@ -359,6 +362,64 @@ function createMaterializedMatcher(
   };
 }
 
+function createMaterializationMatcherWithCompreFaceCompare(
+  facesByAssetId: Record<string, TestFace[]>,
+  counters?: {
+    materializeCallsByAssetId: Map<string, number>;
+    compareCalls: { count: number };
+  },
+): AutoMatcher {
+  const comprefaceMatcher = createCompreFaceAutoMatcher();
+
+  return {
+    version: "feature-019-materialized-compreface-compare-test",
+    async match() {
+      assert.fail("raw matcher path should not be used in materialized pipeline tests");
+    },
+    async materializeAssetFaces(input) {
+      counters?.materializeCallsByAssetId.set(
+        input.assetId,
+        (counters.materializeCallsByAssetId.get(input.assetId) ?? 0) + 1,
+      );
+
+      const faces = (facesByAssetId[input.assetId] ?? []).map((face) => ({
+        faceRank: face.faceRank,
+        providerFaceIndex: face.providerFaceIndex ?? face.faceRank,
+        detectionProbability: face.detectionProbability ?? 0.99,
+        faceBox: {
+          xMin: face.faceRank * 10,
+          yMin: face.faceRank * 10,
+          xMax: face.faceRank * 10 + 50,
+          yMax: face.faceRank * 10 + 60,
+          probability: face.detectionProbability ?? 0.99,
+        },
+        embedding: [face.similarity, face.faceRank],
+      })) satisfies AutoMatcherMaterializedFace[];
+
+      return {
+        faces,
+        providerMetadata: {
+          provider: "test-provider",
+          providerMode: "detection",
+          providerPluginVersions: {
+            detector: "retinaface-test",
+            calculator: "embedding-test",
+          },
+        },
+      };
+    },
+    async compareEmbeddings(input) {
+      if (counters) {
+        counters.compareCalls.count += 1;
+      }
+      if (!comprefaceMatcher.compareEmbeddings) {
+        assert.fail("CompreFace matcher should support embedding compare");
+      }
+      return comprefaceMatcher.compareEmbeddings(input);
+    },
+  };
+}
+
 async function drainMatchingQueue(
   matcher: AutoMatcher,
   options?: {
@@ -447,8 +508,8 @@ async function getPhotoConsentLink(
   consentId: string,
 ) {
   const { data, error } = await admin
-    .from("asset_consent_links")
-    .select("asset_id, consent_id, link_source, match_confidence")
+    .from("asset_face_consent_links")
+    .select("asset_id, consent_id, asset_face_id, link_source, match_confidence")
     .eq("tenant_id", context.tenantId)
     .eq("project_id", context.projectId)
     .eq("asset_id", photoAssetId)
@@ -595,6 +656,129 @@ test("materialized_apply dedupes compare work across both trigger directions and
   }
 });
 
+test("materialized_apply uses the corrected provider target alignment when ranked embedding rows arrive out of order", async () => {
+  const restorePipelineMode = withPipelineMode("materialized_apply");
+  const originalBaseUrl = process.env.COMPREFACE_BASE_URL;
+  const originalApiKey = process.env.COMPREFACE_API_KEY;
+  const originalVerificationApiKey = process.env.COMPREFACE_VERIFICATION_API_KEY;
+  const originalDetectionApiKey = process.env.COMPREFACE_DETECTION_API_KEY;
+
+  process.env.COMPREFACE_BASE_URL = "http://compreface.local";
+  process.env.COMPREFACE_API_KEY = "verify-key";
+  delete process.env.COMPREFACE_VERIFICATION_API_KEY;
+  delete process.env.COMPREFACE_DETECTION_API_KEY;
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(input instanceof Request ? input.url : String(input));
+    if (!requestUrl.pathname.endsWith("/api/v1/verification/embeddings/verify")) {
+      return originalFetch(input, init);
+    }
+
+    const payload = JSON.parse(String(init?.body ?? "{}")) as {
+      source: number[];
+      targets: number[][];
+    };
+
+    assert.deepEqual(payload.source, [0.13, 0]);
+    assert.deepEqual(payload.targets, [
+      [0.44, 0],
+      [0.97, 1],
+    ]);
+
+    return new Response(
+      JSON.stringify({
+        result: [
+          { similarity: 0.97, embedding: [0.97, 1] },
+          { similarity: 0.12, embedding: [0.44, 0] },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  };
+
+  try {
+    const context = await createProjectContext(admin);
+    const photoAssetId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+    });
+    const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+    const counters = {
+      materializeCallsByAssetId: new Map<string, number>(),
+      compareCalls: { count: 0 },
+    };
+    const matcher = createMaterializationMatcherWithCompreFaceCompare(
+      {
+        [consent.headshotAssetId]: [{ faceRank: 0, similarity: 0.13 }],
+        [photoAssetId]: [
+          { faceRank: 0, similarity: 0.44 },
+          { faceRank: 1, similarity: 0.97 },
+        ],
+      },
+      counters,
+    );
+
+    await enqueuePhotoUploadedJob({
+      tenantId: context.tenantId,
+      projectId: context.projectId,
+      assetId: photoAssetId,
+      supabase: admin,
+    });
+    await enqueueConsentHeadshotReadyJob({
+      tenantId: context.tenantId,
+      projectId: context.projectId,
+      consentId: consent.consentId,
+      headshotAssetId: consent.headshotAssetId,
+      supabase: admin,
+    });
+
+    await drainMatchingQueue(matcher);
+
+    assert.equal(counters.compareCalls.count, 1);
+
+    const compares = await getCompareRows(context);
+    assert.equal(compares.length, 1);
+    assert.equal(compares[0]?.compare_status, "matched");
+    assert.equal(compares[0]?.winning_asset_face_rank, 1);
+    assert.equal(compares[0]?.winning_similarity, 0.97);
+
+    const link = await getPhotoConsentLink(context, photoAssetId, consent.consentId);
+    assert.equal(link?.link_source, "auto");
+    assert.equal(link?.match_confidence, 0.97);
+    assert.equal(link?.asset_face_id, compares[0]?.winning_asset_face_id);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalBaseUrl === "undefined") {
+      delete process.env.COMPREFACE_BASE_URL;
+    } else {
+      process.env.COMPREFACE_BASE_URL = originalBaseUrl;
+    }
+    if (typeof originalApiKey === "undefined") {
+      delete process.env.COMPREFACE_API_KEY;
+    } else {
+      process.env.COMPREFACE_API_KEY = originalApiKey;
+    }
+    if (typeof originalVerificationApiKey === "undefined") {
+      delete process.env.COMPREFACE_VERIFICATION_API_KEY;
+    } else {
+      process.env.COMPREFACE_VERIFICATION_API_KEY = originalVerificationApiKey;
+    }
+    if (typeof originalDetectionApiKey === "undefined") {
+      delete process.env.COMPREFACE_DETECTION_API_KEY;
+    } else {
+      process.env.COMPREFACE_DETECTION_API_KEY = originalDetectionApiKey;
+    }
+    restorePipelineMode();
+  }
+});
+
 test("materialized_apply persists source_unusable compares for multi-face headshots without calling embedding compare", async () => {
   const restorePipelineMode = withPipelineMode("materialized_apply");
 
@@ -653,7 +837,7 @@ test("materialized_apply persists source_unusable compares for multi-face headsh
   }
 });
 
-test("materialized_apply stores enough face identity to allow later face exclusivity without enforcing it yet", async () => {
+test("materialized_apply persists enough face identity to enforce one current consent per face", async () => {
   const restorePipelineMode = withPipelineMode("materialized_apply");
 
   try {
@@ -701,8 +885,22 @@ test("materialized_apply stores enough face identity to allow later face exclusi
 
     const firstLink = await getPhotoConsentLink(context, photoAssetId, firstConsent.consentId);
     const secondLink = await getPhotoConsentLink(context, photoAssetId, secondConsent.consentId);
-    assert.equal(firstLink?.link_source, "auto");
-    assert.equal(secondLink?.link_source, "auto");
+    const winningConsentId = [firstConsent.consentId, secondConsent.consentId].sort((left, right) =>
+      left.localeCompare(right),
+    )[0];
+
+    assert.equal(
+      [firstLink, secondLink].filter((link) => link?.link_source === "auto").length,
+      1,
+    );
+    assert.equal(
+      winningConsentId === firstConsent.consentId ? firstLink?.link_source : secondLink?.link_source,
+      "auto",
+    );
+    assert.equal(
+      winningConsentId === firstConsent.consentId ? secondLink : firstLink,
+      null,
+    );
   } finally {
     restorePipelineMode();
   }
@@ -962,7 +1160,7 @@ test("headshot-side materialize replay re-derives missing compare fan-out from d
       1,
     );
     assert.equal(
-      await countRows("asset_consent_links", [
+      await countRows("asset_face_consent_links", [
         ["tenant_id", context.tenantId],
         ["project_id", context.projectId],
         ["asset_id", photoAssetId],
@@ -1062,7 +1260,7 @@ test("photo-side materialize replay re-derives missing compare fan-out from dura
       1,
     );
     assert.equal(
-      await countRows("asset_consent_links", [
+      await countRows("asset_face_consent_links", [
         ["tenant_id", context.tenantId],
         ["project_id", context.projectId],
         ["asset_id", photoAssetId],
@@ -1327,7 +1525,7 @@ test("repair requeue of an existing compare job replays safely without duplicati
       1,
     );
     assert.equal(
-      await countRows("asset_consent_links", [
+      await countRows("asset_face_consent_links", [
         ["tenant_id", context.tenantId],
         ["project_id", context.projectId],
         ["asset_id", photoAssetId],

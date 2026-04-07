@@ -23,6 +23,16 @@ type DownloadedImage = {
   byteSize: number;
 };
 
+type PreparedMaterializationImage = {
+  base64: string;
+  byteSize: number;
+  orientedSourceBuffer: Buffer;
+  sourceWidth: number;
+  sourceHeight: number;
+  processedWidth: number;
+  processedHeight: number;
+};
+
 type DownloadCache = Map<string, DownloadedImage>;
 type DownloadInFlight = Map<string, Promise<DownloadedImage | null>>;
 type DownloadTarget = "photo" | "headshot";
@@ -85,6 +95,7 @@ const MIN_LONGEST_SIDE_CAP = 480;
 const RESIZE_ATTEMPTS = 5;
 const QUALITY_STEPS = [82, 76, 70, 64, 58, 52, 46];
 const PASSTHROUGH_FORMATS = new Set(["jpeg", "png"]);
+const REVIEW_CROP_SIZE = 256;
 
 function isDevelopmentLoggingEnabled() {
   return process.env.NODE_ENV !== "production";
@@ -186,6 +197,15 @@ function normalizeEmbedding(embedding: number[] | null | undefined) {
   }
 
   return normalized;
+}
+
+function getEmbeddingKey(embedding: number[] | null | undefined) {
+  const normalized = normalizeEmbedding(embedding);
+  if (!normalized) {
+    return null;
+  }
+
+  return JSON.stringify(normalized);
 }
 
 function parsePluginVersions(data: CompreFaceVerifyResponse | null) {
@@ -336,6 +356,160 @@ export async function preprocessImageForCompreFace(
   );
 }
 
+async function downloadStorageRefBuffer(
+  supabase: SupabaseClient,
+  ref: AutoMatcherStorageRef,
+) {
+  const { data, error } = await supabase.storage.from(ref.storageBucket).download(ref.storagePath);
+  if (error || !data) {
+    return null;
+  }
+
+  const bytes = await data.arrayBuffer();
+  if (bytes.byteLength === 0) {
+    return null;
+  }
+
+  return Buffer.from(bytes);
+}
+
+async function getOrientedImageBuffer(sourceBuffer: Buffer) {
+  try {
+    const oriented = await sharp(sourceBuffer, { failOn: "error" }).rotate().toBuffer();
+    const metadata = await sharp(oriented, { failOn: "error" }).metadata();
+    return {
+      buffer: oriented,
+      width: metadata.width ?? 0,
+      height: metadata.height ?? 0,
+      format: normalizeImageFormat(metadata.format),
+    };
+  } catch {
+    throw new MatcherProviderError(
+      "compreface_image_preprocess_failed",
+      "Unable to decode image before CompreFace upload.",
+      false,
+    );
+  }
+}
+
+async function prepareImageForCompreFaceMaterialization(
+  sourceBuffer: Buffer,
+  target: DownloadTarget,
+): Promise<PreparedMaterializationImage> {
+  const oriented = await getOrientedImageBuffer(sourceBuffer);
+  const canPassthrough = PASSTHROUGH_FORMATS.has(oriented.format);
+  if (oriented.buffer.length <= COMPREFACE_MAX_IMAGE_BYTES && canPassthrough) {
+    return {
+      base64: oriented.buffer.toString("base64"),
+      byteSize: oriented.buffer.length,
+      orientedSourceBuffer: oriented.buffer,
+      sourceWidth: oriented.width,
+      sourceHeight: oriented.height,
+      processedWidth: oriented.width,
+      processedHeight: oriented.height,
+    };
+  }
+
+  const processedBuffer = await preprocessImageForCompreFace(oriented.buffer, target);
+  let processedMetadata: sharp.Metadata;
+  try {
+    processedMetadata = await sharp(processedBuffer, { failOn: "error" }).metadata();
+  } catch {
+    throw new MatcherProviderError(
+      "compreface_image_preprocess_failed",
+      "Unable to preprocess image for CompreFace.",
+      false,
+    );
+  }
+
+  return {
+    base64: processedBuffer.toString("base64"),
+    byteSize: processedBuffer.length,
+    orientedSourceBuffer: oriented.buffer,
+    sourceWidth: oriented.width,
+    sourceHeight: oriented.height,
+    processedWidth: processedMetadata.width ?? oriented.width,
+    processedHeight: processedMetadata.height ?? oriented.height,
+  };
+}
+
+function clampDimension(value: number, max: number) {
+  return Math.max(0, Math.min(max, value));
+}
+
+function toNormalizedFaceBox(faceBox: AutoMatcherFaceBox, width: number, height: number): AutoMatcherFaceBox | null {
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return {
+    xMin: clampDimension(faceBox.xMin / width, 1),
+    yMin: clampDimension(faceBox.yMin / height, 1),
+    xMax: clampDimension(faceBox.xMax / width, 1),
+    yMax: clampDimension(faceBox.yMax / height, 1),
+    probability: faceBox.probability ?? null,
+  };
+}
+
+function buildReviewCropRect(
+  normalizedFaceBox: AutoMatcherFaceBox,
+  sourceWidth: number,
+  sourceHeight: number,
+) {
+  const xMin = clampDimension(normalizedFaceBox.xMin * sourceWidth, sourceWidth);
+  const yMin = clampDimension(normalizedFaceBox.yMin * sourceHeight, sourceHeight);
+  const xMax = clampDimension(normalizedFaceBox.xMax * sourceWidth, sourceWidth);
+  const yMax = clampDimension(normalizedFaceBox.yMax * sourceHeight, sourceHeight);
+  const faceWidth = Math.max(1, xMax - xMin);
+  const faceHeight = Math.max(1, yMax - yMin);
+  const side = Math.max(faceWidth, faceHeight) * 1.6;
+  const centerX = (xMin + xMax) / 2;
+  const centerY = (yMin + yMax) / 2;
+  const left = clampDimension(centerX - side / 2, sourceWidth);
+  const top = clampDimension(centerY - side / 2, sourceHeight);
+  const right = clampDimension(centerX + side / 2, sourceWidth);
+  const bottom = clampDimension(centerY + side / 2, sourceHeight);
+  const width = Math.max(1, Math.round(right - left));
+  const height = Math.max(1, Math.round(bottom - top));
+  return {
+    left: Math.max(0, Math.min(sourceWidth - 1, Math.round(left))),
+    top: Math.max(0, Math.min(sourceHeight - 1, Math.round(top))),
+    width: Math.min(width, sourceWidth),
+    height: Math.min(height, sourceHeight),
+  };
+}
+
+async function createReviewCrop(
+  orientedSourceBuffer: Buffer,
+  normalizedFaceBox: AutoMatcherFaceBox,
+  sourceWidth: number,
+  sourceHeight: number,
+) {
+  try {
+    const rect = buildReviewCropRect(normalizedFaceBox, sourceWidth, sourceHeight);
+    const buffer = await sharp(orientedSourceBuffer, { failOn: "error" })
+      .extract(rect)
+      .resize({
+        width: REVIEW_CROP_SIZE,
+        height: REVIEW_CROP_SIZE,
+        fit: "cover",
+        position: "centre",
+      })
+      .webp({ quality: 84 })
+      .toBuffer();
+
+    return {
+      derivativeKind: "review_square_256" as const,
+      contentType: "image/webp" as const,
+      data: buffer,
+      width: REVIEW_CROP_SIZE,
+      height: REVIEW_CROP_SIZE,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function downloadAsBase64(
   supabase: SupabaseClient,
   candidate: AutoMatcherCandidate,
@@ -370,17 +544,11 @@ async function downloadStorageRefAsBase64(
   }
 
   const downloadPromise = (async () => {
-    const { data, error } = await supabase.storage.from(ref.storageBucket).download(ref.storagePath);
-    if (error || !data) {
+    const sourceBuffer = await downloadStorageRefBuffer(supabase, ref);
+    if (!sourceBuffer) {
       return null;
     }
 
-    const bytes = await data.arrayBuffer();
-    if (bytes.byteLength === 0) {
-      return null;
-    }
-
-    const sourceBuffer = Buffer.from(bytes);
     const preprocessedBuffer = await preprocessImageForCompreFace(sourceBuffer, target);
     const encodedImage: DownloadedImage = {
       base64: preprocessedBuffer.toString("base64"),
@@ -460,35 +628,53 @@ function throwCompreFaceResponseError(
   );
 }
 
-function parseDetectionFaces(data: CompreFaceDetectionResponse | null): AutoMatcherMaterializedFace[] {
+async function parseDetectionFaces(
+  data: CompreFaceDetectionResponse | null,
+  preparedImage: PreparedMaterializationImage,
+): Promise<AutoMatcherMaterializedFace[]> {
   if (!data?.result || data.result.length === 0) {
     return [];
   }
 
   const faces: AutoMatcherMaterializedFace[] = [];
-  data.result.forEach((resultItem, index) => {
+  for (const [index, resultItem] of data.result.entries()) {
     const faceBox = normalizeFaceBox(resultItem.box);
     const embedding = normalizeEmbedding(resultItem.embedding);
     if (!faceBox || !embedding) {
-      return;
+      continue;
     }
+
+    const normalizedFaceBox = toNormalizedFaceBox(
+      faceBox,
+      preparedImage.processedWidth,
+      preparedImage.processedHeight,
+    );
+    const reviewCrop = normalizedFaceBox
+      ? await createReviewCrop(
+          preparedImage.orientedSourceBuffer,
+          normalizedFaceBox,
+          preparedImage.sourceWidth,
+          preparedImage.sourceHeight,
+        )
+      : null;
 
     faces.push({
       faceRank: index,
       providerFaceIndex: index,
       detectionProbability: faceBox.probability ?? null,
       faceBox,
+      normalizedFaceBox,
+      reviewCrop,
       embedding,
     });
-  });
+  }
 
   return faces;
 }
 
 async function detectFacesWithCompreFace(
-  image: string,
+  preparedImage: PreparedMaterializationImage,
   target: DownloadTarget,
-  byteSize: number,
   assetId: string,
 ): Promise<AutoMatcherMaterializationResult> {
   const config = getCompreFaceConfig();
@@ -498,7 +684,7 @@ async function detectFacesWithCompreFace(
   logCompreFaceDevelopment("detect_request", {
     assetId,
     target,
-    byteSize,
+    byteSize: preparedImage.byteSize,
   });
 
   try {
@@ -513,7 +699,7 @@ async function detectFacesWithCompreFace(
         "x-api-key": config.detectionApiKey,
       },
       body: JSON.stringify({
-        file: image,
+        file: preparedImage.base64,
       }),
       signal: controller.signal,
     });
@@ -523,6 +709,11 @@ async function detectFacesWithCompreFace(
       if (response.status === 422 || (response.status === 400 && isNoFaceDetectedMessage(parsedResponse.providerMessage))) {
         return {
           faces: [],
+          sourceImage: {
+            width: preparedImage.sourceWidth,
+            height: preparedImage.sourceHeight,
+            coordinateSpace: "oriented_original",
+          },
           providerMetadata: {
             provider: "compreface",
             providerMode: "detection",
@@ -536,7 +727,12 @@ async function detectFacesWithCompreFace(
 
     const responseData = (parsedResponse.responseBody as CompreFaceDetectionResponse | null) ?? null;
     return {
-      faces: parseDetectionFaces(responseData),
+      faces: await parseDetectionFaces(responseData, preparedImage),
+      sourceImage: {
+        width: preparedImage.sourceWidth,
+        height: preparedImage.sourceHeight,
+        coordinateSpace: "oriented_original",
+      },
       providerMetadata: {
         provider: "compreface",
         providerMode: "detection",
@@ -568,18 +764,100 @@ async function detectFacesWithCompreFace(
 
 function parseEmbeddingCompareSimilarities(
   data: CompreFaceEmbeddingVerifyResponse | null,
-  targetCount: number,
+  targetEmbeddings: number[][],
 ) {
-  const similarities = (data?.result ?? []).map((row) => normalizeConfidence(row.similarity));
-  while (similarities.length < targetCount) {
-    similarities.push(0);
+  if (targetEmbeddings.length === 0) {
+    return {
+      targetSimilarities: [],
+      usedFallback: false,
+      alignmentIssue: null,
+    } as const;
   }
-  return similarities.slice(0, targetCount);
+
+  if (targetEmbeddings.length === 1) {
+    return {
+      targetSimilarities: [normalizeConfidence(data?.result?.[0]?.similarity)],
+      usedFallback: false,
+      alignmentIssue: null,
+    } as const;
+  }
+
+  const requestIndicesByKey = new Map<string, number>();
+  targetEmbeddings.forEach((embedding, index) => {
+    const key = getEmbeddingKey(embedding);
+    if (!key) {
+      return;
+    }
+
+    if (requestIndicesByKey.has(key)) {
+      requestIndicesByKey.set(key, -1);
+      return;
+    }
+
+    requestIndicesByKey.set(key, index);
+  });
+
+  if ([...requestIndicesByKey.values()].some((index) => index < 0)) {
+    return {
+      targetSimilarities: null,
+      usedFallback: true,
+      alignmentIssue: "duplicate_request_target" as const,
+    } as const;
+  }
+
+  const targetSimilarities = new Array<number>(targetEmbeddings.length).fill(0);
+  const mappedIndices = new Set<number>();
+
+  for (const row of data?.result ?? []) {
+    const key = getEmbeddingKey(row.embedding);
+    if (!key) {
+      return {
+        targetSimilarities: null,
+        usedFallback: true,
+        alignmentIssue: "missing_response_embedding" as const,
+      } as const;
+    }
+
+    const requestIndex = requestIndicesByKey.get(key);
+    if (typeof requestIndex !== "number") {
+      return {
+        targetSimilarities: null,
+        usedFallback: true,
+        alignmentIssue: "unknown_response_embedding" as const,
+      } as const;
+    }
+
+    if (mappedIndices.has(requestIndex)) {
+      return {
+        targetSimilarities: null,
+        usedFallback: true,
+        alignmentIssue: "duplicate_response_embedding" as const,
+      } as const;
+    }
+
+    mappedIndices.add(requestIndex);
+    targetSimilarities[requestIndex] = normalizeConfidence(row.similarity);
+  }
+
+  if (mappedIndices.size !== targetEmbeddings.length) {
+    return {
+      targetSimilarities: null,
+      usedFallback: true,
+      alignmentIssue: "missing_response_rows" as const,
+    } as const;
+  }
+
+  return {
+    targetSimilarities,
+    usedFallback: false,
+    alignmentIssue: null,
+  } as const;
 }
 
-async function compareEmbeddingsWithCompreFace(
-  input: AutoMatcherEmbeddingCompareInput,
-): Promise<AutoMatcherEmbeddingCompareResult> {
+async function requestEmbeddingCompareWithCompreFace(
+  sourceEmbedding: number[],
+  targetEmbeddings: number[][],
+) {
   const config = getCompreFaceConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -593,8 +871,8 @@ async function compareEmbeddingsWithCompreFace(
         "x-api-key": config.verificationApiKey,
       },
       body: JSON.stringify({
-        source: input.sourceEmbedding,
-        targets: input.targetEmbeddings,
+        source: sourceEmbedding,
+        targets: targetEmbeddings,
       }),
       signal: controller.signal,
     });
@@ -604,15 +882,7 @@ async function compareEmbeddingsWithCompreFace(
       throwCompreFaceResponseError(response, parsedResponse.providerMessage, "compare_embeddings");
     }
 
-    const responseData = (parsedResponse.responseBody as CompreFaceEmbeddingVerifyResponse | null) ?? null;
-    return {
-      targetSimilarities: parseEmbeddingCompareSimilarities(responseData, input.targetEmbeddings.length),
-      providerMetadata: {
-        provider: "compreface",
-        providerMode: "verification_embeddings",
-        providerPluginVersions: null,
-      },
-    };
+    return (parsedResponse.responseBody as CompreFaceEmbeddingVerifyResponse | null) ?? null;
   } catch (error) {
     if (error instanceof MatcherProviderError) {
       throw error;
@@ -634,6 +904,42 @@ async function compareEmbeddingsWithCompreFace(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function compareEmbeddingsIndividuallyWithCompreFace(
+  input: AutoMatcherEmbeddingCompareInput,
+) {
+  return Promise.all(
+    input.targetEmbeddings.map(async (targetEmbedding) => {
+      const responseData = await requestEmbeddingCompareWithCompreFace(input.sourceEmbedding, [targetEmbedding]);
+      return normalizeConfidence(responseData?.result?.[0]?.similarity);
+    }),
+  );
+}
+
+async function compareEmbeddingsWithCompreFace(
+  input: AutoMatcherEmbeddingCompareInput,
+): Promise<AutoMatcherEmbeddingCompareResult> {
+  const responseData = await requestEmbeddingCompareWithCompreFace(input.sourceEmbedding, input.targetEmbeddings);
+  const parsed = parseEmbeddingCompareSimilarities(responseData, input.targetEmbeddings);
+
+  let targetSimilarities = parsed.targetSimilarities;
+  if (!targetSimilarities) {
+    logCompreFaceDevelopment("embedding_compare_alignment_fallback", {
+      targetCount: input.targetEmbeddings.length,
+      alignmentIssue: parsed.alignmentIssue,
+    });
+    targetSimilarities = await compareEmbeddingsIndividuallyWithCompreFace(input);
+  }
+
+  return {
+    targetSimilarities,
+    providerMetadata: {
+      provider: "compreface",
+      providerMode: "verification_embeddings",
+      providerPluginVersions: null,
+    },
+  };
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -800,12 +1106,11 @@ export function createCompreFaceAutoMatcher(): AutoMatcher {
     version: "compreface-v1",
     async materializeAssetFaces(input) {
       const supabase = getStorageClient(input.supabase);
-      const cache: DownloadCache = new Map();
-      const inFlightDownloads: DownloadInFlight = new Map();
-      const downloadedImage = await downloadStorageRefAsBase64(supabase, input.storage, input.assetType, cache, inFlightDownloads);
-      if (!downloadedImage) {
+      const sourceBuffer = await downloadStorageRefBuffer(supabase, input.storage);
+      if (!sourceBuffer) {
         return {
           faces: [],
+          sourceImage: null,
           providerMetadata: {
             provider: "compreface",
             providerMode: "detection",
@@ -814,7 +1119,8 @@ export function createCompreFaceAutoMatcher(): AutoMatcher {
         };
       }
 
-      return detectFacesWithCompreFace(downloadedImage.base64, input.assetType, downloadedImage.byteSize, input.assetId);
+      const preparedImage = await prepareImageForCompreFaceMaterialization(sourceBuffer, input.assetType);
+      return detectFacesWithCompreFace(preparedImage, input.assetType, input.assetId);
     },
     async compareEmbeddings(input) {
       return compareEmbeddingsWithCompreFace(input);

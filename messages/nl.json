@@ -1,0 +1,345 @@
+{
+  "common": {
+    "languageSwitch": {
+      "label": "Taal",
+      "ariaLabel": "Taalschakelaar"
+    }
+  },
+  "layout": {
+    "workspaceSetupIssueTitle": "Probleem met werkruimte-instelling",
+    "workspaceSetupIssueBody": "De werkruimte-lidmaatschap kon niet worden ingesteld. Meld je af, meld je opnieuw aan en probeer het opnieuw.",
+    "workspaceSetupIssueSupport": "Blijft dit misgaan, neem dan contact op met support met je account-e-mailadres en vraag om tenant bootstrap.",
+    "backToLogin": "Terug naar inloggen",
+    "appName": "SnapConsent Lite",
+    "workspace": "Werkruimte",
+    "signedIn": "Ingelogd",
+    "signOut": "Uitloggen"
+  },
+  "nav": {
+    "ariaPrimary": "Primaire navigatie",
+    "dashboard": "Dashboard",
+    "projects": "Projecten",
+    "templates": "Verklaringen"
+  },
+  "home": {
+    "title": "SnapConsent Lite",
+    "subtitle": "Toestemming verzamelen, projectuitnodigingen en fotokoppeling voor teams die een duidelijke workflow nodig hebben in plaats van losse mappen en links.",
+    "openAppTitle": "Open de app",
+    "openAppBody": "Log in om projecten, uitnodigingen, assets en gekoppelde toestemmingen te beheren.",
+    "signIn": "Inloggen",
+    "openDashboard": "Open dashboard",
+    "currentScopeTitle": "Huidige scope",
+    "currentScopeBody": "Deze build focust op projecten, toestemmingsuitnodigingen, headshots, handmatige fotokoppeling en interne face-matching workflows."
+  },
+  "login": {
+    "title": "Inloggen",
+    "subtitle": "Gebruik je Supabase e-mailadres en wachtwoord.",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Wachtwoord",
+    "submit": "Inloggen",
+    "backToHome": "Terug naar home",
+    "errors": {
+      "invalidCredentials": "Ongeldig e-mailadres of wachtwoord.",
+      "invalidInput": "Vul zowel e-mail als wachtwoord in.",
+      "fallback": "Inloggen mislukt."
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Beheer projecten, verstuur toestemmingsuitnodigingen en bekijk gekoppelde foto's vanuit één werkruimte.",
+    "openProjects": "Open projecten",
+    "recentProjectsTitle": "Recente projecten",
+    "viewAll": "Alles bekijken",
+    "recentProjectsEmpty": "Nog geen projecten. Maak er één aan om uitnodigingen te versturen.",
+    "createdOn": "Aangemaakt op {date}",
+    "openProject": "Open project",
+    "accountTitle": "Account",
+    "emailLabel": "E-mail",
+    "userIdLabel": "Gebruiker-ID",
+    "unknownValue": "onbekend",
+    "accountFooter": "Toestemmingsacties blijven tenant-scoped en beschermd door de server-sessie."
+  },
+  "projects": {
+    "list": {
+      "title": "Projecten",
+      "subtitle": "Organiseer fotografen, nodig personen uit en beheer gekoppelde projectfoto's vanaf één plek.",
+      "backToDashboard": "Terug naar dashboard",
+      "existingTitle": "Bestaande projecten",
+      "projectCount": "{count, plural, one {# project in deze werkruimte} other {# projecten in deze werkruimte}}",
+      "empty": "Nog geen projecten.",
+      "openProject": "Open project"
+    },
+    "create": {
+      "title": "Project maken",
+      "subtitle": "Zet een nieuwe werkruimte op voor uitnodigingen, toestemmingen en fotomatching.",
+      "nameLabel": "Naam",
+      "descriptionLabel": "Beschrijving",
+      "creating": "Bezig met maken...",
+      "submit": "Project maken"
+    },
+    "defaultTemplate": {
+      "title": "Standaard toestemmingsverklaring project",
+      "subtitle": "Kies de toestemmingsverklaring dat standaard geselecteerd moet zijn voor nieuwe uitnodigingen.",
+      "label": "Standaardverklaringen",
+      "noneOption": "Geen standaard",
+      "scopeStandard": "Standaard",
+      "scopeOrganization": "Organisatie",
+      "saving": "Bezig met opslaan...",
+      "submit": "Standaard opslaan"
+    },
+    "invites": {
+      "title": "Uitnodiging maken",
+      "subtitle": "Genereer een deelbare link naar een toestemmingsformulier voor één persoon.",
+      "templateLabel": "Toestemmingsverklaring",
+      "selectTemplatePlaceholder": "Selecteer een toestemmingsverklaring",
+      "templateScopeStandard": "Standaard",
+      "templateScopeOrganization": "Organisatie",
+      "selectTemplateError": "Selecteer eerst een toestemmingsverklaring voordat je een uitnodiging maakt.",
+      "noTemplatesAvailable": "Er zijn geen toestemmingsverklaringen beschikbaar.",
+      "inviteIdLabel": "Uitnodiging-ID:",
+      "expiresLabel": "Verloopt:",
+      "creating": "Bezig met maken...",
+      "submit": "Uitnodigings-URL maken",
+      "noExpiry": "Geen vervaldatum"
+    },
+    "inviteShare": {
+      "showUrl": "Toon URL",
+      "hideUrl": "Verberg URL",
+      "showQr": "Toon QR",
+      "hideQr": "Verberg QR",
+      "openForm": "Open formulier",
+      "inviteUrlLabel": "Uitnodigings-URL",
+      "qrAlt": "QR-code uitnodiging",
+      "qrError": "QR-code genereren mislukt."
+    },
+    "inviteActions": {
+      "revoke": "Uitnodigingslink verwijderen",
+      "revoking": "Bezig met intrekken..."
+    },
+    "matchingProgress": {
+      "title": "Matching voortgang",
+      "processed": "{processed} / {total} afbeeldingen verwerkt",
+      "degradedNotice": "Matching vereist aandacht. Automatische retries lopen of een vervolgactie is vastgelopen.",
+      "statusDegraded": "Matching gedegradeerd",
+      "statusStalled": "Matching vastgelopen",
+      "statusInProgress": "Matching bezig",
+      "statusIdle": "Matching inactief",
+      "percentComplete": "{value}% voltooid",
+      "updating": "Bijwerken..."
+    },
+    "assetsList": {
+      "searchPlaceholder": "Zoek op bestandsnaam",
+      "sortNewest": "Nieuwste eerst",
+      "sortOldest": "Oudste eerst",
+      "sortLargest": "Grootste bestand",
+      "sortSmallest": "Kleinste bestand",
+      "showCount": "Toon {count}",
+      "photoCount": "{count, plural, one {# foto} other {# foto's}}",
+      "showingZero": "0 resultaten",
+      "showingRange": "{start}-{end} van {total}",
+      "filterByPeople": "Filter op personen",
+      "filterHelp": "Toon foto's die gekoppeld zijn aan alle geselecteerde personen.",
+      "clearFilter": "Filter wissen",
+      "loading": "Assets laden...",
+      "empty": "Geen assets gevonden.",
+      "processingDisplay": "Weergave-afbeelding wordt nog verwerkt",
+      "unavailableDisplay": "Weergave-afbeelding is niet beschikbaar",
+      "addedOn": "Toegevoegd op {date}",
+      "linkedConsents": "Gekoppelde toestemmingen: {count}",
+      "previous": "Vorige",
+      "next": "Volgende",
+      "pageOf": "Pagina {page} van {total}"
+    },
+    "headshotReplace": {
+      "replace": "Headshot vervangen",
+      "replacing": "Headshot vervangen...",
+      "takePicture": "Maak een foto met camera",
+      "selectFile": "Bestand selecteren",
+      "success": "Headshot vervangen.",
+      "errors": {
+        "invalidHeadshot": "Deze afbeelding kan niet als headshot gebruikt worden.",
+        "createUpload": "Vervang-upload aanmaken mislukt.",
+        "fallback": "Headshot kan nu niet worden vervangen."
+      }
+    },
+    "detail": {
+      "defaultTemplateWarning": "De standaard toestemmingsverklaring is niet langer beschikbaar voor nieuwe uitnodigingen. Kies een nieuw gepubliceerde toestemmingsverklaring.",
+      "breadcrumbProjects": "Projecten",
+      "projectSectionsAria": "Projectsecties",
+      "sectionInvites": "Uitnodigingen",
+      "sectionAssets": "Assets",
+      "subtitle": "Beheer toestemmingsuitnodigingen, bekijk gegevens van personen en koppel projectfoto's aan ondertekende toestemmingen.",
+      "statsStatus": "Status",
+      "statsInvites": "Uitnodigingen",
+      "statsSignedConsents": "Ondertekende toestemmingen",
+      "invitesTitle": "Uitnodigingen",
+      "invitesSubtitle": "Verstuurde uitnodigingen, ondertekende toestemmingsdetails, headshots en handmatige matching staan hier.",
+      "unknownSubject": "Onbekende persoon",
+      "unknownEmail": "Onbekende e-mail",
+      "inviteIdLabel": "Uitnodiging-ID:",
+      "templateLabel": "Toestemmingsverklaring:",
+      "unknownValue": "Onbekend",
+      "inviteUsageLine": "{status} - gebruikt {usedCount}/{maxUses}",
+      "expiresLabel": "Verloopt:",
+      "noneValue": "Geen",
+      "headshotAlt": "Headshot van {fullName}",
+      "subjectFallback": "persoon",
+      "viewConsentDetails": "Toon toestemmingsdetails",
+      "subjectNameLabel": "Naam persoon",
+      "subjectEmailLabel": "E-mail persoon",
+      "signedAtLabel": "Ondertekend op",
+      "consentVersionLabel": "Toestemmingsversie",
+      "consentTextLabel": "Toestemmingstekst",
+      "facialMatchingLabel": "Facial matching",
+      "enabledValue": "Ingeschakeld",
+      "disabledValue": "Uitgeschakeld",
+      "headshotStatusLabel": "Headshot-status",
+      "headshotLinked": "Gekoppeld",
+      "headshotMissing": "Ontbreekt",
+      "notApplicableValue": "Niet van toepassing",
+      "headshotPreviewLabel": "Headshot-preview",
+      "noInvitesYet": "Nog geen uitnodigingen.",
+      "assetsTitle": "Assets",
+      "assetsSubtitle": "Upload projectfoto's, filter grote verzamelingen en bekijk gekoppelde personen."
+    }
+  },
+  "publicInvite": {
+    "title": "Toestemmingsformulier",
+    "projectLine": "Project: {projectName} · Uitnodigingsstatus: {status}",
+    "expiresOn": "Verloopt: {date}",
+    "lookupLabel": "Uitnodiging opzoeken",
+    "success": "Toestemming succesvol verzonden.",
+    "duplicate": "Deze uitnodiging is al verzonden.",
+    "receiptQueued": "Toestemming opgeslagen. Ontvangstmail wordt opnieuw geprobeerd.",
+    "cannotSubmit": "Deze uitnodiging accepteert geen nieuwe inzendingen.",
+    "backToHome": "Terug naar home",
+    "errors": {
+      "invalid": "Deze uitnodigingslink is ongeldig.",
+      "expired": "Deze uitnodigingslink is verlopen.",
+      "unavailable": "Deze uitnodiging is al gebruikt.",
+      "server": "Toestemming kan nu niet worden verzonden. Probeer opnieuw.",
+      "headshot_required": "Facial matching vereist een geldige geüploade headshot voordat toestemming kan worden verzonden.",
+      "fallback": "Deze uitnodiging kan niet worden verwerkt."
+    },
+    "form": {
+      "fullNameLabel": "Volledige naam",
+      "emailLabel": "E-mail",
+      "faceMatchOptIn": "Ik geef toestemming voor facial matching om foto's waarop ik sta te koppelen.",
+      "headshotRequiredTitle": "Headshot vereist",
+      "headshotRequiredBody": "Je headshot wordt privé opgeslagen voor facial matching binnen dit project en wordt automatisch verwijderd na de bewaartermijn.",
+      "uploadHeadshot": "Headshot uploaden",
+      "uploadingHeadshot": "Headshot uploaden...",
+      "takePicture": "Maak een foto met camera",
+      "selectFile": "Bestand selecteren",
+      "selectedFile": "Geselecteerd: {filename}",
+      "headshotReady": "Headshot klaar voor inzenden van toestemming.",
+      "consentTextTitle": "Toestemmingstekst ({version})",
+      "unknownVersion": "onbekend",
+      "consentTextUnavailable": "Toestemmingsverklaring niet beschikbaar.",
+      "submit": "Toestemming verzenden",
+      "success": {
+        "headshotUploaded": "Headshot succesvol geüpload."
+      },
+      "errors": {
+        "enableFaceMatchBeforeUpload": "Schakel toestemming voor facial matching in voordat je een headshot uploadt.",
+        "skipUpload": "Deze headshot kan niet worden geüpload. Kies een andere afbeelding.",
+        "prepareUpload": "Headshot-upload voorbereiden mislukt.",
+        "uploadNow": "Headshot kan nu niet worden geüpload.",
+        "headshotRequiredBeforeSubmit": "Upload een headshot voordat je verzendt wanneer facial matching is ingeschakeld."
+      }
+    }
+  },
+  "publicRevoke": {
+    "title": "Toestemming intrekken",
+    "subtitle": "Gebruik deze pagina om toekomstige verwerking van je toestemming in te trekken.",
+    "reasonLabel": "Reden (optioneel)",
+    "submit": "Toestemming intrekken",
+    "backToHome": "Terug naar home",
+    "messages": {
+      "revoked": "Toestemming succesvol ingetrokken.",
+      "already": "Toestemming was al ingetrokken.",
+      "invalid": "Deze intrek-link is ongeldig.",
+      "expired": "Deze intrek-link is verlopen."
+    }
+  },
+  "templates": {
+    "status": {
+      "draft": "Concept",
+      "published": "Gepubliceerd",
+      "archived": "Gearchiveerd"
+    },
+    "list": {
+      "title": "Verklaringen",
+      "subtitle": "Maak, publiceer en beheer de toestemmingsverklaringen die in je projecten worden gebruikt.",
+      "orgTemplatesTitle": "Organisatieverklaringen",
+      "orgTemplatesSubtitle": "Concepten, gepubliceerde versies en archiefgeschiedenis voor deze werkruimte.",
+      "orgTemplatesEmpty": "Nog geen organisatiesverklaringen.",
+      "updatedOn": "Bijgewerkt {date}",
+      "appTemplatesTitle": "Standaard app-verklaringen",
+      "appTemplatesSubtitle": "Centraal beheerde verklaringen die direct in je projecten gebruikt kunnen worden.",
+      "appTemplatesEmpty": "Er zijn geen standaard verklaringen beschikbaar."
+    },
+    "create": {
+      "title": "Nieuwe toestemmingsverklaring",
+      "subtitle": "Maak een concept toestemmingsverklaring voor deze organisatie.",
+      "nameLabel": "Naam",
+      "categoryLabel": "Categorie",
+      "categoryPlaceholder": "volwassene, minderjarige-ouder, campagne",
+      "descriptionLabel": "Beschrijving",
+      "bodyLabel": "Inhoud",
+      "creating": "Bezig met maken...",
+      "submit": "Concept maken"
+    },
+    "detail": {
+      "breadcrumbTemplates": "Verklaringen",
+      "scopeApp": "Standaard app-Verklaring",
+      "scopeOrganization": "Organisatiesverklaringen",
+      "categoryLabel": "Categorie",
+      "uncategorized": "Zonder categorie",
+      "updatedLabel": "Bijgewerkt",
+      "publishedLabel": "Gepubliceerd",
+      "notPublished": "Niet gepubliceerd",
+      "nameField": "Naam",
+      "categoryField": "Categorie",
+      "descriptionField": "Beschrijving",
+      "bodyField": "Inhoud",
+      "saving": "Opslaan...",
+      "saveDraft": "Concept opslaan",
+      "publishing": "Publiceren...",
+      "publish": "Publiceren",
+      "archiving": "Archiveren...",
+      "archive": "Archiveren",
+      "creatingVersion": "Maken...",
+      "createVersion": "Nieuwe versie maken"
+    }
+  },
+  "errors": {
+    "generic": "Er ging iets mis. Probeer het opnieuw.",
+    "codes": {
+      "invalid_body": "Ongeldige aanvraag.",
+      "invalid_input": "Controleer je invoer.",
+      "invalid_credentials": "Ongeldig e-mailadres of wachtwoord.",
+      "invalid_idempotency_key": "Aanvraag kon niet verwerkt worden. Probeer opnieuw.",
+      "unauthenticated": "Je moet eerst inloggen.",
+      "no_tenant_membership": "Werkruimte-lidmaatschap is vereist.",
+      "project_not_found": "Project niet gevonden.",
+      "template_not_found": "Toestemmingsverklaring niet gevonden.",
+      "invite_not_found": "Uitnodiging niet gevonden.",
+      "invite_not_revokable": "Uitnodiging kan niet verwijderd worden.",
+      "consent_not_found": "Toestemming niet gevonden.",
+      "consent_revoked": "Ingetrokken toestemmingen kunnen geen nieuwe koppelingen ontvangen.",
+      "asset_not_found": "Asset niet gevonden.",
+      "file_too_large": "Bestand is te groot.",
+      "files_too_large": "Er zijn te veel bestanden opgegeven.",
+      "invalid_asset_type": "Ongeldig asset-type.",
+      "invalid_filename": "Bestandsnaam is verplicht.",
+      "invalid_content_type": "Niet-ondersteund bestandstype.",
+      "invalid_file_size": "Ongeldige bestandsgrootte.",
+      "project_create_failed": "Project maken mislukt.",
+      "invite_revoke_failed": "Uitnodiging verwijderen mislukt.",
+      "signed_url_failed": "Upload-URL maken mislukt.",
+      "upload_failed": "Upload mislukt.",
+      "headshot_replace_failed": "Headshot vervangen mislukt."
+    }
+  }
+}

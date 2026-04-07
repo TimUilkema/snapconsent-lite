@@ -2,9 +2,11 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
+import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 
 type Props = {
   projectId: string;
@@ -54,6 +56,8 @@ function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: 
 }
 
 export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
+  const t = useTranslations("projects.headshotReplace");
+  const tErrors = useTranslations("errors");
   const router = useRouter();
   const cameraRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -87,21 +91,21 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
       });
 
       const createPayload = (await createResponse.json().catch(() => null)) as
-        | (CreateAssetResponse & { message?: string })
+        | (CreateAssetResponse & { error?: string; message?: string })
         | null;
 
       if (!createResponse.ok || !createPayload) {
-        setError(createPayload?.message ?? "Unable to create replacement upload.");
+        setError(resolveLocalizedApiError(tErrors, createPayload, "generic"));
         return;
       }
 
       if ("skipUpload" in createPayload && createPayload.skipUpload) {
-        setError("Unable to replace headshot with this image.");
+        setError(t("errors.invalidHeadshot"));
         return;
       }
 
       if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
-        setError("Unable to create replacement upload.");
+        setError(t("errors.createUpload"));
         return;
       }
 
@@ -121,9 +125,9 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
 
       if (!finalizeResponse.ok) {
         const finalizePayload = (await finalizeResponse.json().catch(() => null)) as
-          | { message?: string }
+          | { error?: string; message?: string }
           | null;
-        setError(finalizePayload?.message ?? "Unable to finalize replacement upload.");
+        setError(resolveLocalizedApiError(tErrors, finalizePayload, "generic"));
         return;
       }
 
@@ -134,19 +138,19 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
       });
 
       const replacePayload = (await replaceResponse.json().catch(() => null)) as
-        | { message?: string }
+        | { error?: string; message?: string }
         | null;
 
       if (!replaceResponse.ok) {
-        setError(replacePayload?.message ?? "Unable to replace headshot.");
+        setError(resolveLocalizedApiError(tErrors, replacePayload, "generic"));
         return;
       }
 
       setProgressPercent(100);
-      setSuccess("Headshot replaced.");
+      setSuccess(t("success"));
       router.refresh();
     } catch {
-      setError("Unable to replace headshot right now.");
+      setError(t("errors.fallback"));
     } finally {
       setIsReplacing(false);
     }
@@ -197,7 +201,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
         }}
         className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
-        {isReplacing ? "Replacing headshot..." : "Replace headshot"}
+        {isReplacing ? t("replacing") : t("replace")}
       </button>
       {showSourcePicker ? (
         <div className="flex flex-wrap gap-2">
@@ -213,7 +217,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
               }
             }}
           >
-            Take picture with camera
+            {t("takePicture")}
           </button>
           <button
             type="button"
@@ -227,7 +231,7 @@ export function ConsentHeadshotReplaceControl({ projectId, consentId }: Props) {
               }
             }}
           >
-            Select file
+            {t("selectFile")}
           </button>
         </div>
       ) : null}

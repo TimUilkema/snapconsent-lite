@@ -1,7 +1,11 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
-import { clearConsentPhotoSuppressions } from "@/lib/matching/consent-photo-matching";
+import {
+  clearConsentAutoPhotoFaceLinks,
+  clearConsentPhotoSuppressions,
+} from "@/lib/matching/consent-photo-matching";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -18,19 +22,21 @@ type ReplaceHeadshotBody = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const supabase = await createClient();
+    const authSupabase = await createClient();
     const {
       data: { user },
-    } = await supabase.auth.getUser();
+    } = await authSupabase.auth.getUser();
 
     if (!user) {
       throw new HttpError(401, "unauthenticated", "Authentication required.");
     }
 
-    const tenantId = await resolveTenantId(supabase);
+    const tenantId = await resolveTenantId(authSupabase);
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
+
+    const supabase = createAdminClient();
 
     const { projectId, consentId } = await context.params;
     const body = (await request.json().catch(() => null)) as ReplaceHeadshotBody | null;
@@ -163,6 +169,12 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     await clearConsentPhotoSuppressions({
+      supabase,
+      tenantId,
+      projectId,
+      consentId,
+    });
+    await clearConsentAutoPhotoFaceLinks({
       supabase,
       tenantId,
       projectId,

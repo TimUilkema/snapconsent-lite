@@ -1,0 +1,345 @@
+{
+  "common": {
+    "languageSwitch": {
+      "label": "Language",
+      "ariaLabel": "Language switch"
+    }
+  },
+  "layout": {
+    "workspaceSetupIssueTitle": "Workspace setup issue",
+    "workspaceSetupIssueBody": "Unable to set up your workspace membership. Sign out and sign in again, then retry.",
+    "workspaceSetupIssueSupport": "If it keeps failing, contact support with your account email and request tenant bootstrap.",
+    "backToLogin": "Back to login",
+    "appName": "SnapConsent Lite",
+    "workspace": "Workspace",
+    "signedIn": "Signed in",
+    "signOut": "Sign out"
+  },
+  "nav": {
+    "ariaPrimary": "Primary navigation",
+    "dashboard": "Dashboard",
+    "projects": "Projects",
+    "templates": "Templates"
+  },
+  "home": {
+    "title": "SnapConsent Lite",
+    "subtitle": "Consent collection, project invites, and photo linking for teams that need a clear workflow instead of a patchwork of folders and links.",
+    "openAppTitle": "Open the app",
+    "openAppBody": "Sign in to manage projects, invites, assets, and linked consents.",
+    "signIn": "Sign in",
+    "openDashboard": "Open dashboard",
+    "currentScopeTitle": "Current scope",
+    "currentScopeBody": "This build focuses on projects, consent invites, subject headshots, manual photo linking, and internal face-matching workflows."
+  },
+  "login": {
+    "title": "Sign in",
+    "subtitle": "Use your Supabase email and password.",
+    "emailLabel": "Email",
+    "passwordLabel": "Password",
+    "submit": "Sign in",
+    "backToHome": "Back to home",
+    "errors": {
+      "invalidCredentials": "Invalid email or password.",
+      "invalidInput": "Enter both email and password.",
+      "fallback": "Unable to sign in."
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Manage projects, send consent invites, and review linked photos from one workspace.",
+    "openProjects": "Open projects",
+    "recentProjectsTitle": "Recent projects",
+    "viewAll": "View all",
+    "recentProjectsEmpty": "No projects yet. Create one to start sending invites.",
+    "createdOn": "Created {date}",
+    "openProject": "Open project",
+    "accountTitle": "Account",
+    "emailLabel": "Email",
+    "userIdLabel": "User ID",
+    "unknownValue": "unknown",
+    "accountFooter": "Consent operations stay tenant-scoped and protected by the server session."
+  },
+  "projects": {
+    "list": {
+      "title": "Projects",
+      "subtitle": "Organize photographers, invite subjects, and manage linked project photos from one place.",
+      "backToDashboard": "Back to dashboard",
+      "existingTitle": "Existing projects",
+      "projectCount": "{count, plural, one {# project in this workspace} other {# projects in this workspace}}",
+      "empty": "No projects yet.",
+      "openProject": "Open project"
+    },
+    "create": {
+      "title": "Create project",
+      "subtitle": "Set up a new workspace for invites, consents, and photo matching.",
+      "nameLabel": "Name",
+      "descriptionLabel": "Description",
+      "creating": "Creating...",
+      "submit": "Create project"
+    },
+    "defaultTemplate": {
+      "title": "Project default template",
+      "subtitle": "Choose the template that should be preselected for new invites.",
+      "label": "Default template",
+      "noneOption": "No default",
+      "scopeStandard": "Standard",
+      "scopeOrganization": "Organization",
+      "saving": "Saving...",
+      "submit": "Save default"
+    },
+    "invites": {
+      "title": "Create subject invite",
+      "subtitle": "Generate a shareable consent form link for one subject.",
+      "templateLabel": "Consent template",
+      "selectTemplatePlaceholder": "Select a template",
+      "templateScopeStandard": "Standard",
+      "templateScopeOrganization": "Organization",
+      "selectTemplateError": "Select a consent template before creating an invite.",
+      "noTemplatesAvailable": "No consent templates are available.",
+      "inviteIdLabel": "Invite ID:",
+      "expiresLabel": "Expires:",
+      "creating": "Creating...",
+      "submit": "Create invite URL",
+      "noExpiry": "No expiry"
+    },
+    "inviteShare": {
+      "showUrl": "Show URL",
+      "hideUrl": "Hide URL",
+      "showQr": "Show QR",
+      "hideQr": "Hide QR",
+      "openForm": "Open form",
+      "inviteUrlLabel": "Invite URL",
+      "qrAlt": "Invite QR code",
+      "qrError": "Unable to generate QR code."
+    },
+    "inviteActions": {
+      "revoke": "Remove invite link",
+      "revoking": "Revoking..."
+    },
+    "matchingProgress": {
+      "title": "Matching progress",
+      "processed": "{processed} / {total} images processed",
+      "degradedNotice": "Matching needs attention. Automatic retries are active or a continuation is stalled.",
+      "statusDegraded": "Matching degraded",
+      "statusStalled": "Matching stalled",
+      "statusInProgress": "Matching in progress",
+      "statusIdle": "Matching idle",
+      "percentComplete": "{value}% complete",
+      "updating": "Updating..."
+    },
+    "assetsList": {
+      "searchPlaceholder": "Search by filename",
+      "sortNewest": "Newest first",
+      "sortOldest": "Oldest first",
+      "sortLargest": "Largest file",
+      "sortSmallest": "Smallest file",
+      "showCount": "Show {count}",
+      "photoCount": "{count, plural, one {# photo} other {# photos}}",
+      "showingZero": "Showing 0 results",
+      "showingRange": "Showing {start}-{end} of {total}",
+      "filterByPeople": "Filter by people",
+      "filterHelp": "Show photos linked to all selected people.",
+      "clearFilter": "Clear filter",
+      "loading": "Loading assets...",
+      "empty": "No assets found.",
+      "processingDisplay": "Display image is still processing",
+      "unavailableDisplay": "Display image is unavailable",
+      "addedOn": "Added {date}",
+      "linkedConsents": "Linked consents: {count}",
+      "previous": "Previous",
+      "next": "Next",
+      "pageOf": "Page {page} of {total}"
+    },
+    "headshotReplace": {
+      "replace": "Replace headshot",
+      "replacing": "Replacing headshot...",
+      "takePicture": "Take picture with camera",
+      "selectFile": "Select file",
+      "success": "Headshot replaced.",
+      "errors": {
+        "invalidHeadshot": "Unable to replace headshot with this image.",
+        "createUpload": "Unable to create replacement upload.",
+        "fallback": "Unable to replace headshot right now."
+      }
+    },
+    "detail": {
+      "defaultTemplateWarning": "This project default template is no longer available for new invites. Choose a new published template.",
+      "breadcrumbProjects": "Projects",
+      "projectSectionsAria": "Project sections",
+      "sectionInvites": "Invites",
+      "sectionAssets": "Assets",
+      "subtitle": "Manage consent invites, review subject details, and match project photos to signed consents.",
+      "statsStatus": "Status",
+      "statsInvites": "Invites",
+      "statsSignedConsents": "Signed consents",
+      "invitesTitle": "Invites",
+      "invitesSubtitle": "Sent invites, signed consent details, headshots, and manual matching live here.",
+      "unknownSubject": "Unknown subject",
+      "unknownEmail": "Unknown email",
+      "inviteIdLabel": "Invite ID:",
+      "templateLabel": "Template:",
+      "unknownValue": "Unknown",
+      "inviteUsageLine": "{status} - uses {usedCount}/{maxUses}",
+      "expiresLabel": "Expires:",
+      "noneValue": "None",
+      "headshotAlt": "Headshot of {fullName}",
+      "subjectFallback": "subject",
+      "viewConsentDetails": "View consent details",
+      "subjectNameLabel": "Subject name",
+      "subjectEmailLabel": "Subject email",
+      "signedAtLabel": "Signed at",
+      "consentVersionLabel": "Consent version",
+      "consentTextLabel": "Consent text",
+      "facialMatchingLabel": "Facial matching",
+      "enabledValue": "Enabled",
+      "disabledValue": "Disabled",
+      "headshotStatusLabel": "Headshot status",
+      "headshotLinked": "Linked",
+      "headshotMissing": "Missing",
+      "notApplicableValue": "Not applicable",
+      "headshotPreviewLabel": "Headshot preview",
+      "noInvitesYet": "No invites yet.",
+      "assetsTitle": "Assets",
+      "assetsSubtitle": "Upload project photos, filter large collections, and inspect linked subjects."
+    }
+  },
+  "publicInvite": {
+    "title": "Consent form",
+    "projectLine": "Project: {projectName} · Invite status: {status}",
+    "expiresOn": "Expires: {date}",
+    "lookupLabel": "Invite lookup",
+    "success": "Consent submitted successfully.",
+    "duplicate": "This invite was already submitted.",
+    "receiptQueued": "Consent saved. Receipt email will be retried.",
+    "cannotSubmit": "This invite cannot accept new submissions.",
+    "backToHome": "Return to home",
+    "errors": {
+      "invalid": "This invite link is invalid.",
+      "expired": "This invite link has expired.",
+      "unavailable": "This invite has already been used.",
+      "server": "Unable to submit consent right now. Please try again.",
+      "headshot_required": "Facial matching requires a valid uploaded headshot before consent submission.",
+      "fallback": "Unable to process this invite."
+    },
+    "form": {
+      "fullNameLabel": "Full name",
+      "emailLabel": "Email",
+      "faceMatchOptIn": "I consent to facial matching to help link photos where I appear.",
+      "headshotRequiredTitle": "Headshot required",
+      "headshotRequiredBody": "Your headshot is stored privately for facial matching within this project and is automatically deleted after the retention period.",
+      "uploadHeadshot": "Upload headshot",
+      "uploadingHeadshot": "Uploading headshot...",
+      "takePicture": "Take picture with camera",
+      "selectFile": "Select file",
+      "selectedFile": "Selected: {filename}",
+      "headshotReady": "Headshot ready for consent submission.",
+      "consentTextTitle": "Consent text ({version})",
+      "unknownVersion": "unknown",
+      "consentTextUnavailable": "Consent template unavailable.",
+      "submit": "Submit consent",
+      "success": {
+        "headshotUploaded": "Headshot uploaded successfully."
+      },
+      "errors": {
+        "enableFaceMatchBeforeUpload": "Enable facial matching consent before uploading a headshot.",
+        "skipUpload": "Unable to upload this headshot. Please choose a different image.",
+        "prepareUpload": "Unable to prepare headshot upload.",
+        "uploadNow": "Unable to upload headshot right now.",
+        "headshotRequiredBeforeSubmit": "Upload a headshot before submitting when facial matching is enabled."
+      }
+    }
+  },
+  "publicRevoke": {
+    "title": "Revoke consent",
+    "subtitle": "Use this page to revoke future processing for your consent.",
+    "reasonLabel": "Reason (optional)",
+    "submit": "Revoke consent",
+    "backToHome": "Return to home",
+    "messages": {
+      "revoked": "Consent revoked successfully.",
+      "already": "Consent was already revoked.",
+      "invalid": "This revoke link is invalid.",
+      "expired": "This revoke link has expired."
+    }
+  },
+  "templates": {
+    "status": {
+      "draft": "Draft",
+      "published": "Published",
+      "archived": "Archived"
+    },
+    "list": {
+      "title": "Templates",
+      "subtitle": "Create, publish, and maintain the consent templates used in your projects.",
+      "orgTemplatesTitle": "Organization templates",
+      "orgTemplatesSubtitle": "Drafts, published versions, and archived history for this workspace.",
+      "orgTemplatesEmpty": "No organization templates yet.",
+      "updatedOn": "Updated {date}",
+      "appTemplatesTitle": "Standard app templates",
+      "appTemplatesSubtitle": "Centrally maintained templates that can be used directly in your projects.",
+      "appTemplatesEmpty": "No standard templates are available."
+    },
+    "create": {
+      "title": "New template",
+      "subtitle": "Create a draft template for this organization.",
+      "nameLabel": "Name",
+      "categoryLabel": "Category",
+      "categoryPlaceholder": "adult, minor-parent, campaign",
+      "descriptionLabel": "Description",
+      "bodyLabel": "Body",
+      "creating": "Creating...",
+      "submit": "Create draft"
+    },
+    "detail": {
+      "breadcrumbTemplates": "Templates",
+      "scopeApp": "Standard app template",
+      "scopeOrganization": "Organization template",
+      "categoryLabel": "Category",
+      "uncategorized": "Uncategorized",
+      "updatedLabel": "Updated",
+      "publishedLabel": "Published",
+      "notPublished": "Not published",
+      "nameField": "Name",
+      "categoryField": "Category",
+      "descriptionField": "Description",
+      "bodyField": "Body",
+      "saving": "Saving...",
+      "saveDraft": "Save draft",
+      "publishing": "Publishing...",
+      "publish": "Publish",
+      "archiving": "Archiving...",
+      "archive": "Archive",
+      "creatingVersion": "Creating...",
+      "createVersion": "Create new version"
+    }
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "codes": {
+      "invalid_body": "Invalid request.",
+      "invalid_input": "Please check your input.",
+      "invalid_credentials": "Invalid email or password.",
+      "invalid_idempotency_key": "Request could not be processed. Please retry.",
+      "unauthenticated": "You need to sign in first.",
+      "no_tenant_membership": "Workspace membership is required.",
+      "project_not_found": "Project not found.",
+      "template_not_found": "Template not found.",
+      "invite_not_found": "Invite not found.",
+      "invite_not_revokable": "Invite cannot be removed.",
+      "consent_not_found": "Consent not found.",
+      "consent_revoked": "Revoked consents cannot receive new assignments.",
+      "asset_not_found": "Asset not found.",
+      "file_too_large": "File is too large.",
+      "files_too_large": "Too many files were provided.",
+      "invalid_asset_type": "Invalid asset type.",
+      "invalid_filename": "File name is required.",
+      "invalid_content_type": "Unsupported file type.",
+      "invalid_file_size": "Invalid file size.",
+      "project_create_failed": "Unable to create project.",
+      "invite_revoke_failed": "Unable to remove invite.",
+      "signed_url_failed": "Unable to create upload URL.",
+      "upload_failed": "Upload failed.",
+      "headshot_replace_failed": "Unable to replace headshot."
+    }
+  }
+}

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { getAcceptedImageUploadAcceptValue } from "@/lib/assets/asset-image-policy";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
 import {
   clearProjectUploadManifest,
@@ -72,8 +73,6 @@ type UploadFailure = Error & {
   code?: string;
 };
 
-const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-
 function getBrowserStorage(): ProjectUploadStorageLike | null {
   if (typeof window === "undefined") {
     return null;
@@ -130,7 +129,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("upload_anyway");
 
-  const acceptValue = useMemo(() => ACCEPTED_TYPES.join(","), []);
+  const acceptValue = useMemo(() => getAcceptedImageUploadAcceptValue(), []);
 
   function setManifest(next: ProjectUploadManifest | null) {
     manifestRef.current = next;

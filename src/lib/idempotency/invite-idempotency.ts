@@ -63,9 +63,9 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
 
   const { data: template, error: templateError } = await input.supabase
     .from("consent_templates")
-    .select("id")
+    .select("id, tenant_id")
     .eq("id", input.consentTemplateId)
-    .eq("status", "active")
+    .eq("status", "published")
     .maybeSingle();
 
   if (templateError) {
@@ -74,6 +74,10 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
 
   if (!template) {
     throw new HttpError(400, "invalid_template", "Consent template is not available.");
+  }
+
+  if (template.tenant_id !== null && template.tenant_id !== input.tenantId) {
+    throw new HttpError(403, "template_forbidden", "Consent template is not available.");
   }
 
   const expiresAt = getExpiryDateIso();

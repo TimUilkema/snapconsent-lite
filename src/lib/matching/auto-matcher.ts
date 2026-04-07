@@ -24,6 +24,14 @@ export type AutoMatcherFaceBox = {
   probability?: number | null;
 };
 
+export type AutoMatcherFaceDerivative = {
+  derivativeKind: "review_square_256";
+  contentType: "image/webp";
+  data: Buffer;
+  width: number;
+  height: number;
+};
+
 export type AutoMatcherFaceEvidence = {
   similarity: number;
   sourceFaceBox?: AutoMatcherFaceBox | null;
@@ -44,6 +52,8 @@ export type AutoMatcherMaterializedFace = {
   providerFaceIndex?: number | null;
   detectionProbability?: number | null;
   faceBox: AutoMatcherFaceBox;
+  normalizedFaceBox?: AutoMatcherFaceBox | null;
+  reviewCrop?: AutoMatcherFaceDerivative | null;
   embedding: number[];
 };
 
@@ -58,6 +68,11 @@ export type AutoMatcherMaterializationInput = {
 
 export type AutoMatcherMaterializationResult = {
   faces: AutoMatcherMaterializedFace[];
+  sourceImage?: {
+    width: number;
+    height: number;
+    coordinateSpace: "oriented_original";
+  } | null;
   providerMetadata: AutoMatcherProviderMetadata;
 };
 
@@ -102,6 +117,7 @@ const stubAutoMatcher: AutoMatcher = {
   async materializeAssetFaces() {
     return {
       faces: [],
+      sourceImage: null,
       providerMetadata: {
         provider: "stub",
         providerMode: "detection",

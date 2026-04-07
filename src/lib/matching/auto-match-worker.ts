@@ -33,10 +33,12 @@ import {
   loadConsentHeadshotMaterialization,
   loadCurrentProjectConsentHeadshots,
   loadCurrentAssetFaceMaterialization,
+  shouldForceRematerializeCurrentMaterialization,
   type AssetFaceMaterializationFaceRow,
   type AssetFaceMaterializationRow,
 } from "@/lib/matching/face-materialization";
 import { ensureMaterializedFaceCompare } from "@/lib/matching/materialized-face-compare";
+import { reconcilePhotoFaceCanonicalStateForAsset } from "@/lib/matching/consent-photo-matching";
 import {
   getAutoMatcher,
   type AutoMatcher,
@@ -46,7 +48,7 @@ import {
   type AutoMatcherProviderMetadata,
 } from "@/lib/matching/auto-matcher";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
-import { chunkValues, runChunkedRead } from "@/lib/supabase/safe-in-filter";
+import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type ClaimedFaceMatchJobRow = {
   job_id: string;
@@ -839,27 +841,6 @@ function buildPairKey(assetId: string, consentId: string) {
   return `${assetId}:${consentId}`;
 }
 
-async function deleteAutoLinkPair(
-  supabase: SupabaseClient,
-  tenantId: string,
-  projectId: string,
-  assetId: string,
-  consentId: string,
-) {
-  const { error } = await supabase
-    .from("asset_consent_links")
-    .delete()
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("asset_id", assetId)
-    .eq("consent_id", consentId)
-    .eq("link_source", "auto");
-
-  if (error) {
-    throw new HttpError(500, "face_match_link_delete_failed", "Unable to remove stale auto consent links.");
-  }
-}
-
 async function deleteMatchCandidatePair(
   supabase: SupabaseClient,
   tenantId: string,
@@ -908,47 +889,6 @@ async function deleteStaleMatchResultFaceRows(
   }
 }
 
-async function loadCandidatePairRows(
-  supabase: SupabaseClient,
-  tenantId: string,
-  projectId: string,
-  assetIds: string[],
-  consentIds: string[],
-  table: "asset_consent_links" | "asset_consent_link_suppressions",
-  selectClause: string,
-  errorCode: string,
-  errorMessage: string,
-) {
-  const rows: Array<{
-    asset_id: string;
-    consent_id: string;
-    link_source?: string | null;
-  }> = [];
-
-  for (const assetIdChunk of chunkValues(assetIds)) {
-    for (const consentIdChunk of chunkValues(consentIds)) {
-      // safe-in-filter: worker pair-state lookups are batch-bounded and chunked on both dimensions.
-      const { data, error } = await supabase
-        .from(table)
-        .select(selectClause)
-        .eq("tenant_id", tenantId)
-        .eq("project_id", projectId)
-        .in("asset_id", assetIdChunk)
-        .in("consent_id", consentIdChunk);
-
-      if (error) {
-        throw new HttpError(500, errorCode, errorMessage);
-      }
-
-      rows.push(
-        ...((data ?? []) as unknown as Array<{ asset_id: string; consent_id: string; link_source?: string | null }>),
-      );
-    }
-  }
-
-  return rows;
-}
-
 async function applyAutoMatches(
   supabase: SupabaseClient,
   tenantId: string,
@@ -982,75 +922,14 @@ async function applyAutoMatches(
     }
   });
 
-  const assetIds = Array.from(new Set(candidates.map((candidate) => candidate.assetId)));
-  const consentIds = Array.from(new Set(candidates.map((candidate) => candidate.consentId)));
-  const existingLinks = await loadCandidatePairRows(
-    supabase,
-    tenantId,
-    projectId,
-    assetIds,
-    consentIds,
-    "asset_consent_links",
-    "asset_id, consent_id, link_source",
-    "face_match_link_lookup_failed",
-    "Unable to load existing consent links.",
-  );
-
-  const existingLinkSourceByPair = new Map<string, string>(
-    (existingLinks ?? [])
-      .filter((row): row is { asset_id: string; consent_id: string; link_source: string } => Boolean(row.link_source))
-      .map((row) => [`${row.asset_id}:${row.consent_id}`, row.link_source]),
-  );
-
-  const suppressedRows = await loadCandidatePairRows(
-    supabase,
-    tenantId,
-    projectId,
-    assetIds,
-    consentIds,
-    "asset_consent_link_suppressions",
-    "asset_id, consent_id",
-    "face_match_suppression_lookup_failed",
-    "Unable to load matching suppressions.",
-  );
-
-  const suppressedPairs = new Set(
-    (suppressedRows ?? [])
-      .map((row) => buildPairKey(row.asset_id, row.consent_id))
-      .filter((pairKey) => candidatePairs.has(pairKey)),
-  );
-
-  const manualPairs = new Set<string>();
-  existingLinkSourceByPair.forEach((linkSource, pairKey) => {
-    if (candidatePairs.has(pairKey) && linkSource === "manual") {
-      manualPairs.add(pairKey);
-    }
-  });
-
   const nowIso = new Date().toISOString();
   const normalizedScores = Array.from(scoreByPair.values());
   const aboveThresholdPairs = Array.from(scoreByPair.values()).filter(
     (match) => match.confidence >= confidenceThreshold,
   ).length;
-  const upsertRows = normalizedScores
-    .filter((match) => match.confidence >= confidenceThreshold)
-    .filter((match) => !suppressedPairs.has(buildPairKey(match.assetId, match.consentId)))
-    .filter((match) => existingLinkSourceByPair.get(buildPairKey(match.assetId, match.consentId)) !== "manual")
-    .map((match) => ({
-      tenant_id: tenantId,
-      project_id: projectId,
-      asset_id: match.assetId,
-      consent_id: match.consentId,
-      link_source: "auto",
-      match_confidence: match.confidence,
-      matched_at: nowIso,
-      matcher_version: matcherVersion,
-    }));
 
   const candidateRows = normalizedScores
     .filter((match) => match.confidence >= reviewMinConfidence && match.confidence < confidenceThreshold)
-    .filter((match) => !suppressedPairs.has(buildPairKey(match.assetId, match.consentId)))
-    .filter((match) => existingLinkSourceByPair.get(buildPairKey(match.assetId, match.consentId)) !== "manual")
     .map((match) => ({
       tenant_id: tenantId,
       project_id: projectId,
@@ -1063,16 +942,6 @@ async function applyAutoMatches(
       updated_at: nowIso,
     }));
 
-  if (upsertRows.length > 0) {
-    const { error: upsertError } = await supabase.from("asset_consent_links").upsert(upsertRows, {
-      onConflict: "asset_id,consent_id",
-    });
-
-    if (upsertError) {
-      throw new HttpError(500, "face_match_link_upsert_failed", "Unable to write auto consent links.");
-    }
-  }
-
   if (candidateRows.length > 0) {
     const { error: candidateUpsertError } = await supabase.from("asset_consent_match_candidates").upsert(candidateRows, {
       onConflict: "asset_id,consent_id",
@@ -1083,45 +952,17 @@ async function applyAutoMatches(
     }
   }
 
-  const staleAutoPairKeys = new Set<string>();
-  normalizedScores
-    .filter((match) => match.confidence < confidenceThreshold)
-    .forEach((match) => {
-      const pairKey = buildPairKey(match.assetId, match.consentId);
-      if (existingLinkSourceByPair.get(pairKey) === "auto") {
-        staleAutoPairKeys.add(pairKey);
-      }
-    });
-
-  suppressedPairs.forEach((pairKey) => {
-    if (existingLinkSourceByPair.get(pairKey) === "auto") {
-      staleAutoPairKeys.add(pairKey);
-    }
-  });
-
   const candidateDeletePairKeys = new Set<string>();
   normalizedScores
     .filter((match) => match.confidence < reviewMinConfidence || match.confidence >= confidenceThreshold)
     .forEach((match) => {
       candidateDeletePairKeys.add(buildPairKey(match.assetId, match.consentId));
     });
-  manualPairs.forEach((pairKey) => {
-    candidateDeletePairKeys.add(pairKey);
-  });
-  suppressedPairs.forEach((pairKey) => {
-    candidateDeletePairKeys.add(pairKey);
-  });
 
   const resultRows = normalizedScores
     .map((match) => {
-      const pairKey = buildPairKey(match.assetId, match.consentId);
       let decision: MatchResultDecision = "below_review_band";
-
-      if (manualPairs.has(pairKey)) {
-        decision = "skipped_manual";
-      } else if (suppressedPairs.has(pairKey)) {
-        decision = "skipped_suppressed";
-      } else if (match.confidence >= confidenceThreshold) {
+      if (match.confidence >= confidenceThreshold) {
         decision = "auto_link_upserted";
       } else if (match.confidence >= reviewMinConfidence) {
         decision = "candidate_upserted";
@@ -1171,7 +1012,7 @@ async function applyAutoMatches(
 
   let persistedFaceEvidenceCount = 0;
   if (persistResults && persistFaceEvidence && boundedResultRows.length > 0) {
-    const decisionsInScope = new Set<MatchResultDecision>(["auto_link_upserted", "skipped_manual"]);
+    const decisionsInScope = new Set<MatchResultDecision>(["auto_link_upserted"]);
     const faceRows: Array<{
       job_id: string;
       asset_id: string;
@@ -1261,20 +1102,8 @@ async function applyAutoMatches(
   }
 
   let actionTaken = "no_write";
-  if (upsertRows.length > 0 && staleAutoPairKeys.size > 0 && candidateRows.length > 0) {
-    actionTaken = "upsert_auto_upsert_candidates_delete_stale_auto";
-  } else if (upsertRows.length > 0 && candidateRows.length > 0) {
-    actionTaken = "upsert_auto_upsert_candidates";
-  } else if (upsertRows.length > 0 && staleAutoPairKeys.size > 0) {
-    actionTaken = "upsert_and_delete_stale_auto";
-  } else if (candidateRows.length > 0 && staleAutoPairKeys.size > 0) {
-    actionTaken = "upsert_candidates_delete_stale_auto";
-  } else if (upsertRows.length > 0) {
-    actionTaken = "upsert_auto";
-  } else if (candidateRows.length > 0) {
+  if (candidateRows.length > 0) {
     actionTaken = "upsert_candidates";
-  } else if (staleAutoPairKeys.size > 0) {
-    actionTaken = "delete_stale_auto";
   } else if (candidateDeletePairKeys.size > 0) {
     actionTaken = "delete_candidates";
   }
@@ -1290,11 +1119,6 @@ async function applyAutoMatches(
     reviewMinConfidence,
     actionTaken,
   });
-
-  for (const pairKey of staleAutoPairKeys) {
-    const [assetId, consentId] = pairKey.split(":");
-    await deleteAutoLinkPair(supabase, tenantId, projectId, assetId, consentId);
-  }
 
   for (const pairKey of candidateDeletePairKeys) {
     const [assetId, consentId] = pairKey.split(":");
@@ -1655,6 +1479,14 @@ async function processMaterializeAssetFacesJob(
 
   const materializePayload = parseMaterializeAssetFacesPayload(job.payload);
   const materializerVersion = materializePayload.materializerVersion;
+  const currentMaterialization = await loadCurrentAssetFaceMaterialization(
+    supabase,
+    job.tenant_id,
+    job.project_id,
+    job.scope_asset_id,
+    materializerVersion,
+    { includeFaces: false },
+  );
   const ensured = await ensureAssetFaceMaterialization({
     supabase,
     matcher,
@@ -1663,6 +1495,9 @@ async function processMaterializeAssetFacesJob(
     assetId: job.scope_asset_id,
     materializerVersion,
     includeFaces: false,
+    forceRematerialize:
+      materializePayload.repairRequested &&
+      shouldForceRematerializeCurrentMaterialization(currentMaterialization?.materialization),
   });
 
   if (!ensured) {
@@ -1831,6 +1666,43 @@ async function processCompareMaterializedPairJob(
       resultsMaxPerJob,
       [match],
     );
+
+    const reviewMin = Math.min(reviewMinConfidence, confidenceThreshold);
+    if (
+      compare.compare.winning_asset_face_id &&
+      compare.compare.winning_similarity >= reviewMin &&
+      compare.compare.winning_similarity < confidenceThreshold
+    ) {
+      const { error: candidateUpdateError } = await supabase.from("asset_consent_match_candidates").upsert(
+        {
+          tenant_id: job.tenant_id,
+          project_id: job.project_id,
+          asset_id: job.scope_asset_id,
+          consent_id: job.scope_consent_id,
+          confidence: compare.compare.winning_similarity,
+          matcher_version: matcher.version,
+          source_job_type: job.job_type,
+          last_scored_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          winning_asset_face_id: compare.compare.winning_asset_face_id,
+          winning_asset_face_rank: compare.compare.winning_asset_face_rank,
+        },
+        {
+          onConflict: "asset_id,consent_id",
+        },
+      );
+
+      if (candidateUpdateError) {
+        throw new HttpError(500, "face_match_candidate_upsert_failed", "Unable to update likely-match candidates.");
+      }
+    }
+
+    await reconcilePhotoFaceCanonicalStateForAsset({
+      supabase,
+      tenantId: job.tenant_id,
+      projectId: job.project_id,
+      assetId: job.scope_asset_id,
+    });
   }
 
   return completeJobWithMetrics(

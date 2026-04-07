@@ -1,9 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
+import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 
 type PublicConsentFormProps = {
   token: string;
@@ -58,6 +60,8 @@ function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: 
 }
 
 export function PublicConsentForm({ token, consentText, consentVersion }: PublicConsentFormProps) {
+  const t = useTranslations("publicInvite.form");
+  const tErrors = useTranslations("errors");
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [faceMatchOptIn, setFaceMatchOptIn] = useState(false);
@@ -95,7 +99,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
   }
   async function uploadSelectedHeadshot(file: File) {
     if (!faceMatchOptIn) {
-      setError("Enable facial matching consent before uploading a headshot.");
+      setError(t("errors.enableFaceMatchBeforeUpload"));
       return;
     }
 
@@ -121,21 +125,21 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       });
 
       const createPayload = (await createResponse.json().catch(() => null)) as
-        | (CreateHeadshotResponse & { message?: string })
+        | (CreateHeadshotResponse & { error?: string; message?: string })
         | null;
 
       if (!createResponse.ok || !createPayload) {
-        setError(createPayload?.message ?? "Unable to prepare headshot upload.");
+        setError(resolveLocalizedApiError(tErrors, createPayload, "generic"));
         return;
       }
 
       if ("skipUpload" in createPayload && createPayload.skipUpload) {
-        setError("Unable to upload this headshot. Please choose a different image.");
+        setError(t("errors.skipUpload"));
         return;
       }
 
       if (!("signedUrl" in createPayload) || !("assetId" in createPayload)) {
-        setError("Unable to prepare headshot upload.");
+        setError(t("errors.prepareUpload"));
         return;
       }
 
@@ -153,17 +157,17 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
 
       if (!finalizeResponse.ok) {
         const finalizePayload = (await finalizeResponse.json().catch(() => null)) as
-          | { message?: string }
+          | { error?: string; message?: string }
           | null;
-        setError(finalizePayload?.message ?? "Unable to finalize headshot upload.");
+        setError(resolveLocalizedApiError(tErrors, finalizePayload, "generic"));
         return;
       }
 
       setHeadshotAssetId(createPayload.assetId);
-      setSuccess("Headshot uploaded successfully.");
+      setSuccess(t("success.headshotUploaded"));
       setProgressPercent(100);
     } catch {
-      setError("Unable to upload headshot right now.");
+      setError(t("errors.uploadNow"));
     } finally {
       setIsUploading(false);
     }
@@ -177,12 +181,12 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       onSubmit={(event) => {
         if (faceMatchOptIn && !headshotAssetId) {
           event.preventDefault();
-          setError("Upload a headshot before submitting when facial matching is enabled.");
+          setError(t("errors.headshotRequiredBeforeSubmit"));
         }
       }}
     >
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">Full name</span>
+        <span className="mb-1 block font-medium">{t("fullNameLabel")}</span>
         <input
           name="full_name"
           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
@@ -192,7 +196,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         />
       </label>
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">Email</span>
+        <span className="mb-1 block font-medium">{t("emailLabel")}</span>
         <input
           name="email"
           type="email"
@@ -224,15 +228,14 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
             }
           }}
         />
-        <span>I consent to facial matching to help link photos where I appear.</span>
+        <span>{t("faceMatchOptIn")}</span>
       </label>
 
       {faceMatchOptIn ? (
         <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-zinc-800">
-          <p className="font-medium">Headshot required</p>
+          <p className="font-medium">{t("headshotRequiredTitle")}</p>
           <p className="text-xs text-zinc-700">
-            Your headshot is stored privately for facial matching within this project and is
-            automatically deleted after the retention period.
+            {t("headshotRequiredBody")}
           </p>
           <input
             ref={cameraInputRef}
@@ -257,7 +260,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
             onClick={openHeadshotPicker}
             className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
           >
-            {isUploading ? "Uploading headshot..." : "Upload headshot"}
+            {isUploading ? t("uploadingHeadshot") : t("uploadHeadshot")}
           </button>
           {showSourcePicker ? (
             <div className="flex flex-wrap gap-2">
@@ -273,7 +276,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
                   }
                 }}
               >
-                Take picture with camera
+                {t("takePicture")}
               </button>
               <button
                 type="button"
@@ -287,15 +290,15 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
                   }
                 }}
               >
-                Select file
+                {t("selectFile")}
               </button>
             </div>
           ) : null}
           {selectedFile ? (
-            <p className="text-xs text-zinc-700">Selected: {selectedFile.name}</p>
+            <p className="text-xs text-zinc-700">{t("selectedFile", { filename: selectedFile.name })}</p>
           ) : null}
           {headshotAssetId ? (
-            <p className="text-xs text-emerald-700">Headshot ready for consent submission.</p>
+            <p className="text-xs text-emerald-700">{t("headshotReady")}</p>
           ) : null}
           {isUploading ? (
             <div className="space-y-1">
@@ -309,8 +312,8 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       ) : null}
 
       <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
-        <p className="font-medium">Consent text ({consentVersion ?? "unknown"})</p>
-        <p className="mt-2">{consentText ?? "Consent template unavailable."}</p>
+        <p className="font-medium">{t("consentTextTitle", { version: consentVersion ?? t("unknownVersion") })}</p>
+        <p className="mt-2">{consentText ?? t("consentTextUnavailable")}</p>
       </div>
 
       <input type="hidden" name="face_match_opt_in" value={faceMatchOptIn ? "1" : "0"} />
@@ -324,7 +327,7 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
         disabled={isUploading}
         className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
-        Submit Consent
+        {t("submit")}
       </button>
     </form>
   );

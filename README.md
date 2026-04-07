@@ -92,6 +92,30 @@ curl -X POST "$APP_ORIGIN/api/internal/matching/reconcile" \
   -d '{"lookbackMinutes":180,"batchSize":150}'
 ```
 
+## Internal Asset Derivative Jobs
+
+Project photo display derivatives are rendered asynchronously behind internal, token-protected endpoints.
+
+- Worker endpoint: `POST /api/internal/assets/worker`
+- Repair endpoint: `POST /api/internal/assets/repair`
+- Required env vars:
+  - `ASSET_DERIVATIVE_WORKER_TOKEN`
+  - `ASSET_DERIVATIVE_REPAIR_TOKEN`
+
+Example scheduler calls:
+
+```bash
+curl -X POST "$APP_ORIGIN/api/internal/assets/worker" \
+  -H "Authorization: Bearer $ASSET_DERIVATIVE_WORKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"batchSize":25}'
+
+curl -X POST "$APP_ORIGIN/api/internal/assets/repair" \
+  -H "Authorization: Bearer $ASSET_DERIVATIVE_REPAIR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"limit":250}'
+```
+
 ## Real Face Matcher (Feature 011)
 
 Feature 011 adds a real matcher provider behind the existing matching worker architecture.

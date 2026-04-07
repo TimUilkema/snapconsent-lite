@@ -1,7 +1,16 @@
 import { createAssetWithIdempotency } from "@/lib/assets/create-asset";
 import { normalizeSubjectRelation } from "@/lib/assets/normalize-subject-relation";
-import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
+import {
+  resolveSignedAssetDisplayUrlsForAssets,
+  signThumbnailUrlsForAssets,
+} from "@/lib/assets/sign-asset-thumbnails";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import {
+  listLinkedFaceOverlaysForAssetIds,
+  listPhotoConsentAssignmentsForAssetIds,
+} from "@/lib/matching/consent-photo-matching";
+import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -42,37 +51,11 @@ type AssetRow = {
   storage_path: string | null;
 };
 
-type AssetConsentLinkRow = {
-  asset_id: string;
-  consent_id: string;
-  consents:
-    | {
-        id: string;
-        subjects:
-          | {
-              email: string;
-              full_name: string;
-            }
-          | {
-              email: string;
-              full_name: string;
-            }[]
-          | null;
-      }
-    | {
-        id: string;
-        subjects:
-          | {
-              email: string;
-              full_name: string;
-            }
-          | {
-              email: string;
-              full_name: string;
-            }[]
-          | null;
-      }[]
-    | null;
+type HeadshotAssetRow = {
+  id: string;
+  status: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
 };
 
 type ConsentFilterOptionRow = {
@@ -162,22 +145,22 @@ function parseDuplicatePolicy(value: unknown): DuplicatePolicy {
 }
 
 async function requireAuthAndScope(context: RouteContext) {
-  const supabase = await createClient();
+  const authSupabase = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await authSupabase.auth.getUser();
 
   if (!user) {
     throw new HttpError(401, "unauthenticated", "Authentication required.");
   }
 
-  const tenantId = await resolveTenantId(supabase);
+  const tenantId = await resolveTenantId(authSupabase);
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
 
   const { projectId } = await context.params;
-  return { supabase, tenantId, projectId, userId: user.id };
+  return { supabase: createAdminClient(), tenantId, projectId, userId: user.id };
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -220,23 +203,31 @@ export async function GET(request: Request, context: RouteContext) {
 
     let filteredAssetIds: string[] | null = null;
     if (selectedConsentIds.length > 0) {
-      const { data: filteredLinks, error: filteredLinksError } = await supabase
-        .from("asset_consent_links")
-        .select("asset_id, consent_id")
+      const { data: allPhotoIds, error: allPhotoIdsError } = await supabase
+        .from("assets")
+        .select("id")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
-        .in("consent_id", selectedConsentIds);
+        .eq("asset_type", "photo");
 
-      if (filteredLinksError) {
+      if (allPhotoIdsError) {
         throw new HttpError(500, "asset_filter_lookup_failed", "Unable to filter assets by selected people.");
       }
 
       const consentMatchMap = new Map<string, Set<string>>();
-      (filteredLinks ?? []).forEach((link) => {
-        const current = consentMatchMap.get(link.asset_id) ?? new Set<string>();
-        current.add(link.consent_id);
-        consentMatchMap.set(link.asset_id, current);
+      const filteredAssignments = await listPhotoConsentAssignmentsForAssetIds({
+        supabase,
+        tenantId,
+        projectId,
+        assetIds: ((allPhotoIds ?? []) as Array<{ id: string }>).map((row) => row.id),
       });
+      filteredAssignments
+        .filter((assignment) => selectedConsentIds.includes(assignment.consentId))
+        .forEach((assignment) => {
+          const current = consentMatchMap.get(assignment.assetId) ?? new Set<string>();
+          current.add(assignment.consentId);
+          consentMatchMap.set(assignment.assetId, current);
+        });
 
       filteredAssetIds = Array.from(consentMatchMap.entries())
         .filter(([, consentSet]) => consentSet.size === selectedConsentIds.length)
@@ -300,11 +291,18 @@ export async function GET(request: Request, context: RouteContext) {
     const assetIds = assetRows.map((asset) => asset.id);
 
     const requestHostHeader = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-    const thumbnailMap = await signThumbnailUrlsForAssets(supabase, assetRows);
-    const previewMap = await signThumbnailUrlsForAssets(supabase, assetRows, {
-      width: 1280,
-      quality: 85,
-      resize: "contain",
+    const thumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assetRows, {
+      tenantId,
+      projectId,
+      use: "thumbnail",
+      fallback: "transform",
+      enqueueMissingDerivative: true,
+    });
+    const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assetRows, {
+      tenantId,
+      projectId,
+      use: "preview",
+      fallback: "transform",
     });
 
     const assetLinkCountMap = new Map<string, number>();
@@ -312,48 +310,154 @@ export async function GET(request: Request, context: RouteContext) {
       string,
       Array<{ consentId: string; fullName: string | null; email: string | null }>
     >();
+    const assetLinkedFaceOverlayMap = new Map<
+      string,
+      Array<{
+        assetFaceId: string;
+        consentId: string;
+        fullName: string | null;
+        email: string | null;
+        headshotThumbnailUrl: string | null;
+        faceRank: number;
+        faceBoxNormalized: Record<string, number | null> | null;
+        linkSource: "manual" | "auto";
+        matchConfidence: number | null;
+      }>
+    >();
 
     if (assetIds.length > 0) {
-      const { data: links, error: linksError } = await supabase
-        .from("asset_consent_links")
-        .select("asset_id, consent_id, consents(id, subjects(email, full_name))")
-        .eq("tenant_id", tenantId)
-        .eq("project_id", projectId)
-        .in("asset_id", assetIds);
+      const assignments = await listPhotoConsentAssignmentsForAssetIds({
+        supabase,
+        tenantId,
+        projectId,
+        assetIds,
+      });
+      const linkedFaceOverlays = await listLinkedFaceOverlaysForAssetIds({
+        supabase,
+        tenantId,
+        projectId,
+        assetIds,
+      });
+      const consentIdsForLookup = Array.from(
+        new Set([
+          ...assignments.map((assignment) => assignment.consentId),
+          ...linkedFaceOverlays.map((overlay) => overlay.consentId),
+        ]),
+      );
+      const resolvedConsentSummaryById = new Map<string, { fullName: string | null; email: string | null }>();
+      if (consentIdsForLookup.length > 0) {
+        const consentDetails = await supabase
+          .from("consents")
+          .select("id, subjects(email, full_name)")
+          .eq("tenant_id", tenantId)
+          .eq("project_id", projectId)
+          .in("id", consentIdsForLookup);
 
-      if (linksError) {
-        throw new HttpError(500, "asset_link_lookup_failed", "Unable to load linked consent details.");
+        if (consentDetails.error) {
+          throw new HttpError(500, "asset_link_lookup_failed", "Unable to load linked consent details.");
+        }
+
+        ((consentDetails.data ?? []) as ConsentFilterOptionRow[]).forEach((consent) => {
+          const normalizedConsent: ConsentFilterOption = {
+            id: consent.id,
+            subjects: normalizeSubjectRelation(consent.subjects),
+          };
+          resolvedConsentSummaryById.set(normalizedConsent.id, {
+            fullName: normalizedConsent.subjects?.full_name?.trim() ?? null,
+            email: normalizedConsent.subjects?.email?.trim() ?? null,
+          });
+        });
+      }
+      const overlayConsentIds = Array.from(new Set(linkedFaceOverlays.map((overlay) => overlay.consentId)));
+      const headshotThumbnailUrlByConsentId = new Map<string, string | null>();
+
+      if (overlayConsentIds.length > 0) {
+        const currentHeadshots = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, {
+          optInOnly: false,
+          notRevokedOnly: false,
+          limit: null,
+        });
+        const headshotAssetIdByConsentId = new Map(
+          currentHeadshots
+            .filter((headshot) => overlayConsentIds.includes(headshot.consentId))
+            .map((headshot) => [headshot.consentId, headshot.headshotAssetId]),
+        );
+        const headshotAssetIds = Array.from(new Set(Array.from(headshotAssetIdByConsentId.values())));
+
+        if (headshotAssetIds.length > 0) {
+          const { data: headshotAssets, error: headshotAssetsError } = await supabase
+            .from("assets")
+            .select("id, status, storage_bucket, storage_path")
+            .eq("tenant_id", tenantId)
+            .eq("project_id", projectId)
+            .eq("asset_type", "headshot")
+            .eq("status", "uploaded")
+            .is("archived_at", null)
+            .in("id", headshotAssetIds);
+
+          if (headshotAssetsError) {
+            throw new HttpError(500, "asset_link_lookup_failed", "Unable to load linked consent headshots.");
+          }
+
+          const headshotAssetRows = (headshotAssets as HeadshotAssetRow[] | null) ?? [];
+          const headshotThumbnailMap = await signThumbnailUrlsForAssets(supabase, headshotAssetRows, {
+            width: 96,
+            height: 96,
+          });
+
+          headshotAssetIdByConsentId.forEach((headshotAssetId, consentId) => {
+            const signedUrl = headshotThumbnailMap.get(headshotAssetId) ?? null;
+            headshotThumbnailUrlByConsentId.set(
+              consentId,
+              signedUrl
+                ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+                : null,
+            );
+          });
+        }
       }
 
-      ((links as AssetConsentLinkRow[] | null) ?? []).forEach((link) => {
-        const currentCount = assetLinkCountMap.get(link.asset_id) ?? 0;
-        assetLinkCountMap.set(link.asset_id, currentCount + 1);
+      assignments.forEach((assignment) => {
+        const currentCount = assetLinkCountMap.get(assignment.assetId) ?? 0;
+        assetLinkCountMap.set(assignment.assetId, currentCount + 1);
 
-        const consentRow = Array.isArray(link.consents) ? link.consents[0] : link.consents;
-        if (!consentRow) {
-          return;
-        }
-        const subjectRow = Array.isArray(consentRow.subjects) ? (consentRow.subjects[0] ?? null) : consentRow.subjects;
-
-        const existingPeople = assetLinkedPeopleMap.get(link.asset_id) ?? [];
-        if (existingPeople.some((person) => person.consentId === consentRow.id)) {
+        const existingPeople = assetLinkedPeopleMap.get(assignment.assetId) ?? [];
+        if (existingPeople.some((person) => person.consentId === assignment.consentId)) {
           return;
         }
 
+        const summary = resolvedConsentSummaryById.get(assignment.consentId);
         existingPeople.push({
-          consentId: consentRow.id,
-          fullName: subjectRow?.full_name ?? null,
-          email: subjectRow?.email ?? null,
+          consentId: assignment.consentId,
+          fullName: summary?.fullName ?? null,
+          email: summary?.email ?? null,
         });
-        assetLinkedPeopleMap.set(link.asset_id, existingPeople);
+        assetLinkedPeopleMap.set(assignment.assetId, existingPeople);
+      });
+
+      linkedFaceOverlays.forEach((overlay) => {
+        const existing = assetLinkedFaceOverlayMap.get(overlay.assetId) ?? [];
+        const summary = resolvedConsentSummaryById.get(overlay.consentId);
+        existing.push({
+          assetFaceId: overlay.assetFaceId,
+          consentId: overlay.consentId,
+          fullName: summary?.fullName ?? null,
+          email: summary?.email ?? null,
+          headshotThumbnailUrl: headshotThumbnailUrlByConsentId.get(overlay.consentId) ?? null,
+          faceRank: overlay.faceRank,
+          faceBoxNormalized: overlay.faceBoxNormalized,
+          linkSource: overlay.linkSource,
+          matchConfidence: overlay.matchConfidence,
+        });
+        assetLinkedFaceOverlayMap.set(overlay.assetId, existing);
       });
     }
 
     return Response.json(
       {
         assets: assetRows.map((asset) => {
-          const thumbnailUrl = thumbnailMap.get(asset.id) ?? null;
-          const previewUrl = previewMap.get(asset.id) ?? null;
+          const thumbnail = thumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const preview = previewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
           return {
             id: asset.id,
             originalFilename: asset.original_filename,
@@ -361,14 +465,17 @@ export async function GET(request: Request, context: RouteContext) {
             fileSizeBytes: asset.file_size_bytes,
             createdAt: asset.created_at,
             uploadedAt: asset.uploaded_at,
-            thumbnailUrl: thumbnailUrl
-              ? resolveLoopbackStorageUrlForHostHeader(thumbnailUrl, requestHostHeader)
+            thumbnailUrl: thumbnail.url
+              ? resolveLoopbackStorageUrlForHostHeader(thumbnail.url, requestHostHeader)
               : null,
-            previewUrl: previewUrl
-              ? resolveLoopbackStorageUrlForHostHeader(previewUrl, requestHostHeader)
+            thumbnailState: thumbnail.state,
+            previewUrl: preview.url
+              ? resolveLoopbackStorageUrlForHostHeader(preview.url, requestHostHeader)
               : null,
+            previewState: preview.state,
             linkedConsentCount: assetLinkCountMap.get(asset.id) ?? 0,
             linkedPeople: assetLinkedPeopleMap.get(asset.id) ?? [],
+            linkedFaceOverlays: assetLinkedFaceOverlayMap.get(asset.id) ?? [],
           };
         }),
         totalCount: count ?? 0,

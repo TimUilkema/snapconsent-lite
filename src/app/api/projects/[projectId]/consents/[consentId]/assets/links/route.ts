@@ -1,12 +1,15 @@
 import { headers } from "next/headers";
 
-import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
+import { signFaceDerivativeUrls } from "@/lib/assets/sign-face-derivatives";
+import { resolveSignedAssetDisplayUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { loadFaceImageDerivativesForFaceIds } from "@/lib/matching/face-materialization";
 import {
-  linkPhotosToConsent,
   listLinkedPhotosForConsent,
-  unlinkPhotosFromConsent,
+  manualLinkPhotoToConsent,
+  manualUnlinkPhotoFromConsent,
 } from "@/lib/matching/consent-photo-matching";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -19,7 +22,10 @@ type RouteContext = {
 };
 
 type ModifyLinksBody = {
-  assetIds?: string[];
+  assetId?: string;
+  assetFaceId?: string;
+  mode?: "face" | "asset_fallback";
+  forceReplace?: boolean;
 };
 
 async function requireAuthAndScope(context: RouteContext) {
@@ -38,13 +44,22 @@ async function requireAuthAndScope(context: RouteContext) {
   }
 
   const { projectId, consentId } = await context.params;
-  return { supabase, tenantId, projectId, consentId };
+  return {
+    supabase: createAdminClient(),
+    tenantId,
+    projectId,
+    consentId,
+    userId: user.id,
+  };
 }
 
-function parseAssetIdsFromBody(body: ModifyLinksBody | null) {
-  return Array.isArray(body?.assetIds)
-    ? body.assetIds.filter((assetId) => typeof assetId === "string").map((assetId) => assetId.trim())
-    : [];
+function parseLinkBody(body: ModifyLinksBody | null) {
+  return {
+    assetId: String(body?.assetId ?? "").trim(),
+    assetFaceId: String(body?.assetFaceId ?? "").trim() || null,
+    mode: body?.mode === "face" || body?.mode === "asset_fallback" ? body.mode : "face",
+    forceReplace: body?.forceReplace === true,
+  };
 }
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -60,21 +75,33 @@ export async function GET(_request: Request, context: RouteContext) {
 
     const requestHeaders = await headers();
     const requestHostHeader = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
-    const thumbnailMap = await signThumbnailUrlsForAssets(supabase, assets, {
-      width: 240,
-      height: 240,
+    const thumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assets, {
+      tenantId,
+      projectId,
+      use: "thumbnail",
+      fallback: "transform",
+      enqueueMissingDerivative: true,
     });
-    const previewMap = await signThumbnailUrlsForAssets(supabase, assets, {
-      width: 960,
-      quality: 85,
-      resize: "contain",
+    const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assets, {
+      tenantId,
+      projectId,
+      use: "preview",
+      fallback: "transform",
     });
+    const linkedFaceIds = assets.map((asset) => asset.asset_face_id).filter((value): value is string => Boolean(value));
+    const faceDerivativeRows = await loadFaceImageDerivativesForFaceIds(
+      supabase,
+      tenantId,
+      projectId,
+      linkedFaceIds,
+    );
+    const linkedFaceCropMap = await signFaceDerivativeUrls(Array.from(faceDerivativeRows.values()));
 
     return Response.json(
       {
         assets: assets.map((asset) => {
-          const signedUrl = thumbnailMap.get(asset.id) ?? null;
-          const previewSignedUrl = previewMap.get(asset.id) ?? null;
+          const thumbnail = thumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const preview = previewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
           return {
             id: asset.id,
             originalFilename: asset.original_filename,
@@ -89,12 +116,25 @@ export async function GET(_request: Request, context: RouteContext) {
             matchedAt: asset.matched_at,
             reviewedAt: asset.reviewed_at,
             reviewedBy: asset.reviewed_by,
-            thumbnailUrl: signedUrl
-              ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+            linkMode: asset.link_mode,
+            assetFaceId: asset.asset_face_id,
+            faceRank: asset.face_rank,
+            detectedFaceCount: asset.detected_face_count,
+            linkedFaceCropUrl:
+              asset.asset_face_id && linkedFaceCropMap.get(asset.asset_face_id)
+                ? resolveLoopbackStorageUrlForHostHeader(
+                    linkedFaceCropMap.get(asset.asset_face_id) ?? "",
+                    requestHostHeader,
+                  )
+                : null,
+            thumbnailUrl: thumbnail.url
+              ? resolveLoopbackStorageUrlForHostHeader(thumbnail.url, requestHostHeader)
               : null,
-            previewUrl: previewSignedUrl
-              ? resolveLoopbackStorageUrlForHostHeader(previewSignedUrl, requestHostHeader)
+            thumbnailState: thumbnail.state,
+            previewUrl: preview.url
+              ? resolveLoopbackStorageUrlForHostHeader(preview.url, requestHostHeader)
               : null,
+            previewState: preview.state,
           };
         }),
       },
@@ -107,19 +147,48 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, userId } = await requireAuthAndScope(context);
     const body = (await request.json().catch(() => null)) as ModifyLinksBody | null;
-    const assetIds = parseAssetIdsFromBody(body);
+    const parsed = parseLinkBody(body);
+    if (!parsed.assetId) {
+      throw new HttpError(400, "invalid_body", "Asset ID is required.");
+    }
 
-    const result = await linkPhotosToConsent({
+    const result = await manualLinkPhotoToConsent({
       supabase,
       tenantId,
       projectId,
       consentId,
-      assetIds,
+      actorUserId: userId,
+      assetId: parsed.assetId,
+      assetFaceId: parsed.assetFaceId,
+      mode: parsed.mode,
+      forceReplace: parsed.forceReplace,
     });
 
-    return Response.json({ ok: true, linkedCount: result.linkedCount }, { status: 200 });
+    if (result.kind === "manual_conflict") {
+      return Response.json(
+        {
+          ok: false,
+          error: "manual_conflict",
+          message: "This face is already manually assigned to another consent.",
+          canForceReplace: result.canForceReplace,
+          currentAssignee: result.currentAssignee,
+        },
+        { status: 409 },
+      );
+    }
+
+    return Response.json(
+      {
+        ok: true,
+        linked: true,
+        mode: result.mode,
+        assetFaceId: result.assetFaceId,
+        replacedConsentId: "replacedConsentId" in result ? result.replacedConsentId : null,
+      },
+      { status: 200 },
+    );
   } catch (error) {
     return jsonError(error);
   }
@@ -127,19 +196,33 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, userId } = await requireAuthAndScope(context);
     const body = (await request.json().catch(() => null)) as ModifyLinksBody | null;
-    const assetIds = parseAssetIdsFromBody(body);
+    const parsed = parseLinkBody(body);
+    if (!parsed.assetId) {
+      throw new HttpError(400, "invalid_body", "Asset ID is required.");
+    }
 
-    const result = await unlinkPhotosFromConsent({
+    const result = await manualUnlinkPhotoFromConsent({
       supabase,
       tenantId,
       projectId,
       consentId,
-      assetIds,
+      actorUserId: userId,
+      assetId: parsed.assetId,
+      assetFaceId: parsed.assetFaceId,
+      mode: parsed.mode,
     });
 
-    return Response.json({ ok: true, unlinkedCount: result.unlinkedCount }, { status: 200 });
+    return Response.json(
+      {
+        ok: true,
+        unlinked: true,
+        mode: result.mode,
+        assetFaceId: result.assetFaceId,
+      },
+      { status: 200 },
+    );
   } catch (error) {
     return jsonError(error);
   }

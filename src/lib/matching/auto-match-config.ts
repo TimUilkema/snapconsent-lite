@@ -15,7 +15,7 @@ const DEFAULT_PROVIDER = "stub";
 const DEFAULT_PIPELINE_MODE = "materialized_apply";
 const MAX_RESULTS_PER_JOB = 5_000;
 const MATERIALIZER_VERSION = "face-materializer-v1";
-const COMPARE_VERSION = "embedding-compare-v1";
+const COMPARE_VERSION = "embedding-compare-v2";
 
 export type AutoMatchProvider = "stub" | "compreface";
 export type AutoMatchPipelineMode = "raw" | "materialized_shadow" | "materialized_apply";

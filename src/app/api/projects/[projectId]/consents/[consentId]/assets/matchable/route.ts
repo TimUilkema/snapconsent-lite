@@ -1,8 +1,9 @@
 import { headers } from "next/headers";
 
-import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
+import { resolveSignedAssetDisplayUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { listMatchableProjectPhotosForConsent } from "@/lib/matching/consent-photo-matching";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -22,6 +23,20 @@ function parseLimit(searchParams: URLSearchParams) {
 
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+}
+
+function parsePage(searchParams: URLSearchParams) {
+  const raw = searchParams.get("page");
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return null;
   }
 
@@ -55,31 +70,39 @@ export async function GET(request: Request, context: RouteContext) {
 
     const { projectId, consentId } = await context.params;
     const url = new URL(request.url);
-    const assets = await listMatchableProjectPhotosForConsent({
-      supabase,
+    const result = await listMatchableProjectPhotosForConsent({
+      supabase: createAdminClient(),
       tenantId,
       projectId,
       consentId,
       query: url.searchParams.get("q"),
       limit: parseLimit(url.searchParams),
+      page: parsePage(url.searchParams),
       mode: parseMode(url.searchParams),
     });
 
     const requestHeaders = await headers();
     const requestHostHeader = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
 
-    const thumbnailMap = await signThumbnailUrlsForAssets(supabase, assets);
-    const previewMap = await signThumbnailUrlsForAssets(supabase, assets, {
-      width: 960,
-      quality: 85,
-      resize: "contain",
+    const thumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, result.assets, {
+      tenantId,
+      projectId,
+      use: "thumbnail",
+      fallback: "transform",
+      enqueueMissingDerivative: true,
+    });
+    const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, result.assets, {
+      tenantId,
+      projectId,
+      use: "preview",
+      fallback: "transform",
     });
 
     return Response.json(
       {
-        assets: assets.map((asset) => {
-          const signedUrl = thumbnailMap.get(asset.id) ?? null;
-          const previewSignedUrl = previewMap.get(asset.id) ?? null;
+        assets: result.assets.map((asset) => {
+          const thumbnail = thumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const preview = previewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
           return {
             id: asset.id,
             originalFilename: asset.original_filename,
@@ -91,14 +114,22 @@ export async function GET(request: Request, context: RouteContext) {
             candidateConfidence: asset.candidate_confidence,
             candidateLastScoredAt: asset.candidate_last_scored_at,
             candidateMatcherVersion: asset.candidate_matcher_version,
-            thumbnailUrl: signedUrl
-              ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+            candidateAssetFaceId: asset.candidate_asset_face_id,
+            candidateFaceRank: asset.candidate_face_rank,
+            thumbnailUrl: thumbnail.url
+              ? resolveLoopbackStorageUrlForHostHeader(thumbnail.url, requestHostHeader)
               : null,
-            previewUrl: previewSignedUrl
-              ? resolveLoopbackStorageUrlForHostHeader(previewSignedUrl, requestHostHeader)
+            thumbnailState: thumbnail.state,
+            previewUrl: preview.url
+              ? resolveLoopbackStorageUrlForHostHeader(preview.url, requestHostHeader)
               : null,
+            previewState: preview.state,
           };
         }),
+        page: result.page,
+        pageSize: result.pageSize,
+        hasNextPage: result.hasNextPage,
+        hasPreviousPage: result.hasPreviousPage,
       },
       { status: 200 },
     );

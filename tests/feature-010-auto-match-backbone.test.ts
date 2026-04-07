@@ -172,9 +172,11 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     .from("consent_templates")
     .insert({
       template_key: templateKey,
+      name: "Feature 010 Template",
       version: "v1",
+      version_number: 1,
       body: "Feature 010 template body",
-      status: "active",
+      status: "published",
       created_by: userId,
     })
     .select("id")

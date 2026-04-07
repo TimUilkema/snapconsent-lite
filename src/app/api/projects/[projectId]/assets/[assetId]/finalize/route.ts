@@ -1,8 +1,6 @@
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
+import { queueProjectAssetPostFinalizeProcessing } from "@/lib/assets/post-finalize-processing";
 import { HttpError, jsonError } from "@/lib/http/errors";
-import { getCurrentConsentHeadshotFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
-import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
-import { shouldEnqueuePhotoUploadedOnFinalize } from "@/lib/matching/auto-match-trigger-conditions";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -54,25 +52,15 @@ export async function POST(request: Request, context: RouteContext) {
       consentIds,
     });
 
-    if (shouldEnqueuePhotoUploadedOnFinalize(finalizedAsset.assetType)) {
-      try {
-        const boundary = await getCurrentConsentHeadshotFanoutBoundary(supabase, tenantId, projectId);
-        await enqueuePhotoUploadedJob({
-          tenantId,
-          projectId,
-          assetId: finalizedAsset.assetId,
-          payload: {
-            source: "photo_finalize",
-            consent_ids: consentIds,
-            boundarySnapshotAt: boundary.boundarySnapshotAt,
-            boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
-            boundaryConsentId: boundary.boundaryConsentId,
-          },
-        });
-      } catch {
-        // Primary upload flow must still succeed; reconcile backfills missed jobs.
-      }
-    }
+    await queueProjectAssetPostFinalizeProcessing({
+      supabase,
+      tenantId,
+      projectId,
+      assetId: finalizedAsset.assetId,
+      assetType: finalizedAsset.assetType,
+      consentIds,
+      source: "photo_finalize",
+    });
 
     return Response.json({ ok: true }, { status: 200 });
   } catch (error) {

@@ -1,12 +1,12 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+import { isAcceptedImageUpload } from "@/lib/assets/asset-image-policy";
 import { HttpError } from "@/lib/http/errors";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 const STORAGE_BUCKET = "project-assets";
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_HEADSHOT_RETENTION_DAYS = 90;
-const ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_REQUEST_CONSENT_IDS = 50;
 
 export type AssetType = "photo" | "headshot";
@@ -131,7 +131,7 @@ function validateFileMetadata(
     throw new HttpError(400, "invalid_filename", "File name is required.");
   }
 
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+  if (!isAcceptedImageUpload(contentType, originalFilename)) {
     throw new HttpError(400, "invalid_content_type", "Unsupported file type.");
   }
 

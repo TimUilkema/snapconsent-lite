@@ -74,6 +74,18 @@ export type RepairFaceMatchJobResult = {
 
 export type FaceMatchJobDispatchMode = "enqueue" | "repair_requeue";
 
+type ExistingFaceMatchJobRow = {
+  id: string;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  run_after: string;
+  lease_expires_at: string | null;
+  locked_at: string | null;
+  updated_at: string;
+  created_at: string;
+};
+
 function createServiceRoleClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -102,6 +114,98 @@ function normalizeDedupeSegment(value: string | null | undefined) {
     .trim()
     .toLowerCase();
   return normalized.length > 0 ? normalized : "na";
+}
+
+async function loadExistingFaceMatchJobByDedupeKey(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  dedupeKey: string,
+) {
+  const { data, error } = await supabase
+    .from("face_match_jobs")
+    .select("id, status, attempt_count, max_attempts, run_after, lease_expires_at, locked_at, updated_at, created_at")
+    .eq("tenant_id", normalizeUuid(tenantId))
+    .eq("project_id", normalizeUuid(projectId))
+    .eq("dedupe_key", String(dedupeKey).trim())
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, "face_match_job_lookup_failed", "Unable to inspect existing face-match job.");
+  }
+
+  return (data as ExistingFaceMatchJobRow | null) ?? null;
+}
+
+function coerceIsoToMillis(value: string | null | undefined) {
+  const millis = Date.parse(String(value ?? ""));
+  return Number.isFinite(millis) ? millis : null;
+}
+
+function isExistingJobActivelyProcessing(job: ExistingFaceMatchJobRow) {
+  if (job.status !== "processing") {
+    return false;
+  }
+
+  const nowMillis = Date.now();
+  const expiryMillis =
+    coerceIsoToMillis(job.lease_expires_at) ??
+    coerceIsoToMillis(job.locked_at) ??
+    coerceIsoToMillis(job.updated_at) ??
+    coerceIsoToMillis(job.created_at);
+
+  return expiryMillis !== null && expiryMillis > nowMillis;
+}
+
+async function recoverDuplicateEnqueueRace(
+  supabase: SupabaseClient,
+  input: EnqueueFaceMatchJobInput,
+): Promise<EnqueueFaceMatchJobResult | null> {
+  const existing = await loadExistingFaceMatchJobByDedupeKey(
+    supabase,
+    input.tenantId,
+    input.projectId,
+    input.dedupeKey,
+  );
+  if (!existing) {
+    return null;
+  }
+
+  return {
+    jobId: existing.id,
+    status: existing.status,
+    attemptCount: existing.attempt_count,
+    maxAttempts: existing.max_attempts,
+    runAfter: existing.run_after,
+    enqueued: false,
+  };
+}
+
+async function recoverDuplicateRequeueRace(
+  supabase: SupabaseClient,
+  input: RequeueFaceMatchJobInput,
+): Promise<RepairFaceMatchJobResult | null> {
+  const existing = await loadExistingFaceMatchJobByDedupeKey(
+    supabase,
+    input.tenantId,
+    input.projectId,
+    input.dedupeKey,
+  );
+  if (!existing) {
+    return null;
+  }
+
+  return {
+    jobId: existing.id,
+    status: existing.status,
+    attemptCount: existing.attempt_count,
+    maxAttempts: existing.max_attempts,
+    runAfter: existing.run_after,
+    enqueued: false,
+    requeued: false,
+    alreadyProcessing: isExistingJobActivelyProcessing(existing),
+    alreadyQueued: existing.status === "queued",
+  };
 }
 
 export function buildPhotoUploadedDedupeKey(assetId: string) {
@@ -147,6 +251,14 @@ export async function enqueueFaceMatchJob(
   });
 
   if (error) {
+    const normalized = normalizePostgrestError(error, "face_match_enqueue_failed");
+    if (normalized.code === "23505") {
+      const recovered = await recoverDuplicateEnqueueRace(supabase, input);
+      if (recovered) {
+        return recovered;
+      }
+    }
+
     throw new HttpError(500, "face_match_enqueue_failed", "Unable to enqueue face-match job.");
   }
 
@@ -184,6 +296,13 @@ export async function requeueFaceMatchJob(
 
   if (error) {
     const normalized = normalizePostgrestError(error, "face_match_requeue_failed");
+    if (normalized.code === "23505") {
+      const recovered = await recoverDuplicateRequeueRace(supabase, input);
+      if (recovered) {
+        return recovered;
+      }
+    }
+
     throw new HttpError(500, "face_match_requeue_failed", `Unable to requeue face-match job: ${normalized.code}`);
   }
 

@@ -7,10 +7,10 @@ import test from "node:test";
 import { createClient, type PostgrestError, type SupabaseClient } from "@supabase/supabase-js";
 
 import { submitConsent } from "../src/lib/consent/submit-consent";
-import {
-  linkPhotosToConsent,
-  listMatchableProjectPhotosForConsent,
-} from "../src/lib/matching/consent-photo-matching";
+import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
+import { listMatchableProjectPhotosForConsent } from "../src/lib/matching/consent-photo-matching";
+import type { AutoMatcher, AutoMatcherMaterializedFace } from "../src/lib/matching/auto-matcher";
+import { ensureAssetFaceMaterialization } from "../src/lib/matching/face-materialization";
 
 type ProjectContext = {
   tenantId: string;
@@ -157,9 +157,11 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     .from("consent_templates")
     .insert({
       template_key: templateKey,
+      name: "Feature 012 Template",
       version: "v1",
+      version_number: 1,
       body: "Feature 012 template body",
-      status: "active",
+      status: "published",
       created_by: userId,
     })
     .select("id")
@@ -258,6 +260,103 @@ async function createOptedInConsentWithHeadshot(supabase: SupabaseClient, contex
   };
 }
 
+function createMaterializationOnlyMatcher(facesByAssetId: Record<string, number>): AutoMatcher {
+  return {
+    version: "feature-012-materialize-test",
+    async match() {
+      assert.fail("raw matcher path should not be used in feature 012 tests");
+    },
+    async materializeAssetFaces(input) {
+      const faceCount = Math.max(0, facesByAssetId[input.assetId] ?? 1);
+      const faces = Array.from({ length: faceCount }, (_, faceRank) => ({
+        faceRank,
+        providerFaceIndex: faceRank,
+        detectionProbability: 0.99,
+        faceBox: {
+          xMin: faceRank * 10,
+          yMin: faceRank * 10,
+          xMax: faceRank * 10 + 40,
+          yMax: faceRank * 10 + 50,
+          probability: 0.99,
+        },
+        embedding: [0.9 - faceRank * 0.01, faceRank],
+      })) satisfies AutoMatcherMaterializedFace[];
+
+      return {
+        faces,
+        providerMetadata: {
+          provider: "test-provider",
+          providerMode: "detection",
+          providerPluginVersions: {
+            detector: "retinaface-test",
+            calculator: "embedding-test",
+          },
+        },
+      };
+    },
+    async compareEmbeddings() {
+      assert.fail("embedding compare should not run in feature 012 tests");
+    },
+  };
+}
+
+async function materializePhotoFaces(
+  supabase: SupabaseClient,
+  context: ProjectContext,
+  assetId: string,
+  faceCount = 1,
+) {
+  const matcher = createMaterializationOnlyMatcher({
+    [assetId]: faceCount,
+  });
+  const current = await ensureAssetFaceMaterialization({
+    supabase,
+    matcher,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId,
+    materializerVersion: getAutoMatchMaterializerVersion(),
+    includeFaces: true,
+  });
+  assert.ok(current);
+  return current;
+}
+
+async function seedCurrentManualFaceLink(
+  supabase: SupabaseClient,
+  context: ProjectContext,
+  assetId: string,
+  consentId: string,
+) {
+  const current = await materializePhotoFaces(supabase, context, assetId, 1);
+  const face = current!.faces[0];
+  assert.ok(face);
+
+  const { error } = await supabase.from("asset_face_consent_links").upsert(
+    {
+      asset_face_id: face.id,
+      asset_materialization_id: current!.materialization.id,
+      asset_id: assetId,
+      consent_id: consentId,
+      tenant_id: context.tenantId,
+      project_id: context.projectId,
+      link_source: "manual",
+      match_confidence: null,
+      matched_at: null,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: context.userId,
+      matcher_version: null,
+    },
+    { onConflict: "asset_face_id" },
+  );
+  assertNoError(error, "seed current manual face link");
+
+  return {
+    materializationId: current!.materialization.id,
+    assetFaceId: face.id,
+  };
+}
+
 
 test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-threshold band", async () => {
   const originalThreshold = process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
@@ -293,20 +392,43 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
       filenamePrefix: "below-band",
     });
 
-    await linkPhotosToConsent({
-      supabase: admin,
-      tenantId: context.tenantId,
-      projectId: context.projectId,
-      consentId: consent.consentId,
-      assetIds: [linkedPhotoId],
-    });
+    const linkedFace = await seedCurrentManualFaceLink(admin, context, linkedPhotoId, consent.consentId);
+    const highFace = await materializePhotoFaces(admin, context, highPhotoId, 1);
+    const mediumFace = await materializePhotoFaces(admin, context, mediumPhotoId, 1);
+    const suppressedFace = await materializePhotoFaces(admin, context, suppressedPhotoId, 1);
+    const belowBandFace = await materializePhotoFaces(admin, context, belowBandPhotoId, 1);
 
     const candidateRows = [
-      { assetId: linkedPhotoId, confidence: 0.88 },
-      { assetId: highPhotoId, confidence: 0.75 },
-      { assetId: mediumPhotoId, confidence: 0.67 },
-      { assetId: suppressedPhotoId, confidence: 0.65 },
-      { assetId: belowBandPhotoId, confidence: 0.55 },
+      {
+        assetId: linkedPhotoId,
+        confidence: 0.88,
+        assetFaceId: linkedFace.assetFaceId,
+        faceRank: 0,
+      },
+      {
+        assetId: highPhotoId,
+        confidence: 0.75,
+        assetFaceId: highFace!.faces[0]!.id,
+        faceRank: 0,
+      },
+      {
+        assetId: mediumPhotoId,
+        confidence: 0.67,
+        assetFaceId: mediumFace!.faces[0]!.id,
+        faceRank: 0,
+      },
+      {
+        assetId: suppressedPhotoId,
+        confidence: 0.65,
+        assetFaceId: suppressedFace!.faces[0]!.id,
+        faceRank: 0,
+      },
+      {
+        assetId: belowBandPhotoId,
+        confidence: 0.55,
+        assetFaceId: belowBandFace!.faces[0]!.id,
+        faceRank: 0,
+      },
     ].map((row) => ({
       asset_id: row.assetId,
       consent_id: consent.consentId,
@@ -315,6 +437,8 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
       confidence: row.confidence,
       matcher_version: "seed",
       source_job_type: "photo_uploaded",
+      winning_asset_face_id: row.assetFaceId,
+      winning_asset_face_rank: row.faceRank,
       last_scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }));
@@ -324,15 +448,18 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
       .upsert(candidateRows, { onConflict: "asset_id,consent_id" });
     assertNoError(seedCandidatesError, "seed likely candidates");
 
-    const { error: suppressionError } = await admin.from("asset_consent_link_suppressions").upsert(
+    const { error: suppressionError } = await admin.from("asset_face_consent_link_suppressions").upsert(
       {
+        asset_face_id: suppressedFace!.faces[0]!.id,
+        asset_materialization_id: suppressedFace!.materialization.id,
         asset_id: suppressedPhotoId,
         consent_id: consent.consentId,
         tenant_id: context.tenantId,
         project_id: context.projectId,
         reason: "manual_unlink",
+        created_by: context.userId,
       },
-      { onConflict: "asset_id,consent_id" },
+      { onConflict: "asset_face_id,consent_id" },
     );
     assertNoError(suppressionError, "seed suppression");
 
@@ -345,12 +472,16 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
       limit: 20,
     });
 
+    assert.equal(likelyAssets.page, 0);
+    assert.equal(likelyAssets.pageSize, 20);
+    assert.equal(likelyAssets.hasNextPage, false);
+    assert.equal(likelyAssets.hasPreviousPage, false);
     assert.deepEqual(
-      likelyAssets.map((asset) => asset.id),
+      likelyAssets.assets.map((asset) => asset.id),
       [highPhotoId, mediumPhotoId, belowBandPhotoId],
     );
     assert.deepEqual(
-      likelyAssets.map((asset) => asset.candidate_confidence),
+      likelyAssets.assets.map((asset) => asset.candidate_confidence),
       [0.75, 0.67, 0.55],
     );
   } finally {
@@ -362,7 +493,7 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
   }
 });
 
-test("default mode applies limit after excluding already-linked photos", async () => {
+test("default mode paginates after excluding already-linked photos", async () => {
   const context = await createProjectContext(admin);
   const consent = await createOptedInConsentWithHeadshot(admin, context);
 
@@ -386,29 +517,166 @@ test("default mode applies limit after excluding already-linked photos", async (
     status: "uploaded",
     filenamePrefix: "second-unlinked",
   });
-
-  await linkPhotosToConsent({
-    supabase: admin,
-    tenantId: context.tenantId,
-    projectId: context.projectId,
-    consentId: consent.consentId,
-    assetIds: [newestLinkedPhotoId, olderLinkedPhotoId],
+  const thirdUnlinkedPhotoId = await createAsset(admin, context, {
+    assetType: "photo",
+    status: "uploaded",
+    filenamePrefix: "third-unlinked",
   });
 
-  const assets = await listMatchableProjectPhotosForConsent({
+  await seedCurrentManualFaceLink(admin, context, newestLinkedPhotoId, consent.consentId);
+  await seedCurrentManualFaceLink(admin, context, olderLinkedPhotoId, consent.consentId);
+
+  const firstPage = await listMatchableProjectPhotosForConsent({
     supabase: admin,
     tenantId: context.tenantId,
     projectId: context.projectId,
     consentId: consent.consentId,
     mode: "default",
     limit: 2,
+    page: 0,
+  });
+  const secondPage = await listMatchableProjectPhotosForConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: consent.consentId,
+    mode: "default",
+    limit: 2,
+    page: 1,
   });
 
-  assert.equal(assets.length, 2);
-  assert.deepEqual(
-    new Set(assets.map((asset) => asset.id)),
-    new Set([firstUnlinkedPhotoId, secondUnlinkedPhotoId]),
+  assert.equal(firstPage.assets.length, 2);
+  assert.equal(firstPage.hasPreviousPage, false);
+  assert.equal(firstPage.hasNextPage, true);
+  assert.ok(firstPage.assets.every((asset) => asset.id !== newestLinkedPhotoId && asset.id !== olderLinkedPhotoId));
+  assert.equal(secondPage.assets.length, 1);
+  assert.ok(secondPage.assets.every((asset) => asset.id !== newestLinkedPhotoId && asset.id !== olderLinkedPhotoId));
+  assert.equal(secondPage.hasPreviousPage, true);
+  assert.equal(secondPage.hasNextPage, false);
+  assert.equal(
+    firstPage.assets.some((asset) => secondPage.assets.some((nextAsset) => nextAsset.id === asset.id)),
+    false,
   );
+  assert.deepEqual(
+    new Set([...firstPage.assets, ...secondPage.assets].map((asset) => asset.id)),
+    new Set([firstUnlinkedPhotoId, secondUnlinkedPhotoId, thirdUnlinkedPhotoId]),
+  );
+});
+
+test("likely mode paginates across ranked candidates after filtering invalid rows", async () => {
+  const originalThreshold = process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
+  process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD = "0.90";
+
+  try {
+    const context = await createProjectContext(admin);
+    const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+    const highPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "likely-high",
+    });
+    const mediumPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "likely-medium",
+    });
+    const lowPhotoId = await createAsset(admin, context, {
+      assetType: "photo",
+      status: "uploaded",
+      filenamePrefix: "likely-low",
+    });
+
+    const highFace = await materializePhotoFaces(admin, context, highPhotoId, 1);
+    const mediumFace = await materializePhotoFaces(admin, context, mediumPhotoId, 1);
+    const lowFace = await materializePhotoFaces(admin, context, lowPhotoId, 1);
+
+    const { error: seedCandidatesError } = await admin
+      .from("asset_consent_match_candidates")
+      .upsert(
+        [
+          {
+            asset_id: highPhotoId,
+            consent_id: consent.consentId,
+            tenant_id: context.tenantId,
+            project_id: context.projectId,
+            confidence: 0.79,
+            matcher_version: "seed",
+            source_job_type: "photo_uploaded",
+            winning_asset_face_id: highFace!.faces[0]!.id,
+            winning_asset_face_rank: 0,
+            last_scored_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          {
+            asset_id: mediumPhotoId,
+            consent_id: consent.consentId,
+            tenant_id: context.tenantId,
+            project_id: context.projectId,
+            confidence: 0.68,
+            matcher_version: "seed",
+            source_job_type: "photo_uploaded",
+            winning_asset_face_id: mediumFace!.faces[0]!.id,
+            winning_asset_face_rank: 0,
+            last_scored_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          {
+            asset_id: lowPhotoId,
+            consent_id: consent.consentId,
+            tenant_id: context.tenantId,
+            project_id: context.projectId,
+            confidence: 0.51,
+            matcher_version: "seed",
+            source_job_type: "photo_uploaded",
+            winning_asset_face_id: lowFace!.faces[0]!.id,
+            winning_asset_face_rank: 0,
+            last_scored_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+        { onConflict: "asset_id,consent_id" },
+      );
+    assertNoError(seedCandidatesError, "seed paged likely candidates");
+
+    const firstPage = await listMatchableProjectPhotosForConsent({
+      supabase: admin,
+      tenantId: context.tenantId,
+      projectId: context.projectId,
+      consentId: consent.consentId,
+      mode: "likely",
+      limit: 2,
+      page: 0,
+    });
+    const secondPage = await listMatchableProjectPhotosForConsent({
+      supabase: admin,
+      tenantId: context.tenantId,
+      projectId: context.projectId,
+      consentId: consent.consentId,
+      mode: "likely",
+      limit: 2,
+      page: 1,
+    });
+
+    assert.deepEqual(
+      firstPage.assets.map((asset) => asset.id),
+      [highPhotoId, mediumPhotoId],
+    );
+    assert.equal(firstPage.hasPreviousPage, false);
+    assert.equal(firstPage.hasNextPage, true);
+    assert.deepEqual(
+      secondPage.assets.map((asset) => asset.id),
+      [lowPhotoId],
+    );
+    assert.equal(secondPage.hasPreviousPage, true);
+    assert.equal(secondPage.hasNextPage, false);
+  } finally {
+    if (originalThreshold === undefined) {
+      delete process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD;
+    } else {
+      process.env.AUTO_MATCH_CONFIDENCE_THRESHOLD = originalThreshold;
+    }
+  }
 });
 
 test("likely mode uses a 0.25 default review-band minimum when unset", async () => {
@@ -437,10 +705,29 @@ test("likely mode uses a 0.25 default review-band minimum when unset", async () 
       filenamePrefix: "below-band-default",
     });
 
+    const inBandHighFace = await materializePhotoFaces(admin, context, inBandHighPhotoId, 1);
+    const inBandLowFace = await materializePhotoFaces(admin, context, inBandLowPhotoId, 1);
+    const belowBandFace = await materializePhotoFaces(admin, context, belowBandPhotoId, 1);
+
     const candidateRows = [
-      { assetId: inBandHighPhotoId, confidence: 0.28 },
-      { assetId: inBandLowPhotoId, confidence: 0.26 },
-      { assetId: belowBandPhotoId, confidence: 0.24 },
+      {
+        assetId: inBandHighPhotoId,
+        confidence: 0.28,
+        assetFaceId: inBandHighFace!.faces[0]!.id,
+        faceRank: 0,
+      },
+      {
+        assetId: inBandLowPhotoId,
+        confidence: 0.26,
+        assetFaceId: inBandLowFace!.faces[0]!.id,
+        faceRank: 0,
+      },
+      {
+        assetId: belowBandPhotoId,
+        confidence: 0.24,
+        assetFaceId: belowBandFace!.faces[0]!.id,
+        faceRank: 0,
+      },
     ].map((row) => ({
       asset_id: row.assetId,
       consent_id: consent.consentId,
@@ -449,6 +736,8 @@ test("likely mode uses a 0.25 default review-band minimum when unset", async () 
       confidence: row.confidence,
       matcher_version: "seed",
       source_job_type: "photo_uploaded",
+      winning_asset_face_id: row.assetFaceId,
+      winning_asset_face_rank: row.faceRank,
       last_scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }));
@@ -468,11 +757,11 @@ test("likely mode uses a 0.25 default review-band minimum when unset", async () 
     });
 
     assert.deepEqual(
-      likelyAssets.map((asset) => asset.id),
+      likelyAssets.assets.map((asset) => asset.id),
       [inBandHighPhotoId, inBandLowPhotoId],
     );
     assert.deepEqual(
-      likelyAssets.map((asset) => asset.candidate_confidence),
+      likelyAssets.assets.map((asset) => asset.candidate_confidence),
       [0.28, 0.26],
     );
   } finally {

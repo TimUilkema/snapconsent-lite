@@ -235,6 +235,27 @@ async function hydrateCompare(
   };
 }
 
+function toMillis(value: string | null | undefined) {
+  const millis = Date.parse(String(value ?? ""));
+  return Number.isFinite(millis) ? millis : null;
+}
+
+function isStoredCompareCurrent(input: {
+  compare: AssetConsentFaceCompareRow;
+  headshotMaterialization: AssetFaceMaterializationRow;
+  assetMaterialization: AssetFaceMaterializationRow;
+}) {
+  const comparedAt = toMillis(input.compare.compared_at);
+  const headshotMaterializedAt = toMillis(input.headshotMaterialization.materialized_at);
+  const assetMaterializedAt = toMillis(input.assetMaterialization.materialized_at);
+
+  if (comparedAt === null || headshotMaterializedAt === null || assetMaterializedAt === null) {
+    return false;
+  }
+
+  return comparedAt >= headshotMaterializedAt && comparedAt >= assetMaterializedAt;
+}
+
 export async function ensureMaterializedFaceCompare(
   input: EnsureMaterializedFaceCompareInput,
 ): Promise<EnsuredMaterializedFaceCompare> {
@@ -279,7 +300,13 @@ export async function ensureMaterializedFaceCompare(
     compareVersion,
   );
   if (existing) {
-    return hydrateCompare(input.supabase, headshot.materialization, asset.materialization, existing, headshot.faces);
+    if (isStoredCompareCurrent({
+      compare: existing,
+      headshotMaterialization: headshot.materialization,
+      assetMaterialization: asset.materialization,
+    })) {
+      return hydrateCompare(input.supabase, headshot.materialization, asset.materialization, existing, headshot.faces);
+    }
   }
 
   const sourceFace = headshot.materialization.usable_for_compare ? headshot.faces[0] ?? null : null;

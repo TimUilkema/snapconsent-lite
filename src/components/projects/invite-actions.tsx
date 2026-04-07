@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import QRCode from "qrcode";
+
+import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 
 type InviteSharePanelProps = {
   invitePath: string;
@@ -28,6 +31,7 @@ export function InviteSharePanel({
   defaultShowQr = false,
   defaultShowUrl = false,
 }: InviteSharePanelProps) {
+  const t = useTranslations("projects.inviteShare");
   const [showUrl, setShowUrl] = useState(defaultShowUrl);
   const [showQr, setShowQr] = useState(defaultShowQr);
   const [shareUrl, setShareUrl] = useState(invitePath);
@@ -57,7 +61,7 @@ export function InviteSharePanel({
         }
       } catch {
         if (isActive) {
-          setQrError("Unable to generate QR code.");
+          setQrError(t("qrError"));
         }
       }
     }
@@ -67,7 +71,7 @@ export function InviteSharePanel({
     return () => {
       isActive = false;
     };
-  }, [shareUrl, showQr]);
+  }, [shareUrl, showQr, t]);
 
   return (
     <div className="space-y-2 text-sm">
@@ -77,14 +81,14 @@ export function InviteSharePanel({
           className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
           onClick={() => setShowUrl((prev) => !prev)}
         >
-          {showUrl ? "Hide URL" : "Show URL"}
+          {showUrl ? t("hideUrl") : t("showUrl")}
         </button>
         <button
           type="button"
           className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
           onClick={handleToggleQr}
         >
-          {showQr ? "Hide QR" : "Show QR"}
+          {showQr ? t("hideQr") : t("showQr")}
         </button>
         <a
           className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50"
@@ -92,12 +96,12 @@ export function InviteSharePanel({
           target="_blank"
           rel="noreferrer"
         >
-          Fill in form here
+          {t("openForm")}
         </a>
       </div>
       {showUrl ? (
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-500">Invite URL</span>
+          <span className="mb-1 block text-xs font-medium text-zinc-500">{t("inviteUrlLabel")}</span>
           <input
             readOnly
             value={shareUrl}
@@ -108,7 +112,7 @@ export function InviteSharePanel({
       {showQr ? (
         <div className="rounded-lg border border-zinc-200 bg-white p-3">
           {qrDataUrl ? (
-            <Image src={qrDataUrl} alt="Invite QR code" width={220} height={220} unoptimized />
+            <Image src={qrDataUrl} alt={t("qrAlt")} width={220} height={220} unoptimized />
           ) : null}
           {qrError ? <p className="mt-2 text-sm text-red-700">{qrError}</p> : null}
         </div>
@@ -132,6 +136,8 @@ export function InviteActions({
   isShareable,
   isRevokable,
 }: InviteActionsProps) {
+  const t = useTranslations("projects.inviteActions");
+  const tErrors = useTranslations("errors");
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,14 +173,16 @@ export function InviteActions({
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-        setError(payload?.message ?? "Unable to revoke invite.");
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string; message?: string }
+          | null;
+        setError(resolveLocalizedApiError(tErrors, payload, "generic"));
         return;
       }
 
       router.refresh();
     } catch {
-      setError("Unable to revoke invite.");
+      setError(tErrors("generic"));
     } finally {
       setIsSubmitting(false);
     }
@@ -192,7 +200,7 @@ export function InviteActions({
           disabled={isSubmitting}
           className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
         >
-          {isSubmitting ? "Revoking..." : "Remove invite link"}
+          {isSubmitting ? t("revoking") : t("revoke")}
         </button>
       ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}

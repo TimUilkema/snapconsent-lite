@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { reconcilePhotoFaceCanonicalStateForAsset } from "@/lib/matching/consent-photo-matching";
 import {
   getCurrentConsentHeadshotFanoutBoundary,
   getPhotoFanoutBoundary,
@@ -190,6 +191,13 @@ export async function runProjectMatchingRepair(
         supabase,
       }),
     );
+
+    await reconcilePhotoFaceCanonicalStateForAsset({
+      supabase,
+      tenantId: project.tenant_id,
+      projectId: project.id,
+      assetId: photo.assetId,
+    });
   }
 
   for (const assetId of uniqueHeadshotAssetIds) {

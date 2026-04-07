@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
 
+import { LanguageSwitch } from "@/components/i18n/language-switch";
 import { PublicConsentForm } from "@/components/public/public-consent-form";
+import { formatDateTime } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/server";
 
 type InvitePageProps = {
@@ -26,35 +29,37 @@ type InviteView = {
   consent_version: string | null;
 };
 
-function renderErrorMessage(error?: string) {
+function mapError(error: string | undefined, t: Awaited<ReturnType<typeof getTranslations>>) {
   if (!error) {
     return null;
   }
 
   switch (error) {
     case "invalid":
-      return "This invite link is invalid.";
+      return t("errors.invalid");
     case "expired":
-      return "This invite link has expired.";
+      return t("errors.expired");
     case "unavailable":
-      return "This invite has already been used.";
+      return t("errors.unavailable");
     case "server":
-      return "Unable to submit consent right now. Please try again.";
+      return t("errors.server");
     case "headshot_required":
-      return "Facial matching requires a valid uploaded headshot before consent submission.";
+      return t("errors.headshot_required");
     default:
-      return "Unable to process this invite.";
+      return t("errors.fallback");
   }
 }
 
 export default async function PublicInvitePage({ params, searchParams }: InvitePageProps) {
+  const locale = await getLocale();
+  const t = await getTranslations("publicInvite");
   const { token } = await params;
   const resolvedSearchParams = await searchParams;
   const supabase = await createClient();
   const { data } = await supabase.rpc("get_public_invite", { p_token: token });
   const invite = (data?.[0] as InviteView | undefined) ?? null;
 
-  const errorMessage = renderErrorMessage(resolvedSearchParams.error);
+  const errorMessage = mapError(resolvedSearchParams.error, t);
   const showSuccess = resolvedSearchParams.success === "1";
   const showDuplicate = resolvedSearchParams.duplicate === "1";
   const receiptStatus = resolvedSearchParams.receipt;
@@ -62,14 +67,18 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
   return (
     <main className="page-frame flex min-h-screen flex-col py-8 sm:py-10">
       <section className="app-shell flex w-full flex-col gap-4 rounded-2xl px-5 py-6 sm:px-7 sm:py-7">
+        <div className="flex justify-end">
+          <LanguageSwitch />
+        </div>
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Consent form</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t("title")}</h1>
           {invite ? (
             <p className="text-sm text-zinc-700">
-              Project: {invite.project_name} · Invite status: {invite.status}
+              {t("projectLine", { projectName: invite.project_name, status: invite.status })}
+              {invite.expires_at ? ` · ${t("expiresOn", { date: formatDateTime(invite.expires_at, locale) })}` : ""}
             </p>
           ) : (
-            <p className="text-sm text-zinc-700">Invite lookup</p>
+            <p className="text-sm text-zinc-700">{t("lookupLabel")}</p>
           )}
         </div>
 
@@ -80,17 +89,17 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
         ) : null}
         {showSuccess ? (
           <p className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
-            Consent submitted successfully.
+            {t("success")}
           </p>
         ) : null}
         {showDuplicate ? (
           <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            This invite was already submitted.
+            {t("duplicate")}
           </p>
         ) : null}
         {receiptStatus === "queued" ? (
           <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-            Consent saved. Receipt email will be retried.
+            {t("receiptQueued")}
           </p>
         ) : null}
 
@@ -102,12 +111,12 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
           />
         ) : (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            This invite cannot accept new submissions.
+            {t("cannotSubmit")}
           </p>
         )}
 
         <Link href="/" className="text-sm text-zinc-700 underline">
-          Return to home
+          {t("backToHome")}
         </Link>
       </section>
     </main>

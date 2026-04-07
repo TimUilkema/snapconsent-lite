@@ -2,12 +2,17 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
+
+import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 
 type CreateProjectResponse = {
   projectId: string;
 };
 
 export function CreateProjectForm() {
+  const t = useTranslations("projects.create");
+  const tErrors = useTranslations("errors");
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,9 +40,9 @@ export function CreateProjectForm() {
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
-          | { message?: string }
+          | { error?: string; message?: string }
           | null;
-        setError(payload?.message ?? "Unable to create project.");
+        setError(resolveLocalizedApiError(tErrors, payload, "generic"));
         return;
       }
 
@@ -45,7 +50,7 @@ export function CreateProjectForm() {
       router.push(`/projects/${payload.projectId}`);
       router.refresh();
     } catch {
-      setError("Unable to create project.");
+      setError(tErrors("generic"));
     } finally {
       setIsSubmitting(false);
     }
@@ -54,13 +59,11 @@ export function CreateProjectForm() {
   return (
     <form onSubmit={handleSubmit} className="content-card space-y-4 rounded-2xl p-5">
       <div>
-        <h2 className="text-lg font-semibold text-zinc-900">Create project</h2>
-        <p className="mt-1 text-sm text-zinc-600">
-          Set up a new workspace for invites, consents, and photo matching.
-        </p>
+        <h2 className="text-lg font-semibold text-zinc-900">{t("title")}</h2>
+        <p className="mt-1 text-sm text-zinc-600">{t("subtitle")}</p>
       </div>
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">Name</span>
+        <span className="mb-1 block font-medium">{t("nameLabel")}</span>
         <input
           type="text"
           name="name"
@@ -71,7 +74,7 @@ export function CreateProjectForm() {
         />
       </label>
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">Description</span>
+        <span className="mb-1 block font-medium">{t("descriptionLabel")}</span>
         <textarea
           name="description"
           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
@@ -85,7 +88,7 @@ export function CreateProjectForm() {
         disabled={isSubmitting}
         className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
       >
-        {isSubmitting ? "Creating..." : "Create Project"}
+        {isSubmitting ? t("creating") : t("submit")}
       </button>
     </form>
   );

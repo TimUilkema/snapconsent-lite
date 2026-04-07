@@ -159,9 +159,11 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
   const templateKey = `feature029-template-${randomUUID()}`;
   const { data: template, error: templateError } = await supabase.from("consent_templates").insert({
     template_key: templateKey,
+    name: "Feature 029 Template",
     version: "v1",
+    version_number: 1,
     body: "Feature 029 template body",
-    status: "active",
+    status: "published",
     created_by: userId,
   }).select("id").single();
   assertNoError(templateError, "insert consent template");
@@ -889,7 +891,7 @@ test("revoked consent blocks canonical apply for already-enqueued compare work",
       1,
     );
     assert.equal(
-      await countRows("asset_consent_links", [
+      await countRows("asset_face_consent_links", [
         ["tenant_id", context.tenantId],
         ["project_id", context.projectId],
         ["asset_id", photoAssetId],

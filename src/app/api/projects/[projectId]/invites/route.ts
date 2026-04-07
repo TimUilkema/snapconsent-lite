@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createInviteWithIdempotency } from "@/lib/idempotency/invite-idempotency";
+import { getVisiblePublishedTemplateById } from "@/lib/templates/template-service";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type RouteContext = {
@@ -56,26 +57,26 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (!consentTemplateId) {
       if (project.default_consent_template_id) {
-        consentTemplateId = project.default_consent_template_id;
-      } else {
-        const { data: defaultTemplate, error: defaultTemplateError } = await supabase
-          .from("consent_templates")
-          .select("id")
-          .eq("template_key", "gdpr-general")
-          .eq("status", "active")
-          .order("version", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (defaultTemplateError) {
-          throw new HttpError(500, "template_lookup_failed", "Unable to create invite.");
-        }
-
+        const defaultTemplate = await getVisiblePublishedTemplateById(
+          supabase,
+          tenantId,
+          project.default_consent_template_id,
+        );
         if (!defaultTemplate) {
-          throw new HttpError(500, "template_missing", "No consent templates are available.");
+          throw new HttpError(
+            409,
+            "default_template_unavailable",
+            "The project default template is no longer available. Choose another published template.",
+          );
         }
 
         consentTemplateId = defaultTemplate.id;
+      } else {
+        throw new HttpError(
+          400,
+          "template_required",
+          "Select a consent template before creating an invite.",
+        );
       }
     }
 

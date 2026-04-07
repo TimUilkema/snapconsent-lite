@@ -1,9 +1,12 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 
 import { InviteSharePanel } from "@/components/projects/invite-actions";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
+import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
+import { formatDateTime } from "@/lib/i18n/format";
 
 type CreateInviteResponse = {
   inviteId: string;
@@ -16,12 +19,15 @@ type CreateInviteFormProps = {
   projectId: string;
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
+  warning?: string | null;
 };
 
 type ConsentTemplateOption = {
   id: string;
-  template_key: string;
+  name: string;
   version: string;
+  scope: "app" | "tenant";
+  category: string | null;
 };
 
 type InvitePayload = {
@@ -57,20 +63,22 @@ export function CreateInviteForm({
   projectId,
   templates,
   defaultTemplateId,
+  warning,
 }: CreateInviteFormProps) {
+  const locale = useLocale();
+  const t = useTranslations("projects.invites");
+  const tErrors = useTranslations("errors");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<InvitePayload | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(
-    defaultTemplateId ?? templates[0]?.id ?? "",
-  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState(defaultTemplateId ?? "");
   const expiresAtLabel = useMemo(() => {
     if (!payload?.expiresAt) {
-      return "No expiry";
+      return t("noExpiry");
     }
 
-    return new Date(payload.expiresAt).toLocaleString();
-  }, [payload?.expiresAt]);
+    return formatDateTime(payload.expiresAt, locale);
+  }, [locale, payload?.expiresAt, t]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,7 +87,7 @@ export function CreateInviteForm({
 
     try {
       if (!selectedTemplateId) {
-        setError("Select a consent template before creating an invite.");
+        setError(t("selectTemplateError"));
         setIsSubmitting(false);
         return;
       }
@@ -95,12 +103,12 @@ export function CreateInviteForm({
       });
 
       const responsePayload = (await response.json().catch(() => null)) as
-        | (CreateInviteResponse & { message?: string })
+        | (CreateInviteResponse & { error?: string; message?: string })
         | null;
       const invitePath = normalizeInvitePath(responsePayload);
 
       if (!response.ok || !responsePayload?.inviteId || !invitePath) {
-        setError(responsePayload?.message ?? "Unable to create invite.");
+        setError(resolveLocalizedApiError(tErrors, responsePayload, "generic"));
         return;
       }
 
@@ -110,7 +118,7 @@ export function CreateInviteForm({
         expiresAt: responsePayload.expiresAt ?? null,
       });
     } catch {
-      setError("Unable to create invite.");
+      setError(tErrors("generic"));
     } finally {
       setIsSubmitting(false);
     }
@@ -121,23 +129,29 @@ export function CreateInviteForm({
   return (
     <section className="content-card space-y-4 rounded-2xl p-5">
       <div>
-        <h2 className="text-lg font-semibold text-zinc-900">Create subject invite</h2>
-        <p className="mt-1 text-sm text-zinc-600">
-          Generate a shareable consent form link for one subject.
-        </p>
+        <h2 className="text-lg font-semibold text-zinc-900">{t("title")}</h2>
+        <p className="mt-1 text-sm text-zinc-600">{t("subtitle")}</p>
       </div>
       <form onSubmit={handleSubmit} className="space-y-3">
+        {warning ? (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {warning}
+          </p>
+        ) : null}
         <label className="block text-sm text-zinc-800">
-          <span className="mb-1 block font-medium">Consent template</span>
+          <span className="mb-1 block font-medium">{t("templateLabel")}</span>
           <select
             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
             value={selectedTemplateId}
             onChange={(event) => setSelectedTemplateId(event.target.value)}
             disabled={!hasTemplates}
           >
+            <option value="">{t("selectTemplatePlaceholder")}</option>
             {templates.map((template) => (
               <option key={template.id} value={template.id}>
-                {template.template_key} {template.version}
+                {template.name} {template.version} -{" "}
+                {template.scope === "app" ? t("templateScopeStandard") : t("templateScopeOrganization")}
+                {template.category ? ` - ${template.category}` : ""}
               </option>
             ))}
           </select>
@@ -147,20 +161,20 @@ export function CreateInviteForm({
           disabled={isSubmitting || !hasTemplates || !selectedTemplateId}
           className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
         >
-          {isSubmitting ? "Creating..." : "Create Invite URL"}
+          {isSubmitting ? t("creating") : t("submit")}
         </button>
       </form>
       {!hasTemplates ? (
-        <p className="text-sm text-red-700">No consent templates are available.</p>
+        <p className="text-sm text-red-700">{t("noTemplatesAvailable")}</p>
       ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {payload ? (
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm">
           <p>
-            <span className="font-medium">Invite ID:</span> {payload.inviteId}
+            <span className="font-medium">{t("inviteIdLabel")}</span> {payload.inviteId}
           </p>
           <p className="mt-1">
-            <span className="font-medium">Expires:</span> {expiresAtLabel}
+            <span className="font-medium">{t("expiresLabel")}</span> {expiresAtLabel}
           </p>
           <InviteSharePanel invitePath={payload.invitePath} defaultShowQr />
         </div>

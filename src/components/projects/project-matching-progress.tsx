@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import type { ProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
 
@@ -10,6 +11,7 @@ type ProjectMatchingProgressProps = {
 };
 
 export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectMatchingProgressProps) {
+  const t = useTranslations("projects.matchingProgress");
   const [progress, setProgress] = useState<ProjectMatchingProgress>(initialProgress);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -53,13 +55,13 @@ export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectM
     <section className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-900">Matching progress</h2>
+          <h2 className="text-sm font-semibold text-zinc-900">{t("title")}</h2>
           <p className="mt-1 text-xs text-zinc-600">
-            {progress.processedImages} / {progress.totalImages} images processed
+            {t("processed", { processed: progress.processedImages, total: progress.totalImages })}
           </p>
           {progress.hasDegradedMatchingState ? (
             <p className="mt-1 text-xs text-amber-700">
-              Matching needs attention. Automatic retries are active or a continuation is stalled.
+              {t("degradedNotice")}
             </p>
           ) : null}
         </div>
@@ -73,8 +75,8 @@ export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectM
           }`}
         >
           {progress.hasDegradedMatchingState
-            ? (progress.isMatchingInProgress ? "Matching degraded" : "Matching stalled")
-            : (progress.isMatchingInProgress ? "Matching in progress" : "Matching idle")}
+            ? (progress.isMatchingInProgress ? t("statusDegraded") : t("statusStalled"))
+            : (progress.isMatchingInProgress ? t("statusInProgress") : t("statusIdle"))}
         </span>
       </div>
 
@@ -86,8 +88,8 @@ export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectM
       </div>
 
       <div className="mt-2 flex items-center justify-between gap-3 text-xs text-zinc-600">
-        <span>{progress.progressPercent}% complete</span>
-        {isRefreshing && progress.isMatchingInProgress ? <span>Updating...</span> : null}
+        <span>{t("percentComplete", { value: progress.progressPercent })}</span>
+        {isRefreshing && progress.isMatchingInProgress ? <span>{t("updating")}</span> : null}
       </div>
     </section>
   );
