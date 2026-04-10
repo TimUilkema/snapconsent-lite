@@ -9,6 +9,7 @@ type ConsentSubmitInput = {
   email: string;
   faceMatchOptIn: boolean;
   headshotAssetId: string | null;
+  structuredFieldValues: Record<string, unknown> | null;
   captureIp: string | null;
   captureUserAgent: string | null;
 };
@@ -36,6 +37,7 @@ export async function submitConsent(input: ConsentSubmitInput): Promise<ConsentS
     p_capture_user_agent: input.captureUserAgent,
     p_face_match_opt_in: input.faceMatchOptIn,
     p_headshot_asset_id: input.headshotAssetId,
+    p_structured_field_values: input.structuredFieldValues,
   });
 
   if (error) {
@@ -57,7 +59,22 @@ export async function submitConsent(input: ConsentSubmitInput): Promise<ConsentS
       throw new HttpError(409, "invite_duplicate", "Invite already submitted.");
     }
 
-    if (error.code === "23514" || error.code === "22P02") {
+    if (
+      error.code === "22001" ||
+      error.code === "54000" ||
+      error.code === "22P02" ||
+      [
+        "invalid_structured_fields",
+        "structured_field_required",
+        "invalid_structured_field_value",
+        "unknown_structured_field",
+        "payload_too_large",
+      ].includes(error.message ?? "")
+    ) {
+      throw new HttpError(400, "invalid_structured_fields", "Structured consent values are invalid.");
+    }
+
+    if (error.code === "23514") {
       throw new HttpError(400, "headshot_invalid", "A valid headshot is required for facial matching.");
     }
 

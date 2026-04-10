@@ -51,6 +51,13 @@ type AssetRow = {
   storage_path: string | null;
 };
 
+type AssetMaterializationRow = {
+  asset_id: string;
+  source_image_width: number | null;
+  source_image_height: number | null;
+  materialized_at: string;
+};
+
 type HeadshotAssetRow = {
   id: string;
   status: string;
@@ -306,6 +313,7 @@ export async function GET(request: Request, context: RouteContext) {
     });
 
     const assetLinkCountMap = new Map<string, number>();
+    const assetImageSizeMap = new Map<string, { width: number | null; height: number | null }>();
     const assetLinkedPeopleMap = new Map<
       string,
       Array<{ consentId: string; fullName: string | null; email: string | null }>
@@ -326,6 +334,29 @@ export async function GET(request: Request, context: RouteContext) {
     >();
 
     if (assetIds.length > 0) {
+      const { data: materializations, error: materializationsError } = await supabase
+        .from("asset_face_materializations")
+        .select("asset_id, source_image_width, source_image_height, materialized_at")
+        .eq("tenant_id", tenantId)
+        .eq("project_id", projectId)
+        .in("asset_id", assetIds)
+        .order("materialized_at", { ascending: false });
+
+      if (materializationsError) {
+        throw new HttpError(500, "asset_lookup_failed", "Unable to load asset image dimensions.");
+      }
+
+      ((materializations as AssetMaterializationRow[] | null) ?? []).forEach((row) => {
+        if (assetImageSizeMap.has(row.asset_id)) {
+          return;
+        }
+
+        assetImageSizeMap.set(row.asset_id, {
+          width: row.source_image_width,
+          height: row.source_image_height,
+        });
+      });
+
       const assignments = await listPhotoConsentAssignmentsForAssetIds({
         supabase,
         tenantId,
@@ -465,6 +496,8 @@ export async function GET(request: Request, context: RouteContext) {
             fileSizeBytes: asset.file_size_bytes,
             createdAt: asset.created_at,
             uploadedAt: asset.uploaded_at,
+            originalWidth: assetImageSizeMap.get(asset.id)?.width ?? null,
+            originalHeight: assetImageSizeMap.get(asset.id)?.height ?? null,
             thumbnailUrl: thumbnail.url
               ? resolveLoopbackStorageUrlForHostHeader(thumbnail.url, requestHostHeader)
               : null,

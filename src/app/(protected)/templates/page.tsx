@@ -79,11 +79,7 @@ export default async function TemplatesPage() {
                       </div>
                       <p className="text-sm text-zinc-600">
                         {template.version}
-                        {template.category ? ` - ${template.category}` : ""}
                       </p>
-                      {template.description ? (
-                        <p className="text-sm text-zinc-700">{template.description}</p>
-                      ) : null}
                     </div>
                     <p className="text-sm text-zinc-600">
                       {t("updatedOn", { date: formatDateTime(template.updatedAt, locale) })}
@@ -113,10 +109,7 @@ export default async function TemplatesPage() {
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="font-medium text-zinc-900">{template.name}</p>
-                        <p className="text-sm text-zinc-600">
-                          {template.version}
-                          {template.category ? ` - ${template.category}` : ""}
-                        </p>
+                        <p className="text-sm text-zinc-600">{template.version}</p>
                       </div>
                       <TemplateStatusBadge status={template.status} />
                     </div>

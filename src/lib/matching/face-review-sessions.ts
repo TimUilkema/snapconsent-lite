@@ -1180,7 +1180,8 @@ async function buildSessionReadModel(
           faceBoxNormalized: face.face_box_normalized,
           matchConfidence:
             faceConfidenceByAssetFaceKey.get(`${item.asset_id}:${face.id}`) ??
-            (assignee?.consent_id === input.consentId ? assignee.match_confidence : null),
+            assignee?.match_confidence ??
+            null,
           cropDerivative: derivatives.get(face.id) ?? null,
           status: deriveManualPhotoLinkFaceStatus({
             currentAssignee: assignee,

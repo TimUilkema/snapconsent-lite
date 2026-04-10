@@ -6,9 +6,19 @@ import path from "node:path";
 import test from "node:test";
 
 import { createClient, type PostgrestError, type SupabaseClient } from "@supabase/supabase-js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import sharp from "sharp";
 
 import { submitConsent } from "../src/lib/consent/submit-consent";
+import {
+  clampPreviewPan,
+  getPreviewOverlayCardLayout,
+  getPreviewOverlayCardStyle,
+  PreviewImageFaceOverlayLink,
+  transformPreviewOverlayStyle,
+} from "../src/components/projects/previewable-image";
+import { getAssetPageOffset, isAssetPageCacheFresh } from "../src/components/projects/assets-list";
 import { getInitialSelectedFaceId } from "../src/lib/client/face-review-selection";
 import { getContainedImageRect, getFaceOverlayStyle } from "../src/lib/client/face-overlay";
 import { signFaceDerivativeUrl } from "../src/lib/assets/sign-face-derivatives";
@@ -812,6 +822,7 @@ test("session read serialization includes signed crop URLs for review faces", as
 test("manual review and queue reads expose current consent confidence on the winning face", async () => {
   const context = await createProjectContext(admin);
   const consent = await createOptedInConsentWithHeadshot(admin, context);
+  const competingConsent = await createOptedInConsentWithHeadshot(admin, context);
   const multiFaceAssetId = await createAsset(admin, context);
 
   const headshot = await materializeAsset(context, consent.headshotAssetId, [{ faceRank: 0 }]);
@@ -829,6 +840,26 @@ test("manual review and queue reads expose current consent confidence on the win
     winningSimilarity: 0.8732,
     targetFaceCount: multiFace.faces.length,
   });
+  const nowIso = new Date().toISOString();
+  const { error: competingLinkError } = await admin.from("asset_face_consent_links").upsert(
+    {
+      asset_face_id: multiFace.faces[0]?.id,
+      asset_materialization_id: multiFace.materialization.id,
+      asset_id: multiFaceAssetId,
+      consent_id: competingConsent.consentId,
+      tenant_id: context.tenantId,
+      project_id: context.projectId,
+      link_source: "auto",
+      match_confidence: 0.8123,
+      matched_at: nowIso,
+      reviewed_at: null,
+      reviewed_by: null,
+      matcher_version: getAutoMatchCompareVersion(),
+      updated_at: nowIso,
+    },
+    { onConflict: "asset_face_id" },
+  );
+  assertNoError(competingLinkError, "seed competing face link");
 
   const manualState = await getManualPhotoLinkState({
     supabase: admin,
@@ -838,7 +869,7 @@ test("manual review and queue reads expose current consent confidence on the win
     assetId: multiFaceAssetId,
   });
 
-  assert.equal(manualState.faces[0]?.matchConfidence ?? null, null);
+  assert.equal(manualState.faces[0]?.matchConfidence, 0.8123);
   assert.equal(manualState.faces[1]?.matchConfidence, 0.8732);
 
   await prepareFaceReviewSession({
@@ -858,7 +889,7 @@ test("manual review and queue reads expose current consent confidence on the win
     actorUserId: context.userId,
   });
 
-  assert.equal(session.items[0]?.faces[0]?.matchConfidence ?? null, null);
+  assert.equal(session.items[0]?.faces[0]?.matchConfidence, 0.8123);
   assert.equal(session.items[0]?.faces[1]?.matchConfidence, 0.8732);
 });
 
@@ -896,6 +927,149 @@ test("linked face overlay rows expose current face geometry and link metadata", 
   assert.deepEqual(overlays[0]?.faceBoxNormalized, materialized.faces[0]?.face_box_normalized ?? null);
   assert.equal(overlays[0]?.linkSource, "manual");
   assert.equal(overlays[0]?.matchConfidence ?? null, null);
+});
+
+test("preview face overlay link renders link source labels and consent deep links", () => {
+  const markup = renderToStaticMarkup(
+    createElement(PreviewImageFaceOverlayLink, {
+      overlay: {
+        id: "face-1:consent-1",
+        href: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
+        label: "Jane Doe",
+        faceBoxNormalized: {
+          x_min: 0.1,
+          y_min: 0.2,
+          x_max: 0.3,
+          y_max: 0.4,
+        },
+        headshotThumbnailUrl: "https://example.com/headshot.jpg",
+        matchConfidence: 0.8732,
+        linkSource: "auto",
+        linkSourceLabel: "Auto",
+      },
+      overlayStyle: {
+        left: "10px",
+        top: "20px",
+        width: "30px",
+        height: "40px",
+      },
+      size: "preview",
+      cardStyle: {
+        left: "0px",
+        top: "0px",
+        width: "160px",
+      },
+    }),
+  );
+
+  assert.match(markup, /openConsentId=consent-1/);
+  assert.match(markup, />Auto</);
+  assert.doesNotMatch(markup, /87%/);
+  assert.match(markup, /headshot\.jpg/);
+});
+
+test("preview overlay card sits outside the detected face box and flips above near the bottom edge", () => {
+  const belowCard = getPreviewOverlayCardStyle(
+    {
+      left: "110px",
+      top: "60px",
+      width: "90px",
+      height: "72px",
+    },
+    { width: 640, height: 480 },
+  );
+
+  assert.equal(belowCard.left, "44px");
+  assert.equal(belowCard.top, "142px");
+  assert.equal(belowCard.width, "156px");
+
+  const aboveCard = getPreviewOverlayCardStyle(
+    {
+      left: "260px",
+      top: "390px",
+      width: "100px",
+      height: "68px",
+    },
+    { width: 640, height: 480 },
+  );
+
+  assert.equal(aboveCard.left, "204px");
+  assert.equal(aboveCard.top, "308px");
+});
+
+test("preview overlay card layout separates nearby cards to avoid overlap", () => {
+  const layout = getPreviewOverlayCardLayout(
+    [
+      {
+        id: "face-a",
+        overlayStyle: {
+          left: "110px",
+          top: "44px",
+          width: "90px",
+          height: "72px",
+        },
+      },
+      {
+        id: "face-b",
+        overlayStyle: {
+          left: "156px",
+          top: "58px",
+          width: "92px",
+          height: "74px",
+        },
+      },
+    ],
+    { width: 640, height: 480 },
+  );
+
+  const firstCard = layout.get("face-a");
+  const secondCard = layout.get("face-b");
+  assert.ok(firstCard);
+  assert.ok(secondCard);
+  assert.notEqual(firstCard?.top, secondCard?.top);
+  assert.ok(Math.abs((firstCard?.top ?? 0) - (secondCard?.top ?? 0)) >= 72);
+});
+
+test("preview zoom pan clamps movement to the visible frame bounds", () => {
+  assert.deepEqual(clampPreviewPan({ x: 120, y: -45 }, 1, { width: 800, height: 600 }), { x: 0, y: 0 });
+  assert.deepEqual(clampPreviewPan({ x: 320, y: -260 }, 1.5, { width: 800, height: 600 }), {
+    x: 200,
+    y: -150,
+  });
+});
+
+test("preview overlay styles are transformed into the current zoomed viewport space", () => {
+  assert.deepEqual(
+    transformPreviewOverlayStyle(
+      {
+        left: "100px",
+        top: "120px",
+        width: "80px",
+        height: "60px",
+      },
+      { width: 800, height: 600 },
+      1.5,
+      { x: 40, y: -20 },
+    ),
+    {
+      left: "-10px",
+      top: "10px",
+      width: "120px",
+      height: "90px",
+    },
+  );
+});
+
+test("asset page offsets keep lightbox navigation aligned with paginated asset fetches", () => {
+  assert.equal(getAssetPageOffset(0, 20), 0);
+  assert.equal(getAssetPageOffset(19, 20), 0);
+  assert.equal(getAssetPageOffset(20, 20), 20);
+  assert.equal(getAssetPageOffset(47, 20), 40);
+});
+
+test("asset page cache freshness expires before signed display URLs do", () => {
+  assert.equal(isAssetPageCacheFresh(1_000, 1_000 + 89_999), true);
+  assert.equal(isAssetPageCacheFresh(1_000, 1_000 + 90_000), false);
 });
 
 test("overlay utilities place normalized face boxes inside the contained image bounds", () => {

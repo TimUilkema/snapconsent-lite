@@ -1,0 +1,152 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import {
+  createClient,
+  type AuthError,
+  type PostgrestError,
+  type SupabaseClient,
+} from "@supabase/supabase-js";
+
+type CreatedAuthUser = {
+  userId: string;
+  email: string;
+  password: string;
+};
+
+function parseDotEnvLine(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
+function loadEnvFromLocalFile() {
+  const envPath = path.resolve(process.cwd(), ".env.local");
+  const raw = readFileSync(envPath, "utf8");
+  const result = new Map<string, string>();
+
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return;
+    }
+
+    const delimiterIndex = trimmed.indexOf("=");
+    if (delimiterIndex <= 0) {
+      return;
+    }
+
+    const key = trimmed.slice(0, delimiterIndex).trim();
+    const value = parseDotEnvLine(trimmed.slice(delimiterIndex + 1));
+    result.set(key, value);
+  });
+
+  return result;
+}
+
+function requireEnv(name: string, envFromFile: Map<string, string>) {
+  const runtimeValue = process.env[name];
+  if (runtimeValue && runtimeValue.trim().length > 0) {
+    return runtimeValue.trim();
+  }
+
+  const fileValue = envFromFile.get(name);
+  if (fileValue && fileValue.trim().length > 0) {
+    return fileValue.trim();
+  }
+
+  throw new Error(`Missing required environment variable: ${name}`);
+}
+
+export function assertNoPostgrestError(error: PostgrestError | null, context: string) {
+  if (!error) {
+    return;
+  }
+
+  assert.fail(`${context}: ${error.code} ${error.message}`);
+}
+
+export function assertNoAuthError(error: AuthError | null, context: string) {
+  if (!error) {
+    return;
+  }
+
+  assert.fail(`${context}: ${error.code ?? "auth_error"} ${error.message}`);
+}
+
+const envFromFile = loadEnvFromLocalFile();
+const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", envFromFile);
+const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY", envFromFile);
+const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", envFromFile);
+
+export const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});
+
+export function createAnonClient() {
+  return createClient(supabaseUrl, anonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+export async function signInClient(email: string, password: string) {
+  const client = createAnonClient();
+  const { error } = await client.auth.signInWithPassword({
+    email,
+    password,
+  });
+  assertNoAuthError(error, "sign in test client");
+  return client;
+}
+
+export async function createAuthUserWithRetry(
+  supabase: SupabaseClient,
+  label: string,
+): Promise<CreatedAuthUser> {
+  const maxAttempts = 6;
+  const baseDelayMs = 300;
+  let lastError: { message?: string; code?: string } | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const email = `${label}-${randomUUID()}@example.com`;
+    const password = `SnapConsent-${randomUUID()}-A1!`;
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
+
+    if (!error && data.user?.id) {
+      return {
+        userId: data.user.id,
+        email,
+        password,
+      };
+    }
+
+    lastError = error;
+    if (error?.code !== "unexpected_failure" || attempt === maxAttempts) {
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
+  }
+
+  assert.fail(
+    `Unable to create auth user for tests: ${lastError?.code ?? "unknown"} ${lastError?.message ?? "no error message"}`,
+  );
+}

@@ -5,17 +5,21 @@ export {
   clearConsentAutoPhotoFaceLinks,
   clearConsentPhotoSuppressions,
   getManualPhotoLinkState,
+  hideAssetFace,
   listLinkedFaceOverlaysForAssetIds,
   listLinkedPhotosForConsent,
   listMatchableProjectPhotosForConsent,
+  loadCurrentHiddenFacesForAsset,
   listPhotoConsentAssignmentsForAssetIds,
   manualLinkPhotoToConsent,
   manualUnlinkPhotoFromConsent,
   MATCHABLE_PHOTOS_MODES,
   reconcilePhotoFaceCanonicalStateForAsset,
+  restoreHiddenAssetFace,
 } from "@/lib/matching/photo-face-linking";
 export type {
   AssetLinkedFaceOverlayRow,
+  HideAssetFaceResult,
   LinkedPhotoRow,
   MatchablePhotoPage,
   ManualPhotoLinkMode,
@@ -25,6 +29,7 @@ export type {
   MatchablePhotoRow,
   MatchablePhotosMode,
   PhotoConsentAssignment,
+  RestoreHiddenAssetFaceResult,
 } from "@/lib/matching/photo-face-linking";
 import { HttpError } from "@/lib/http/errors";
 import {

@@ -7,6 +7,7 @@ import { AssetsList } from "@/components/projects/assets-list";
 import { AssetsUploadForm } from "@/components/projects/assets-upload-form";
 import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-matching-panel";
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
+import { ConsentStructuredSnapshot } from "@/components/projects/consent-structured-snapshot";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { PreviewableImage } from "@/components/projects/previewable-image";
 import { ProjectDefaultTemplateForm } from "@/components/projects/project-default-template-form";
@@ -22,6 +23,7 @@ import {
   listVisibleTemplatesForTenant,
   resolveTemplateManagementAccess,
 } from "@/lib/templates/template-service";
+import type { StructuredFieldsSnapshot } from "@/lib/templates/structured-fields";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -52,6 +54,7 @@ type InviteRow = {
     signed_at: string;
     consent_text: string;
     consent_version: string;
+    structured_fields_snapshot: StructuredFieldsSnapshot | null;
     face_match_opt_in: boolean;
     subjects?: {
       email: string;
@@ -82,6 +85,7 @@ type RawInviteRow = {
     signed_at: string;
     consent_text: string;
     consent_version: string;
+    structured_fields_snapshot: StructuredFieldsSnapshot | null;
     face_match_opt_in: boolean;
     subjects?:
       | {
@@ -109,7 +113,6 @@ type ConsentTemplateOption = {
   name: string;
   version: string;
   scope: "app" | "tenant";
-  category: string | null;
 };
 
 type HeadshotAssetRow = {
@@ -163,7 +166,6 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     name: template.name,
     version: template.version,
     scope: template.scope,
-    category: template.category,
   }));
   const defaultTemplateId =
     templateOptions.find((template) => template.id === project.default_consent_template_id)?.id ??
@@ -176,7 +178,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   const { data: invites } = await supabase
     .from("subject_invites")
     .select(
-      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(name, version), consents(id, signed_at, consent_text, consent_version, face_match_opt_in, subjects(email, full_name))",
+      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(name, version), consents(id, signed_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
     )
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId)
@@ -197,6 +199,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
           signed_at: consent.signed_at,
           consent_text: consent.consent_text,
           consent_version: consent.consent_version,
+          structured_fields_snapshot: consent.structured_fields_snapshot,
           face_match_opt_in: consent.face_match_opt_in,
           subjects: firstRelation(consent.subjects),
         }))
@@ -312,20 +315,28 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
               <span>/</span>
               <span>{project.name}</span>
             </div>
-            <nav className="flex flex-wrap gap-2" aria-label={t("projectSectionsAria")}>
+            <div className="flex flex-wrap items-center gap-2">
               <a
-                href="#project-invites"
-                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                href={`/api/projects/${project.id}/export`}
+                className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800"
               >
-                {t("sectionInvites")}
+                {t("exportProject")}
               </a>
-              <a
-                href="#project-assets"
-                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
-              >
-                {t("sectionAssets")}
-              </a>
-            </nav>
+              <nav className="flex flex-wrap gap-2" aria-label={t("projectSectionsAria")}>
+                <a
+                  href="#project-invites"
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                >
+                  {t("sectionInvites")}
+                </a>
+                <a
+                  href="#project-assets"
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                >
+                  {t("sectionAssets")}
+                </a>
+              </nav>
+            </div>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
@@ -421,6 +432,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                             })}
                             className="h-full w-full"
                             imageClassName="h-full w-full object-cover"
+                            lightboxChrome="floating"
                           />
                         </div>
                       ) : null}
@@ -512,6 +524,25 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                         {consent?.consent_text ?? t("unknownValue")}
                                       </p>
                                     </div>
+
+                                    {consent?.structured_fields_snapshot ? (
+                                      <ConsentStructuredSnapshot
+                                        snapshot={consent.structured_fields_snapshot}
+                                        strings={{
+                                          title: t("structuredValuesTitle"),
+                                          noneValue: t("noneValue"),
+                                        }}
+                                      />
+                                    ) : (
+                                      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                        <p className="text-sm text-zinc-500">
+                                          {t("structuredValuesTitle")}
+                                        </p>
+                                        <p className="mt-2 text-sm text-zinc-800">
+                                          {t("structuredValuesLegacy")}
+                                        </p>
+                                      </div>
+                                    )}
                                   </section>
 
                                   <section className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
@@ -552,6 +583,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                             })}
                                             className="h-full w-full"
                                             imageClassName="h-full w-full object-cover"
+                                            lightboxChrome="floating"
                                           />
                                         </div>
                                       </div>

@@ -3,14 +3,18 @@
 import { useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 
+import { ConsentFormLayoutRenderer } from "@/components/consent/consent-form-layout-renderer";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
+import type { ConsentFormLayoutDefinition } from "@/lib/templates/form-layout";
+import type { StructuredFieldsDefinition } from "@/lib/templates/structured-fields";
 
 type PublicConsentFormProps = {
   token: string;
   consentText: string | null;
-  consentVersion: string | null;
+  structuredFieldsDefinition: StructuredFieldsDefinition | null;
+  formLayoutDefinition: ConsentFormLayoutDefinition;
 };
 
 type CreateHeadshotResponse =
@@ -59,11 +63,22 @@ function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: 
   });
 }
 
-export function PublicConsentForm({ token, consentText, consentVersion }: PublicConsentFormProps) {
+export function PublicConsentForm({
+  token,
+  consentText,
+  structuredFieldsDefinition,
+  formLayoutDefinition,
+}: PublicConsentFormProps) {
   const t = useTranslations("publicInvite.form");
   const tErrors = useTranslations("errors");
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [subjectName, setSubjectName] = useState("");
+  const [subjectEmail, setSubjectEmail] = useState("");
+  const [consentAcknowledged, setConsentAcknowledged] = useState(false);
+  const [structuredFieldValues, setStructuredFieldValues] = useState<
+    Record<string, string | string[] | null | undefined>
+  >({});
   const [faceMatchOptIn, setFaceMatchOptIn] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -179,142 +194,155 @@ export function PublicConsentForm({ token, consentText, consentVersion }: Public
       method="post"
       className="content-card space-y-5 rounded-2xl p-4 sm:p-5"
       onSubmit={(event) => {
+        if (!consentAcknowledged) {
+          event.preventDefault();
+          setError(t("errors.consentAcknowledgementRequired"));
+          return;
+        }
+
         if (faceMatchOptIn && !headshotAssetId) {
           event.preventDefault();
           setError(t("errors.headshotRequiredBeforeSubmit"));
         }
       }}
     >
-      <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">{t("fullNameLabel")}</span>
-        <input
-          name="full_name"
-          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
-          minLength={2}
-          maxLength={160}
-          required
-        />
-      </label>
-      <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">{t("emailLabel")}</span>
-        <input
-          name="email"
-          type="email"
-          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
-          required
-        />
-      </label>
-
-      <label className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
-        <input
-          type="checkbox"
-          checked={faceMatchOptIn}
-          onChange={(event) => {
-            const enabled = event.target.checked;
-            setFaceMatchOptIn(enabled);
-            setError(null);
-            setSuccess(null);
-            if (!enabled) {
-              setHeadshotAssetId(null);
-              setSelectedFile(null);
-              setShowSourcePicker(false);
-              setProgressPercent(0);
-              if (cameraInputRef.current) {
-                cameraInputRef.current.value = "";
-              }
-              if (fileInputRef.current) {
-                fileInputRef.current.value = "";
-              }
+      <ConsentFormLayoutRenderer
+        consentText={consentText}
+        formLayoutDefinition={formLayoutDefinition}
+        structuredFieldsDefinition={structuredFieldsDefinition}
+        strings={{
+          fullNameLabel: t("fullNameLabel"),
+          emailLabel: t("emailLabel"),
+          scopeLabel: t("scopeLabel"),
+          durationLabel: t("durationLabel"),
+          requiredField: t("requiredField"),
+          selectPlaceholder: t("selectPlaceholder"),
+          emptySelectionOption: t("emptySelectionOption"),
+          emptyCheckboxOptionLabel: t("emptyCheckboxOptionLabel"),
+          faceMatchOptIn: t("faceMatchOptIn"),
+          headshotRequiredTitle: t("headshotRequiredTitle"),
+          headshotRequiredBody: t("headshotRequiredBody"),
+          consentTextHeading: t("consentTextTitle"),
+          consentTextUnavailable: t("consentTextUnavailable"),
+          consentAcknowledgementLabel: t("consentAcknowledgementLabel"),
+        }}
+        values={{
+          subjectName,
+          subjectEmail,
+          consentAcknowledged,
+          faceMatchOptIn,
+          structuredFieldValues,
+        }}
+        onSubjectNameChange={(value) => {
+          setSubjectName(value);
+          setError(null);
+        }}
+        onSubjectEmailChange={(value) => {
+          setSubjectEmail(value);
+          setError(null);
+        }}
+        onConsentAcknowledgedChange={(value) => {
+          setConsentAcknowledged(value);
+          setError(null);
+        }}
+        onStructuredFieldChange={(fieldKey, value) => {
+          setStructuredFieldValues((current) => ({
+            ...current,
+            [fieldKey]: value,
+          }));
+          setError(null);
+        }}
+        onFaceMatchOptInChange={(enabled) => {
+          setFaceMatchOptIn(enabled);
+          setError(null);
+          setSuccess(null);
+          if (!enabled) {
+            setHeadshotAssetId(null);
+            setSelectedFile(null);
+            setShowSourcePicker(false);
+            setProgressPercent(0);
+            if (cameraInputRef.current) {
+              cameraInputRef.current.value = "";
             }
-          }}
-        />
-        <span>{t("faceMatchOptIn")}</span>
-      </label>
-
-      {faceMatchOptIn ? (
-        <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-zinc-800">
-          <p className="font-medium">{t("headshotRequiredTitle")}</p>
-          <p className="text-xs text-zinc-700">
-            {t("headshotRequiredBody")}
-          </p>
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept={MOBILE_HEADSHOT_ACCEPT}
-            capture="user"
-            disabled={isUploading}
-            onChange={(event) => handleSelectedFile(event.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={MOBILE_HEADSHOT_ACCEPT}
-            disabled={isUploading}
-            onChange={(event) => handleSelectedFile(event.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <button
-            type="button"
-            disabled={isUploading}
-            onClick={openHeadshotPicker}
-            className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
-          >
-            {isUploading ? t("uploadingHeadshot") : t("uploadHeadshot")}
-          </button>
-          {showSourcePicker ? (
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={isUploading}
-                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
-                onClick={() => {
-                  setShowSourcePicker(false);
-                  if (cameraInputRef.current) {
-                    cameraInputRef.current.value = "";
-                    cameraInputRef.current.click();
-                  }
-                }}
-              >
-                {t("takePicture")}
-              </button>
-              <button
-                type="button"
-                disabled={isUploading}
-                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
-                onClick={() => {
-                  setShowSourcePicker(false);
-                  if (fileInputRef.current) {
-                    fileInputRef.current.value = "";
-                    fileInputRef.current.click();
-                  }
-                }}
-              >
-                {t("selectFile")}
-              </button>
-            </div>
-          ) : null}
-          {selectedFile ? (
-            <p className="text-xs text-zinc-700">{t("selectedFile", { filename: selectedFile.name })}</p>
-          ) : null}
-          {headshotAssetId ? (
-            <p className="text-xs text-emerald-700">{t("headshotReady")}</p>
-          ) : null}
-          {isUploading ? (
-            <div className="space-y-1">
-              <div className="h-2 w-full overflow-hidden rounded bg-zinc-200">
-                <div className="h-full bg-zinc-900 transition-[width]" style={{ width: `${progressPercent}%` }} />
+            if (fileInputRef.current) {
+              fileInputRef.current.value = "";
+            }
+          }
+        }}
+        faceMatchDetails={
+          <>
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept={MOBILE_HEADSHOT_ACCEPT}
+              capture="user"
+              disabled={isUploading}
+              onChange={(event) => handleSelectedFile(event.target.files?.[0] ?? null)}
+              className="hidden"
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={MOBILE_HEADSHOT_ACCEPT}
+              disabled={isUploading}
+              onChange={(event) => handleSelectedFile(event.target.files?.[0] ?? null)}
+              className="hidden"
+            />
+            <button
+              type="button"
+              disabled={isUploading}
+              onClick={openHeadshotPicker}
+              className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+            >
+              {isUploading ? t("uploadingHeadshot") : t("uploadHeadshot")}
+            </button>
+            {showSourcePicker ? (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+                  onClick={() => {
+                    setShowSourcePicker(false);
+                    if (cameraInputRef.current) {
+                      cameraInputRef.current.value = "";
+                      cameraInputRef.current.click();
+                    }
+                  }}
+                >
+                  {t("takePicture")}
+                </button>
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800"
+                  onClick={() => {
+                    setShowSourcePicker(false);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = "";
+                      fileInputRef.current.click();
+                    }
+                  }}
+                >
+                  {t("selectFile")}
+                </button>
               </div>
-              <p className="text-xs text-zinc-600">{progressPercent}%</p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-800">
-        <p className="font-medium">{t("consentTextTitle", { version: consentVersion ?? t("unknownVersion") })}</p>
-        <p className="mt-2">{consentText ?? t("consentTextUnavailable")}</p>
-      </div>
+            ) : null}
+            {selectedFile ? (
+              <p className="text-xs text-zinc-700">{t("selectedFile", { filename: selectedFile.name })}</p>
+            ) : null}
+            {headshotAssetId ? <p className="text-xs text-emerald-700">{t("headshotReady")}</p> : null}
+            {isUploading ? (
+              <div className="space-y-1">
+                <div className="h-2 w-full overflow-hidden rounded bg-zinc-200">
+                  <div className="h-full bg-zinc-900 transition-[width]" style={{ width: `${progressPercent}%` }} />
+                </div>
+                <p className="text-xs text-zinc-600">{progressPercent}%</p>
+              </div>
+            ) : null}
+          </>
+        }
+      />
 
       <input type="hidden" name="face_match_opt_in" value={faceMatchOptIn ? "1" : "0"} />
       <input type="hidden" name="headshot_asset_id" value={faceMatchOptIn ? (headshotAssetId ?? "") : ""} />

@@ -45,12 +45,10 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
     <div className="min-h-screen">
       <header className="border-b border-zinc-200/80 bg-white/85 backdrop-blur-sm">
         <div className="page-frame flex flex-col gap-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center">
             <Link href="/projects" className="text-lg font-semibold tracking-tight text-zinc-900">
               {t("appName")}
             </Link>
-            <span className="hidden text-sm text-zinc-400 sm:inline">/</span>
-            <span className="text-sm text-zinc-600">{t("workspace")}</span>
           </div>
 
           <ProtectedNav />

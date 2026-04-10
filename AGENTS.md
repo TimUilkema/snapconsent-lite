@@ -52,3 +52,15 @@ Steps:
 Research and plan documents should be created under:
 
 docs/rpi/<feature-id>/
+
+## Large document writing + encoding safety
+
+When creating or updating large markdown documents (especially `research.md` and `plan.md`):
+
+- Always write clean UTF-8 text.
+- Prefer plain ASCII punctuation unless the file already intentionally uses Unicode.
+- Do not introduce Windows encoding artifacts, replacement characters, or smart-quote corruption.
+- If the target document is large, write it in smaller patches/sections instead of one very large write.
+- Assume large single writes may hit Windows command-length limits or patch-size limits.
+- Prefer incremental section-by-section updates with a final readback/verification pass.
+- After writing a large document, verify the file is coherent end-to-end and that no section was truncated or corrupted.

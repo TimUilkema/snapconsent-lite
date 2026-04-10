@@ -11,8 +11,12 @@
     "check:in-filters": "node scripts/check-unsafe-in-filters.mjs"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.98.0",
+    "archiver": "^7.0.1",
     "next": "16.1.6",
     "next-intl": "^4.9.0",
     "nodemailer": "^8.0.1",
@@ -30,6 +34,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "jszip": "^3.10.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

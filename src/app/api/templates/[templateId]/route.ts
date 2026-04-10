@@ -15,8 +15,9 @@ type RouteContext = {
 type UpdateTemplateBody = {
   name?: string;
   description?: string | null;
-  category?: string | null;
   body?: string;
+  structuredFieldsDefinition?: unknown;
+  formLayoutDefinition?: unknown;
 };
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -73,9 +74,9 @@ export async function PATCH(request: Request, context: RouteContext) {
       name: String(body.name ?? ""),
       description:
         typeof body.description === "string" || body.description === null ? body.description ?? null : null,
-      category:
-        typeof body.category === "string" || body.category === null ? body.category ?? null : null,
       body: String(body.body ?? ""),
+      structuredFieldsDefinition: body.structuredFieldsDefinition,
+      formLayoutDefinition: body.formLayoutDefinition,
     });
 
     return Response.json({ template }, { status: 200 });

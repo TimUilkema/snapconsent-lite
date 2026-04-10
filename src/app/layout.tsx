@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SnapConsent Lite",
+  title: "SnapConsent",
   description: "Consent workflows for photo projects.",
 };
 

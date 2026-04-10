@@ -9,7 +9,6 @@ import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 type CreateTemplateBody = {
   name?: string;
   description?: string | null;
-  category?: string | null;
   body?: string;
 };
 
@@ -70,8 +69,6 @@ export async function POST(request: Request) {
       name: String(body.name ?? ""),
       description:
         typeof body.description === "string" || body.description === null ? body.description ?? null : null,
-      category:
-        typeof body.category === "string" || body.category === null ? body.category ?? null : null,
       body: String(body.body ?? ""),
     });
 

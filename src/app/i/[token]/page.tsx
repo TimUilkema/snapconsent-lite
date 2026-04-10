@@ -1,10 +1,14 @@
 import Link from "next/link";
-import { getLocale, getTranslations } from "next-intl/server";
+import { getTranslations } from "next-intl/server";
 
 import { LanguageSwitch } from "@/components/i18n/language-switch";
 import { PublicConsentForm } from "@/components/public/public-consent-form";
-import { formatDateTime } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/server";
+import {
+  getEffectiveFormLayoutDefinition,
+  type ConsentFormLayoutDefinition,
+} from "@/lib/templates/form-layout";
+import type { StructuredFieldsDefinition } from "@/lib/templates/structured-fields";
 
 type InvitePageProps = {
   params: Promise<{
@@ -21,12 +25,12 @@ type InvitePageProps = {
 type InviteView = {
   invite_id: string;
   project_id: string;
-  project_name: string;
-  expires_at: string | null;
-  status: string;
+  template_name: string | null;
   can_sign: boolean;
   consent_text: string | null;
   consent_version: string | null;
+  structured_fields_definition: StructuredFieldsDefinition | null;
+  form_layout_definition: ConsentFormLayoutDefinition | null;
 };
 
 function mapError(error: string | undefined, t: Awaited<ReturnType<typeof getTranslations>>) {
@@ -51,7 +55,6 @@ function mapError(error: string | undefined, t: Awaited<ReturnType<typeof getTra
 }
 
 export default async function PublicInvitePage({ params, searchParams }: InvitePageProps) {
-  const locale = await getLocale();
   const t = await getTranslations("publicInvite");
   const { token } = await params;
   const resolvedSearchParams = await searchParams;
@@ -72,14 +75,8 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
         </div>
         <div className="flex flex-col gap-2">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t("title")}</h1>
-          {invite ? (
-            <p className="text-sm text-zinc-700">
-              {t("projectLine", { projectName: invite.project_name, status: invite.status })}
-              {invite.expires_at ? ` · ${t("expiresOn", { date: formatDateTime(invite.expires_at, locale) })}` : ""}
-            </p>
-          ) : (
-            <p className="text-sm text-zinc-700">{t("lookupLabel")}</p>
-          )}
+          {invite?.template_name ? <p className="text-sm text-zinc-700">{invite.template_name}</p> : null}
+          {!invite ? <p className="text-sm text-zinc-700">{t("lookupLabel")}</p> : null}
         </div>
 
         {errorMessage ? (
@@ -107,7 +104,11 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
           <PublicConsentForm
             token={token}
             consentText={invite.consent_text}
-            consentVersion={invite.consent_version}
+            structuredFieldsDefinition={invite.structured_fields_definition}
+            formLayoutDefinition={getEffectiveFormLayoutDefinition(
+              invite.form_layout_definition,
+              invite.structured_fields_definition,
+            )}
           />
         ) : (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">

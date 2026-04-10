@@ -28,8 +28,6 @@ export function TemplateCreateForm() {
 
     const formData = new FormData(event.currentTarget);
     const name = String(formData.get("name") ?? "").trim();
-    const description = String(formData.get("description") ?? "").trim();
-    const category = String(formData.get("category") ?? "").trim();
     const body = String(formData.get("body") ?? "").trim();
 
     try {
@@ -41,8 +39,6 @@ export function TemplateCreateForm() {
         },
         body: JSON.stringify({
           name,
-          description: description || null,
-          category: category || null,
           body,
         }),
       });
@@ -66,7 +62,6 @@ export function TemplateCreateForm() {
     <form onSubmit={handleSubmit} className="content-card space-y-4 rounded-xl p-5">
       <div>
         <h2 className="text-lg font-semibold text-zinc-900">{t("title")}</h2>
-        <p className="mt-1 text-sm text-zinc-600">{t("subtitle")}</p>
       </div>
 
       <label className="block text-sm text-zinc-800">
@@ -81,31 +76,13 @@ export function TemplateCreateForm() {
       </label>
 
       <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">{t("categoryLabel")}</span>
-        <input
-          name="category"
-          className="w-full rounded-lg border border-zinc-300 px-3 py-2.5"
-          maxLength={80}
-          placeholder={t("categoryPlaceholder")}
-        />
-      </label>
-
-      <label className="block text-sm text-zinc-800">
-        <span className="mb-1 block font-medium">{t("descriptionLabel")}</span>
-        <textarea
-          name="description"
-          className="w-full rounded-lg border border-zinc-300 px-3 py-2.5"
-          rows={3}
-          maxLength={500}
-        />
-      </label>
-
-      <label className="block text-sm text-zinc-800">
         <span className="mb-1 block font-medium">{t("bodyLabel")}</span>
         <textarea
           name="body"
           className="min-h-48 w-full rounded-lg border border-zinc-300 px-3 py-2.5"
           rows={10}
+          minLength={20}
+          maxLength={20000}
           required
         />
       </label>

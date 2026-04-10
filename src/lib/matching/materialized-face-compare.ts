@@ -57,6 +57,11 @@ type MaterializationWithFaces = {
   faces: AssetFaceMaterializationFaceRow[];
 };
 
+function normalizeSimilarityScore(value: number | null | undefined) {
+  const numeric = Number(value ?? NaN);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0;
+}
+
 function requireEmbeddingComparer(matcher: AutoMatcher) {
   if (!matcher.compareEmbeddings) {
     throw new HttpError(
@@ -214,6 +219,93 @@ async function loadFaceById(
   return (data as AssetFaceMaterializationFaceRow | null) ?? null;
 }
 
+async function syncFaceCompareScores(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  consentId: string;
+  assetId: string;
+  headshotMaterializationId: string;
+  assetMaterializationId: string;
+  compareVersion: string;
+  provider: string;
+  providerMode: string;
+  providerPluginVersions: Record<string, unknown> | null;
+  comparedAt: string;
+  targetFaces: AssetFaceMaterializationFaceRow[];
+  targetSimilarities: number[];
+}) {
+  const rows = input.targetFaces.map((face, index) => ({
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    asset_id: input.assetId,
+    consent_id: input.consentId,
+    headshot_materialization_id: input.headshotMaterializationId,
+    asset_materialization_id: input.assetMaterializationId,
+    asset_face_id: face.id,
+    asset_face_rank: face.face_rank,
+    similarity: normalizeSimilarityScore(input.targetSimilarities[index]),
+    compare_version: input.compareVersion,
+    provider: input.provider,
+    provider_mode: input.providerMode,
+    provider_plugin_versions: input.providerPluginVersions,
+    compared_at: input.comparedAt,
+  }));
+
+  if (rows.length > 0) {
+    const { error: upsertError } = await input.supabase.from("asset_consent_face_compare_scores").upsert(rows, {
+      onConflict:
+        "tenant_id,project_id,consent_id,asset_id,headshot_materialization_id,asset_materialization_id,asset_face_id,compare_version",
+    });
+
+    if (upsertError) {
+      throw new HttpError(500, "face_compare_score_write_failed", "Unable to persist face compare scores.");
+    }
+  }
+
+  const { data: existingRows, error: existingRowsError } = await input.supabase
+    .from("asset_consent_face_compare_scores")
+    .select("asset_face_id")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId)
+    .eq("asset_id", input.assetId)
+    .eq("headshot_materialization_id", input.headshotMaterializationId)
+    .eq("asset_materialization_id", input.assetMaterializationId)
+    .eq("compare_version", input.compareVersion);
+
+  if (existingRowsError) {
+    throw new HttpError(500, "face_compare_score_lookup_failed", "Unable to load stored face compare scores.");
+  }
+
+  const keepFaceIds = new Set(rows.map((row) => row.asset_face_id));
+  const staleFaceIds = ((existingRows ?? []) as Array<{ asset_face_id: string }>).filter(
+    (row) => !keepFaceIds.has(row.asset_face_id),
+  );
+  if (staleFaceIds.length === 0) {
+    return;
+  }
+
+  const { error: staleDeleteError } = await input.supabase
+    .from("asset_consent_face_compare_scores")
+    .delete()
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("consent_id", input.consentId)
+    .eq("asset_id", input.assetId)
+    .eq("headshot_materialization_id", input.headshotMaterializationId)
+    .eq("asset_materialization_id", input.assetMaterializationId)
+    .eq("compare_version", input.compareVersion)
+    .in(
+      "asset_face_id",
+      staleFaceIds.map((row) => row.asset_face_id),
+    );
+
+  if (staleDeleteError) {
+    throw new HttpError(500, "face_compare_score_delete_failed", "Unable to remove stale face compare scores.");
+  }
+}
+
 async function hydrateCompare(
   supabase: SupabaseClient,
   headshotMaterialization: AssetFaceMaterializationRow,
@@ -314,6 +406,7 @@ export async function ensureMaterializedFaceCompare(
   let compareStatus: AssetConsentFaceCompareStatus = "no_match";
   let winningAssetFace: AssetFaceMaterializationFaceRow | null = null;
   let winningSimilarity = 0;
+  let targetSimilarities: number[] = [];
   let provider = asset.materialization.provider;
   let providerMode = "materialized_skip";
   let providerPluginVersions: Record<string, unknown> | null = asset.materialization.provider_plugin_versions ?? null;
@@ -332,6 +425,7 @@ export async function ensureMaterializedFaceCompare(
     provider = compareResult.providerMetadata.provider;
     providerMode = compareResult.providerMetadata.providerMode;
     providerPluginVersions = compareResult.providerMetadata.providerPluginVersions ?? null;
+    targetSimilarities = compareResult.targetSimilarities;
 
     const winning = pickWinningFace(targetFaces, compareResult.targetSimilarities);
     winningAssetFace = winning.winningAssetFace;
@@ -374,6 +468,23 @@ export async function ensureMaterializedFaceCompare(
   if (error || !data) {
     throw new HttpError(500, "face_compare_write_failed", "Unable to persist materialized face compare.");
   }
+
+  await syncFaceCompareScores({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    consentId: input.consentId,
+    assetId: input.assetId,
+    headshotMaterializationId: headshot.materialization.id,
+    assetMaterializationId: asset.materialization.id,
+    compareVersion,
+    provider,
+    providerMode,
+    providerPluginVersions,
+    comparedAt: nowIso,
+    targetFaces,
+    targetSimilarities,
+  });
 
   return {
     compare: data as AssetConsentFaceCompareRow,

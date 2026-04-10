@@ -1,4 +1,5 @@
 import { markReceiptSent, submitConsent } from "@/lib/consent/submit-consent";
+import { validateConsentBaseFields } from "@/lib/consent/validate-consent-base-fields";
 import { sendConsentReceiptEmail } from "@/lib/email/send-receipt";
 import { HttpError } from "@/lib/http/errors";
 import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
@@ -6,6 +7,10 @@ import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
 import { redirectRelative } from "@/lib/http/redirect-relative";
 import { createClient } from "@/lib/supabase/server";
+import {
+  STRUCTURED_FIELD_KEY_PATTERN,
+  STRUCTURED_FIELD_VALUES_MAX_BYTES,
+} from "@/lib/templates/structured-fields";
 import { buildExternalUrl } from "@/lib/url/external-origin";
 import { buildInvitePath, buildRevokePath } from "@/lib/url/paths";
 
@@ -36,6 +41,50 @@ function parseIpAddress(request: Request) {
   return value.split(",")[0]?.trim() ?? null;
 }
 
+function parseStructuredFieldValues(formData: FormData) {
+  const structuredFieldValues = new Map<string, string | string[]>();
+
+  for (const [key, rawValue] of formData.entries()) {
+    if (!key.startsWith("structured__")) {
+      continue;
+    }
+
+    if (typeof rawValue !== "string") {
+      throw new HttpError(400, "invalid_structured_fields", "Structured consent values are invalid.");
+    }
+
+    const fieldKey = key.slice("structured__".length).trim();
+    if (!STRUCTURED_FIELD_KEY_PATTERN.test(fieldKey)) {
+      throw new HttpError(400, "invalid_structured_fields", "Structured consent values are invalid.");
+    }
+
+    const currentValue = structuredFieldValues.get(fieldKey);
+    if (currentValue === undefined) {
+      structuredFieldValues.set(fieldKey, rawValue);
+      continue;
+    }
+
+    if (Array.isArray(currentValue)) {
+      currentValue.push(rawValue);
+      continue;
+    }
+
+    structuredFieldValues.set(fieldKey, [currentValue, rawValue]);
+  }
+
+  if (structuredFieldValues.size === 0) {
+    return null;
+  }
+
+  const payload = Object.fromEntries(structuredFieldValues.entries());
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length;
+  if (payloadBytes > STRUCTURED_FIELD_VALUES_MAX_BYTES) {
+    throw new HttpError(400, "invalid_structured_fields", "Structured consent values are invalid.");
+  }
+
+  return payload;
+}
+
 export async function POST(request: Request, context: RouteContext) {
   const { token } = await context.params;
   const formData = await request.formData();
@@ -44,16 +93,39 @@ export async function POST(request: Request, context: RouteContext) {
   const email = String(formData.get("email") ?? "")
     .trim()
     .toLowerCase();
+  const consentAcknowledged = String(formData.get("consent_acknowledged") ?? "") === "1";
   const faceMatchOptIn = String(formData.get("face_match_opt_in") ?? "") === "1";
   const headshotAssetIdValue = String(formData.get("headshot_asset_id") ?? "").trim();
   const headshotAssetId = headshotAssetIdValue.length > 0 ? headshotAssetIdValue : null;
+  let structuredFieldValues: Record<string, unknown> | null = null;
 
-  if (fullName.length < 2 || !email || !email.includes("@")) {
+  const baseFieldValidation = validateConsentBaseFields({
+    subjectName: fullName,
+    subjectEmail: email,
+    consentAcknowledged,
+    faceMatchOptIn,
+    hasHeadshot: Boolean(headshotAssetId),
+  });
+
+  if (baseFieldValidation.fieldErrors.face_match_section) {
+    return redirectWithStatus(request, token, { error: "headshot_required" });
+  }
+
+  if (
+    baseFieldValidation.fieldErrors.subject_name ||
+    baseFieldValidation.fieldErrors.subject_email ||
+    baseFieldValidation.fieldErrors.consent_acknowledged
+  ) {
     return redirectWithStatus(request, token, { error: "invalid" });
   }
 
-  if (faceMatchOptIn && !headshotAssetId) {
-    return redirectWithStatus(request, token, { error: "headshot_required" });
+  try {
+    structuredFieldValues = parseStructuredFieldValues(formData);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return redirectWithStatus(request, token, { error: "invalid" });
+    }
+    throw error;
   }
 
   try {
@@ -61,10 +133,11 @@ export async function POST(request: Request, context: RouteContext) {
     const consent = await submitConsent({
       supabase,
       token,
-      fullName,
-      email,
+      fullName: baseFieldValidation.normalizedSubjectName,
+      email: baseFieldValidation.normalizedSubjectEmail,
       faceMatchOptIn,
       headshotAssetId,
+      structuredFieldValues,
       captureIp: parseIpAddress(request),
       captureUserAgent: request.headers.get("user-agent"),
     });
@@ -133,7 +206,11 @@ export async function POST(request: Request, context: RouteContext) {
       }
 
       if (error.status === 400) {
-        return redirectWithStatus(request, token, { error: "headshot_required" });
+        if (error.code === "headshot_invalid") {
+          return redirectWithStatus(request, token, { error: "headshot_required" });
+        }
+
+        return redirectWithStatus(request, token, { error: "invalid" });
       }
 
       if (error.status === 409) {

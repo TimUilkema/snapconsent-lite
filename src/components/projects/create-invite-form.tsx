@@ -27,7 +27,6 @@ type ConsentTemplateOption = {
   name: string;
   version: string;
   scope: "app" | "tenant";
-  category: string | null;
 };
 
 type InvitePayload = {
@@ -151,7 +150,6 @@ export function CreateInviteForm({
               <option key={template.id} value={template.id}>
                 {template.name} {template.version} -{" "}
                 {template.scope === "app" ? t("templateScopeStandard") : t("templateScopeOrganization")}
-                {template.category ? ` - ${template.category}` : ""}
               </option>
             ))}
           </select>

@@ -3,6 +3,19 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import {
+  createStarterFormLayoutDefinition,
+  FormLayoutError,
+  getEffectiveFormLayoutDefinition,
+  normalizeFormLayoutDefinition,
+  type ConsentFormLayoutDefinition,
+} from "@/lib/templates/form-layout";
+import {
+  createStarterStructuredFieldsDefinition,
+  normalizeStructuredFieldsDefinition,
+  StructuredFieldsDefinition,
+  StructuredFieldsError,
+} from "@/lib/templates/structured-fields";
 
 type MembershipRole = "owner" | "admin" | "photographer";
 
@@ -12,11 +25,12 @@ type TemplateRow = {
   template_key: string;
   name: string;
   description: string | null;
-  category: string | null;
   version: string;
   version_number: number;
   status: "draft" | "published" | "archived";
   body: string;
+  structured_fields_definition: StructuredFieldsDefinition | null;
+  form_layout_definition: ConsentFormLayoutDefinition | null;
   created_at: string;
   updated_at: string;
   published_at: string | null;
@@ -35,8 +49,6 @@ export type TemplateSummary = {
   tenantId: string | null;
   templateKey: string;
   name: string;
-  description: string | null;
-  category: string | null;
   version: string;
   versionNumber: number;
   status: "draft" | "published" | "archived";
@@ -47,6 +59,8 @@ export type TemplateSummary = {
 
 export type TemplateDetail = TemplateSummary & {
   body: string;
+  structuredFieldsDefinition: StructuredFieldsDefinition | null;
+  formLayoutDefinition: ConsentFormLayoutDefinition;
   canEdit: boolean;
   canPublish: boolean;
   canArchive: boolean;
@@ -60,7 +74,6 @@ type CreateTemplateInput = {
   idempotencyKey: string;
   name: string;
   description: string | null;
-  category: string | null;
   body: string;
 };
 
@@ -94,8 +107,9 @@ type UpdateDraftTemplateInput = {
   templateId: string;
   name: string;
   description: string | null;
-  category: string | null;
   body: string;
+  structuredFieldsDefinition: unknown;
+  formLayoutDefinition?: unknown;
 };
 
 type TemplateStateChangeInput = {
@@ -113,6 +127,10 @@ type ProjectDefaultTemplateInput = {
   templateId: string | null;
 };
 
+type TemplateVersionRpcRow = TemplateRow & {
+  reused_existing_draft: boolean;
+};
+
 function mapTemplateSummary(row: TemplateRow): TemplateSummary {
   return {
     id: row.id,
@@ -120,8 +138,6 @@ function mapTemplateSummary(row: TemplateRow): TemplateSummary {
     tenantId: row.tenant_id,
     templateKey: row.template_key,
     name: row.name,
-    description: row.description,
-    category: row.category,
     version: row.version,
     versionNumber: row.version_number,
     status: row.status,
@@ -136,6 +152,11 @@ function mapTemplateDetail(row: TemplateRow, canManage: boolean): TemplateDetail
   return {
     ...summary,
     body: row.body,
+    structuredFieldsDefinition: row.structured_fields_definition,
+    formLayoutDefinition: getEffectiveFormLayoutDefinition(
+      row.form_layout_definition,
+      row.structured_fields_definition,
+    ),
     canEdit: canManage && summary.scope === "tenant" && summary.status === "draft",
     canPublish: canManage && summary.scope === "tenant" && summary.status === "draft",
     canArchive: canManage && summary.scope === "tenant" && summary.status === "published",
@@ -168,12 +189,10 @@ function normalizeOptionalText(value: string | null) {
 function validateTemplateInput(input: {
   name: string;
   description: string | null;
-  category: string | null;
   body: string;
 }) {
   const name = normalizeName(input.name);
   const description = normalizeOptionalText(input.description);
-  const category = normalizeOptionalText(input.category);
   const body = input.body.trim();
 
   if (name.length < 2 || name.length > 120) {
@@ -184,10 +203,6 @@ function validateTemplateInput(input: {
     throw new HttpError(400, "invalid_template_description", "Template description must be 500 characters or fewer.");
   }
 
-  if (category && category.length > 80) {
-    throw new HttpError(400, "invalid_template_category", "Template category must be 80 characters or fewer.");
-  }
-
   if (body.length < 20) {
     throw new HttpError(400, "invalid_template_body", "Template body must be at least 20 characters.");
   }
@@ -196,7 +211,132 @@ function validateTemplateInput(input: {
     throw new HttpError(400, "invalid_template_body", "Template body must be 20000 characters or fewer.");
   }
 
-  return { name, description, category, body };
+  return { name, description, body };
+}
+
+function isStructuredDefinitionValidationCode(code: string) {
+  return [
+    "invalid_structured_fields_definition",
+    "structured_fields_payload_too_large",
+    "structured_scope_required",
+    "duplicate_structured_field_key",
+    "duplicate_structured_option_key",
+    "invalid_structured_text_limits",
+  ].includes(code);
+}
+
+function isFormLayoutValidationCode(code: string) {
+  return [
+    "invalid_form_layout_definition",
+    "duplicate_form_layout_block",
+    "missing_form_layout_block",
+  ].includes(code);
+}
+
+function normalizeStructuredDefinitionForDraft(input: unknown) {
+  try {
+    return normalizeStructuredFieldsDefinition(input, { requireScopeOptions: false });
+  } catch (error) {
+    if (error instanceof StructuredFieldsError) {
+      if (error.code === "structured_fields_payload_too_large") {
+        throw new HttpError(400, error.code, "Structured field definition is too large.");
+      }
+
+      throw new HttpError(400, error.code, "Structured field definition is invalid.");
+    }
+
+    throw error;
+  }
+}
+
+function normalizeStructuredDefinitionForPublish(input: StructuredFieldsDefinition | null) {
+  try {
+    return normalizeStructuredFieldsDefinition(input, { requireScopeOptions: true });
+  } catch (error) {
+    if (error instanceof StructuredFieldsError) {
+      if (error.code === "structured_fields_payload_too_large") {
+        throw new HttpError(400, error.code, "Structured field definition is too large.");
+      }
+
+      throw new HttpError(400, error.code, "Structured field definition is invalid for publish.");
+    }
+
+    throw error;
+  }
+}
+
+function normalizeFormLayoutDefinitionForDraft(
+  input: unknown,
+  structuredFieldsDefinition: StructuredFieldsDefinition | null,
+) {
+  try {
+    return normalizeFormLayoutDefinition(input, structuredFieldsDefinition);
+  } catch (error) {
+    if (error instanceof FormLayoutError) {
+      throw new HttpError(400, error.code, "Form layout definition is invalid.");
+    }
+
+    throw error;
+  }
+}
+
+function normalizeFormLayoutDefinitionForPublish(
+  input: ConsentFormLayoutDefinition | null,
+  structuredFieldsDefinition: StructuredFieldsDefinition | null,
+) {
+  try {
+    return getEffectiveFormLayoutDefinition(input, structuredFieldsDefinition);
+  } catch (error) {
+    if (error instanceof FormLayoutError) {
+      throw new HttpError(400, error.code, "Form layout definition is invalid for publish.");
+    }
+
+    throw error;
+  }
+}
+
+function mapTemplateMutationRpcError(error: { code?: string; message?: string } | null): never {
+  if (!error) {
+    throw new HttpError(500, "template_mutation_failed", "Template mutation failed.");
+  }
+
+  if (error.code === "42501" || error.message === "template_management_forbidden") {
+    throw new HttpError(403, "template_management_forbidden", "Only workspace owners and admins can manage templates.");
+  }
+
+  if (error.code === "P0002" || error.message === "template_not_found") {
+    throw new HttpError(404, "template_not_found", "Template not found.");
+  }
+
+  if (error.message === "template_not_publishable") {
+    throw new HttpError(409, "template_not_publishable", "Only draft templates can be published.");
+  }
+
+  if (error.code === "23505") {
+    throw new HttpError(409, "template_publish_conflict", "Another version was published first. Refresh and retry.");
+  }
+
+  if (
+    error.code === "22001" ||
+    (typeof error.message === "string" &&
+      (isStructuredDefinitionValidationCode(error.message) || isFormLayoutValidationCode(error.message)))
+  ) {
+    if (typeof error.message === "string" && isFormLayoutValidationCode(error.message)) {
+      throw new HttpError(400, error.message, "Form layout definition is invalid.");
+    }
+
+    throw new HttpError(
+      400,
+      error.message ?? "invalid_structured_fields_definition",
+      "Structured field definition is invalid.",
+    );
+  }
+
+  if (error.code === "23514") {
+    throw new HttpError(409, error.message ?? "template_state_invalid", "Template state is invalid.");
+  }
+
+  throw new HttpError(500, "template_mutation_failed", "Template mutation failed.");
 }
 
 async function getMembershipRole(
@@ -307,7 +447,7 @@ async function getTemplateRowById(
   const { data, error } = await supabase
     .from("consent_templates")
     .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
     )
     .eq("id", templateId)
     .maybeSingle();
@@ -331,6 +471,14 @@ async function getTenantTemplateRowById(
   return row;
 }
 
+function firstRpcRow<T>(data: unknown) {
+  if (Array.isArray(data)) {
+    return (data[0] as T | undefined) ?? null;
+  }
+
+  return (data as T | null) ?? null;
+}
+
 export async function listVisibleTemplatesForTenant(
   supabase: SupabaseClient,
   tenantId: string,
@@ -339,14 +487,14 @@ export async function listVisibleTemplatesForTenant(
     supabase
       .from("consent_templates")
       .select(
-        "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+        "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
       )
       .is("tenant_id", null)
       .eq("status", "published"),
     supabase
       .from("consent_templates")
       .select(
-        "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+        "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
       )
       .eq("tenant_id", tenantId)
       .eq("status", "published"),
@@ -374,7 +522,7 @@ export async function listManageableTemplatesForTenant(
   const { data, error } = await supabase
     .from("consent_templates")
     .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
     )
     .eq("tenant_id", tenantId)
     .order("updated_at", { ascending: false });
@@ -451,16 +599,17 @@ export async function createTenantTemplate(input: CreateTemplateInput): Promise<
       tenant_id: input.tenantId,
       template_key: templateKey,
       name: validated.name,
-      description: validated.description,
-      category: validated.category,
+      description: null,
       version: "v1",
       version_number: 1,
       status: "draft",
       body: validated.body,
+      structured_fields_definition: createStarterStructuredFieldsDefinition(),
+      form_layout_definition: createStarterFormLayoutDefinition(createStarterStructuredFieldsDefinition()),
       created_by: input.userId,
     })
     .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
     )
     .single();
 
@@ -497,19 +646,35 @@ export async function updateDraftTemplate(input: UpdateDraftTemplateInput): Prom
   }
 
   const validated = validateTemplateInput(input);
+  const structuredFieldsDefinition = normalizeStructuredDefinitionForDraft(input.structuredFieldsDefinition);
+  const formLayoutDefinition =
+    input.formLayoutDefinition === undefined
+      ? (() => {
+          if (!template.form_layout_definition) {
+            return createStarterFormLayoutDefinition(structuredFieldsDefinition);
+          }
+
+          try {
+            return normalizeFormLayoutDefinition(template.form_layout_definition, structuredFieldsDefinition);
+          } catch {
+            return createStarterFormLayoutDefinition(structuredFieldsDefinition);
+          }
+        })()
+      : normalizeFormLayoutDefinitionForDraft(input.formLayoutDefinition, structuredFieldsDefinition);
 
   const { data, error } = await input.supabase
     .from("consent_templates")
     .update({
       name: validated.name,
-      description: validated.description,
-      category: validated.category,
+      description: null,
       body: validated.body,
+      structured_fields_definition: structuredFieldsDefinition,
+      form_layout_definition: formLayoutDefinition,
     })
     .eq("id", template.id)
     .eq("tenant_id", input.tenantId)
     .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
     )
     .single();
 
@@ -542,118 +707,22 @@ export async function createTenantTemplateVersion(
     return { status: 200, payload: existingPayload };
   }
 
-  const { data: existingDraftRows, error: existingDraftError } = await input.supabase
-    .from("consent_templates")
-    .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
-    )
-    .eq("tenant_id", input.tenantId)
-    .eq("template_key", sourceTemplate.template_key)
-    .eq("status", "draft")
-    .limit(1);
-
-  if (existingDraftError) {
-    throw new HttpError(500, "template_lookup_failed", "Unable to create a new template version.");
-  }
-
-  const existingDraft = (existingDraftRows as TemplateRow[] | null)?.[0] ?? null;
-  if (existingDraft) {
-    const payload = {
-      template: mapTemplateDetail(existingDraft, true),
-      reusedExistingDraft: true,
-    };
-
-    await writeIdempotencyPayload(
-      input.supabase,
-      input.tenantId,
-      input.userId,
-      operation,
-      input.idempotencyKey,
-      payload,
-    );
-
-    return { status: 200, payload };
-  }
-
-  const { data: familyRows, error: familyRowsError } = await input.supabase
-    .from("consent_templates")
-    .select("version_number")
-    .eq("tenant_id", input.tenantId)
-    .eq("template_key", sourceTemplate.template_key)
-    .order("version_number", { ascending: false })
-    .limit(1);
-
-  if (familyRowsError) {
-    throw new HttpError(500, "template_lookup_failed", "Unable to create a new template version.");
-  }
-
-  const nextVersionNumber = ((familyRows?.[0] as { version_number?: number } | undefined)?.version_number ?? 0) + 1;
-
-  const { data, error } = await input.supabase
-    .from("consent_templates")
-    .insert({
-      tenant_id: input.tenantId,
-      template_key: sourceTemplate.template_key,
-      name: sourceTemplate.name,
-      description: sourceTemplate.description,
-      category: sourceTemplate.category,
-      version: `v${nextVersionNumber}`,
-      version_number: nextVersionNumber,
-      status: "draft",
-      body: sourceTemplate.body,
-      created_by: input.userId,
-    })
-    .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
-    )
-    .single();
+  const { data, error } = await input.supabase.rpc("create_next_tenant_consent_template_version", {
+    p_template_id: sourceTemplate.id,
+  });
 
   if (error) {
-    if (error.code === "23505") {
-      const { data: conflictDraftRows, error: conflictDraftError } = await input.supabase
-        .from("consent_templates")
-        .select(
-          "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
-        )
-        .eq("tenant_id", input.tenantId)
-        .eq("template_key", sourceTemplate.template_key)
-        .eq("status", "draft")
-        .limit(1);
-
-      if (conflictDraftError) {
-        throw new HttpError(500, "template_version_failed", "Unable to create a new template version.");
-      }
-
-      const conflictDraft = (conflictDraftRows as TemplateRow[] | null)?.[0] ?? null;
-      if (conflictDraft) {
-        const payload = {
-          template: mapTemplateDetail(conflictDraft, true),
-          reusedExistingDraft: true,
-        };
-
-        await writeIdempotencyPayload(
-          input.supabase,
-          input.tenantId,
-          input.userId,
-          operation,
-          input.idempotencyKey,
-          payload,
-        );
-
-        return { status: 200, payload };
-      }
-    }
-
-    throw new HttpError(500, "template_version_failed", "Unable to create a new template version.");
+    mapTemplateMutationRpcError(error);
   }
 
-  if (!data) {
+  const rpcRow = firstRpcRow<TemplateVersionRpcRow>(data);
+  if (!rpcRow) {
     throw new HttpError(500, "template_version_failed", "Unable to create a new template version.");
   }
 
   const payload = {
-    template: mapTemplateDetail(data as TemplateRow, true),
-    reusedExistingDraft: false,
+    template: mapTemplateDetail(rpcRow, true),
+    reusedExistingDraft: rpcRow.reused_existing_draft,
   };
 
   await writeIdempotencyPayload(
@@ -665,7 +734,10 @@ export async function createTenantTemplateVersion(
     payload,
   );
 
-  return { status: 201, payload };
+  return {
+    status: rpcRow.reused_existing_draft ? 200 : 201,
+    payload,
+  };
 }
 
 export async function publishTenantTemplate(input: TemplateStateChangeInput): Promise<TemplateDetail> {
@@ -683,61 +755,26 @@ export async function publishTenantTemplate(input: TemplateStateChangeInput): Pr
   if (template.status !== "draft") {
     throw new HttpError(409, "template_not_publishable", "Only draft templates can be published.");
   }
+  normalizeStructuredDefinitionForPublish(template.structured_fields_definition);
+  normalizeFormLayoutDefinitionForPublish(
+    template.form_layout_definition,
+    template.structured_fields_definition,
+  );
 
-  const { data: currentPublishedRows, error: currentPublishedError } = await input.supabase
-    .from("consent_templates")
-    .select("id")
-    .eq("tenant_id", input.tenantId)
-    .eq("template_key", template.template_key)
-    .eq("status", "published")
-    .limit(1);
+  const { data, error } = await input.supabase.rpc("publish_tenant_consent_template", {
+    p_template_id: template.id,
+  });
 
-  if (currentPublishedError) {
+  if (error) {
+    mapTemplateMutationRpcError(error);
+  }
+
+  const rpcRow = firstRpcRow<TemplateRow>(data);
+  if (!rpcRow) {
     throw new HttpError(500, "template_publish_failed", "Unable to publish template.");
   }
 
-  const currentPublishedId = (currentPublishedRows?.[0] as { id?: string } | undefined)?.id ?? null;
-
-  if (currentPublishedId && currentPublishedId !== template.id) {
-    const { error: archiveCurrentError } = await input.supabase
-      .from("consent_templates")
-      .update({
-        status: "archived",
-        archived_at: new Date().toISOString(),
-      })
-      .eq("id", currentPublishedId)
-      .eq("tenant_id", input.tenantId)
-      .eq("status", "published");
-
-    if (archiveCurrentError) {
-      throw new HttpError(500, "template_publish_failed", "Unable to publish template.");
-    }
-  }
-
-  const { data, error } = await input.supabase
-    .from("consent_templates")
-    .update({
-      status: "published",
-      published_at: new Date().toISOString(),
-      archived_at: null,
-    })
-    .eq("id", template.id)
-    .eq("tenant_id", input.tenantId)
-    .eq("status", "draft")
-    .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
-    )
-    .single();
-
-  if (error || !data) {
-    if (error?.code === "23505") {
-      throw new HttpError(409, "template_publish_conflict", "Another version was published first. Refresh and retry.");
-    }
-
-    throw new HttpError(500, "template_publish_failed", "Unable to publish template.");
-  }
-
-  return mapTemplateDetail(data as TemplateRow, true);
+  return mapTemplateDetail(rpcRow, true);
 }
 
 export async function archiveTenantTemplate(input: TemplateStateChangeInput): Promise<TemplateDetail> {
@@ -766,7 +803,7 @@ export async function archiveTenantTemplate(input: TemplateStateChangeInput): Pr
     .eq("tenant_id", input.tenantId)
     .eq("status", "published")
     .select(
-      "id, tenant_id, template_key, name, description, category, version, version_number, status, body, created_at, updated_at, published_at, archived_at",
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
     )
     .single();
 
