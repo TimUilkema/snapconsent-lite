@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export {
   assertConsentInProject,
+  blockAssetFace,
+  clearBlockedAssetFace,
   clearConsentAutoPhotoFaceLinks,
   clearConsentPhotoSuppressions,
   getManualPhotoLinkState,
@@ -9,6 +11,7 @@ export {
   listLinkedFaceOverlaysForAssetIds,
   listLinkedPhotosForConsent,
   listMatchableProjectPhotosForConsent,
+  loadCurrentBlockedFacesForAsset,
   loadCurrentHiddenFacesForAsset,
   listPhotoConsentAssignmentsForAssetIds,
   manualLinkPhotoToConsent,
@@ -19,6 +22,8 @@ export {
 } from "@/lib/matching/photo-face-linking";
 export type {
   AssetLinkedFaceOverlayRow,
+  BlockAssetFaceResult,
+  ClearBlockedAssetFaceResult,
   HideAssetFaceResult,
   LinkedPhotoRow,
   MatchablePhotoPage,

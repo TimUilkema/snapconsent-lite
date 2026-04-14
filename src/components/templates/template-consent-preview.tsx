@@ -192,7 +192,31 @@ function getHandleLayoutMode(
     return "field_input";
   }
 
+  if (field.fieldType === "checkbox_list") {
+    return "stretch";
+  }
+
   return "field_input";
+}
+
+function getCheckboxListField(
+  block: ConsentFormLayoutBlock,
+  structuredFieldsDefinition: StructuredFieldsDefinition | null,
+) {
+  if (!structuredFieldsDefinition || block.kind === "system") {
+    return null;
+  }
+
+  const field = getStructuredFieldByKey(
+    structuredFieldsDefinition,
+    block.kind === "custom_field" ? block.fieldKey : block.key,
+  );
+
+  if (!field || field.fieldType !== "checkbox_list") {
+    return null;
+  }
+
+  return field;
 }
 
 function SortablePreviewRailItem({
@@ -206,7 +230,7 @@ function SortablePreviewRailItem({
   structuredFieldsDefinition: StructuredFieldsDefinition | null;
   strings: TemplateConsentPreviewStrings;
   disabled: boolean;
-  layoutMode: "subject_input" | "field_input" | "stretch";
+  layoutMode: "subject_input" | "field_input" | "checkbox_list" | "stretch" | "option_list";
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: getFormLayoutBlockId(block),
@@ -223,8 +247,10 @@ function SortablePreviewRailItem({
       ref={setNodeRef}
       style={style}
       className={
-        layoutMode === "stretch"
+        layoutMode === "stretch" || layoutMode === "option_list"
           ? "flex h-full items-stretch"
+          : layoutMode === "checkbox_list"
+            ? "flex items-start pt-14"
           : layoutMode === "subject_input"
             ? "flex items-start pt-6"
             : "flex items-start pt-7"
@@ -234,7 +260,11 @@ function SortablePreviewRailItem({
         type="button"
         className={[
           "flex w-full items-center justify-center rounded-xl border border-zinc-300 bg-white p-2 text-zinc-600 hover:bg-zinc-100 disabled:opacity-50",
-          layoutMode === "stretch" ? "h-full min-h-[56px]" : "h-11",
+          layoutMode === "stretch"
+            ? "h-full min-h-[56px]"
+            : layoutMode === "option_list"
+              ? "h-full"
+              : "h-11",
         ].join(" ")}
         aria-label={`${strings.dragHandle}: ${getBlockLabel(block, structuredFieldsDefinition, strings)}`}
         title={getBlockLabel(block, structuredFieldsDefinition, strings)}
@@ -286,7 +316,73 @@ function PreviewBlockRow({
   const mappedErrors = Object.fromEntries(
     Object.entries(errors).map(([fieldKey, code]) => [fieldKey, toUserFacingError(code, strings)]),
   );
+  const checkboxListField = getCheckboxListField(block, structuredFieldsDefinition);
   const layoutMode = getHandleLayoutMode(block, structuredFieldsDefinition);
+
+  if (checkboxListField) {
+    const selectedOptionKeys = Array.isArray(values.structuredFieldValues[checkboxListField.fieldKey])
+      ? (values.structuredFieldValues[checkboxListField.fieldKey] as string[])
+      : [];
+    const options = checkboxListField.options ?? [];
+    const error = mappedErrors[checkboxListField.fieldKey];
+
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-zinc-900">
+            {getBlockLabel(block, structuredFieldsDefinition, strings)}
+          </p>
+          {checkboxListField.required ? (
+            <span className="text-xs font-medium text-zinc-600">{strings.requiredField}</span>
+          ) : null}
+        </div>
+        {checkboxListField.helpText ? (
+          <p className="text-xs text-zinc-600">{checkboxListField.helpText}</p>
+        ) : null}
+
+        <div className="grid grid-cols-[minmax(0,1fr)_36px] items-start gap-2">
+          <div className="space-y-2">
+            {options.length === 0 ? (
+              <label className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-400">
+                <input type="checkbox" disabled />
+                <span>{strings.emptyCheckboxOptionLabel}</span>
+              </label>
+            ) : null}
+            {options.map((option) => (
+              <label
+                key={option.optionKey}
+                className={[
+                  "flex items-start gap-2 rounded-lg border bg-white px-3 py-2 text-sm text-zinc-800",
+                  error ? "border-red-300" : "border-zinc-200",
+                ].join(" ")}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedOptionKeys.includes(option.optionKey)}
+                  disabled={disabled}
+                  onChange={(event) => {
+                    const nextValue = event.target.checked
+                      ? [...selectedOptionKeys, option.optionKey]
+                      : selectedOptionKeys.filter((item) => item !== option.optionKey);
+                    onStructuredFieldChange(checkboxListField.fieldKey, nextValue);
+                  }}
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+            {error ? <p className="text-xs font-medium text-red-700">{error}</p> : null}
+          </div>
+          <SortablePreviewRailItem
+            block={block}
+            structuredFieldsDefinition={structuredFieldsDefinition}
+            strings={strings}
+            disabled={disabled}
+            layoutMode="option_list"
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_36px] items-start gap-2">
@@ -539,7 +635,12 @@ export function TemplateConsentPreview({
             <p className="text-sm text-zinc-700">{strings.formSubtitle || templateName}</p>
           </div>
 
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <DndContext
+            id="template-preview-layout"
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
             <SortableContext
               items={formLayoutDefinition.blocks.map(getFormLayoutBlockId)}
               strategy={verticalListSortingStrategy}

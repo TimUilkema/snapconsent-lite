@@ -16,6 +16,7 @@ import type {
   AutoMatcherProviderMetadata,
   AutoMatcherStorageRef,
 } from "@/lib/matching/auto-matcher";
+import { createReviewCropFromNormalizedBox } from "@/lib/matching/face-review-crop";
 import { MatcherProviderError } from "@/lib/matching/provider-errors";
 
 type DownloadedImage = {
@@ -95,7 +96,6 @@ const MIN_LONGEST_SIDE_CAP = 480;
 const RESIZE_ATTEMPTS = 5;
 const QUALITY_STEPS = [82, 76, 70, 64, 58, 52, 46];
 const PASSTHROUGH_FORMATS = new Set(["jpeg", "png"]);
-const REVIEW_CROP_SIZE = 256;
 
 function isDevelopmentLoggingEnabled() {
   return process.env.NODE_ENV !== "production";
@@ -451,65 +451,6 @@ function toNormalizedFaceBox(faceBox: AutoMatcherFaceBox, width: number, height:
   };
 }
 
-function buildReviewCropRect(
-  normalizedFaceBox: AutoMatcherFaceBox,
-  sourceWidth: number,
-  sourceHeight: number,
-) {
-  const xMin = clampDimension(normalizedFaceBox.xMin * sourceWidth, sourceWidth);
-  const yMin = clampDimension(normalizedFaceBox.yMin * sourceHeight, sourceHeight);
-  const xMax = clampDimension(normalizedFaceBox.xMax * sourceWidth, sourceWidth);
-  const yMax = clampDimension(normalizedFaceBox.yMax * sourceHeight, sourceHeight);
-  const faceWidth = Math.max(1, xMax - xMin);
-  const faceHeight = Math.max(1, yMax - yMin);
-  const side = Math.max(faceWidth, faceHeight) * 1.6;
-  const centerX = (xMin + xMax) / 2;
-  const centerY = (yMin + yMax) / 2;
-  const left = clampDimension(centerX - side / 2, sourceWidth);
-  const top = clampDimension(centerY - side / 2, sourceHeight);
-  const right = clampDimension(centerX + side / 2, sourceWidth);
-  const bottom = clampDimension(centerY + side / 2, sourceHeight);
-  const width = Math.max(1, Math.round(right - left));
-  const height = Math.max(1, Math.round(bottom - top));
-  return {
-    left: Math.max(0, Math.min(sourceWidth - 1, Math.round(left))),
-    top: Math.max(0, Math.min(sourceHeight - 1, Math.round(top))),
-    width: Math.min(width, sourceWidth),
-    height: Math.min(height, sourceHeight),
-  };
-}
-
-async function createReviewCrop(
-  orientedSourceBuffer: Buffer,
-  normalizedFaceBox: AutoMatcherFaceBox,
-  sourceWidth: number,
-  sourceHeight: number,
-) {
-  try {
-    const rect = buildReviewCropRect(normalizedFaceBox, sourceWidth, sourceHeight);
-    const buffer = await sharp(orientedSourceBuffer, { failOn: "error" })
-      .extract(rect)
-      .resize({
-        width: REVIEW_CROP_SIZE,
-        height: REVIEW_CROP_SIZE,
-        fit: "cover",
-        position: "centre",
-      })
-      .webp({ quality: 84 })
-      .toBuffer();
-
-    return {
-      derivativeKind: "review_square_256" as const,
-      contentType: "image/webp" as const,
-      data: buffer,
-      width: REVIEW_CROP_SIZE,
-      height: REVIEW_CROP_SIZE,
-    };
-  } catch {
-    return null;
-  }
-}
-
 async function downloadAsBase64(
   supabase: SupabaseClient,
   candidate: AutoMatcherCandidate,
@@ -650,7 +591,7 @@ async function parseDetectionFaces(
       preparedImage.processedHeight,
     );
     const reviewCrop = normalizedFaceBox
-      ? await createReviewCrop(
+      ? await createReviewCropFromNormalizedBox(
           preparedImage.orientedSourceBuffer,
           normalizedFaceBox,
           preparedImage.sourceWidth,

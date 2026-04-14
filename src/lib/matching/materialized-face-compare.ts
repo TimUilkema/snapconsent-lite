@@ -81,7 +81,7 @@ async function loadMaterializationFaces(
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
     .select(
-      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, embedding, created_at",
+      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
     )
     .eq("materialization_id", materializationId)
     .order("face_rank", { ascending: true });
@@ -207,7 +207,7 @@ async function loadFaceById(
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
     .select(
-      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, embedding, created_at",
+      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
     )
     .eq("id", faceId)
     .maybeSingle();
@@ -402,7 +402,10 @@ export async function ensureMaterializedFaceCompare(
   }
 
   const sourceFace = headshot.materialization.usable_for_compare ? headshot.faces[0] ?? null : null;
-  const targetFaces = asset.faces;
+  const targetFaces = asset.faces.filter(
+    (face): face is AssetFaceMaterializationFaceRow & { embedding: number[] } =>
+      face.face_source === "detector" && Array.isArray(face.embedding) && face.embedding.length > 0,
+  );
   let compareStatus: AssetConsentFaceCompareStatus = "no_match";
   let winningAssetFace: AssetFaceMaterializationFaceRow | null = null;
   let winningSimilarity = 0;
@@ -411,7 +414,7 @@ export async function ensureMaterializedFaceCompare(
   let providerMode = "materialized_skip";
   let providerPluginVersions: Record<string, unknown> | null = asset.materialization.provider_plugin_versions ?? null;
 
-  if (!sourceFace) {
+  if (!sourceFace?.embedding || sourceFace.face_source !== "detector") {
     compareStatus = "source_unusable";
   } else if (targetFaces.length === 0) {
     compareStatus = "target_empty";

@@ -33,11 +33,14 @@ type PreviewConsentSummary = LinkedFacePreview["consent"];
 type AssetPreviewFace = {
   assetFaceId: string;
   faceRank: number;
+  faceSource: "detector" | "manual";
   faceBoxNormalized: Record<string, number | null> | null;
   faceThumbnailUrl: string | null;
   detectionProbability: number | null;
-  faceState: "linked_manual" | "linked_auto" | "unlinked" | "hidden";
+  faceState: "linked_manual" | "linked_auto" | "unlinked" | "hidden" | "blocked";
   hiddenAt: string | null;
+  blockedAt: string | null;
+  blockedReason: "no_consent" | null;
   currentLink: null | {
     consentId: string;
     linkSource: "manual" | "auto";
@@ -76,6 +79,19 @@ type AssetPreviewFaceCandidatesResponse = {
   candidates: AssetPreviewCandidate[];
 };
 
+type ManualAssetFaceCreateResponse = {
+  ok: boolean;
+  created: boolean;
+  assetId: string;
+  materializationId: string;
+  assetFaceId: string;
+  faceRank: number;
+  faceSource: "detector" | "manual";
+  message?: string;
+};
+
+const MIN_MANUAL_FACE_BOX_SIZE = 0.02;
+
 type ProjectAssetPreviewLightboxProps = {
   projectId: string;
   asset: {
@@ -112,6 +128,16 @@ function buildOverlayId(assetFaceId: string, consentId?: string | null) {
 
 function extractAssetFaceId(overlayId: string | null | undefined) {
   return String(overlayId ?? "").split(":")[0] ?? null;
+}
+
+function isManualFaceDraftSaveable(faceBoxNormalized: Record<string, number | null> | null) {
+  if (!faceBoxNormalized) {
+    return false;
+  }
+
+  const width = Number(faceBoxNormalized.x_max ?? 0) - Number(faceBoxNormalized.x_min ?? 0);
+  const height = Number(faceBoxNormalized.y_max ?? 0) - Number(faceBoxNormalized.y_min ?? 0);
+  return width >= MIN_MANUAL_FACE_BOX_SIZE && height >= MIN_MANUAL_FACE_BOX_SIZE;
 }
 
 function toLinkedFacePreview(face: AssetPreviewFace | null): LinkedFacePreview | null {
@@ -256,6 +282,24 @@ function HideFaceIcon({ className }: { className?: string }) {
   );
 }
 
+function BlockFaceIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className ?? "h-4 w-4"}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="8" />
+      <path d="m8.5 15.5 7-7" />
+    </svg>
+  );
+}
+
 function CloseTrayIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -321,6 +365,8 @@ export function AssetPreviewConsentPanel({
   moveWarningLabel,
   hideFaceLabel,
   hideFaceBusyLabel,
+  blockFaceLabel,
+  blockFaceBusyLabel,
   isSaving,
   actionError,
   isChangePersonOpen,
@@ -329,6 +375,7 @@ export function AssetPreviewConsentPanel({
   selectedReplacementConsentId,
   onRemoveLink,
   onHideFace,
+  onBlockFace,
   onToggleChangePerson,
   onSelectReplacement,
   onSaveChange,
@@ -359,6 +406,8 @@ export function AssetPreviewConsentPanel({
   moveWarningLabel: (face: number) => string;
   hideFaceLabel?: string;
   hideFaceBusyLabel?: string;
+  blockFaceLabel?: string;
+  blockFaceBusyLabel?: string;
   isSaving: boolean;
   actionError: string | null;
   isChangePersonOpen: boolean;
@@ -367,6 +416,7 @@ export function AssetPreviewConsentPanel({
   selectedReplacementConsentId: string | null;
   onRemoveLink: () => void;
   onHideFace?: (() => void) | null;
+  onBlockFace?: (() => void) | null;
   onToggleChangePerson: () => void;
   onSelectReplacement: (consentId: string) => void;
   onSaveChange: () => void;
@@ -490,6 +540,16 @@ export function AssetPreviewConsentPanel({
                 className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60"
               >
                 {isSaving ? hideFaceBusyLabel : hideFaceLabel}
+              </button>
+            ) : null}
+            {onBlockFace && blockFaceLabel && blockFaceBusyLabel ? (
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={onBlockFace}
+                className="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+              >
+                {isSaving ? blockFaceBusyLabel : blockFaceLabel}
               </button>
             ) : null}
             <button
@@ -723,6 +783,110 @@ function AssetPreviewShowHiddenToggle({
   );
 }
 
+function AssetPreviewSceneActions({
+  hiddenFaceCount,
+  showHiddenFaces,
+  onShowHiddenFacesChange,
+  isAddPersonMenuOpen,
+  onToggleAddPersonMenu,
+  onStartSelectFace,
+  isDrawMode,
+  isDraftSaveable,
+  isSavingManualFace,
+  onCancelDraw,
+  onSaveDraw,
+  showHiddenLabel,
+  addPersonLabel,
+  selectFaceLabel,
+  linkEntireAssetLabel,
+  drawModeHelpLabel,
+  cancelLabel,
+  saveLabel,
+  savingLabel,
+}: {
+  hiddenFaceCount: number;
+  showHiddenFaces: boolean;
+  onShowHiddenFacesChange: (checked: boolean) => void;
+  isAddPersonMenuOpen: boolean;
+  onToggleAddPersonMenu: () => void;
+  onStartSelectFace: () => void;
+  isDrawMode: boolean;
+  isDraftSaveable: boolean;
+  isSavingManualFace: boolean;
+  onCancelDraw: () => void;
+  onSaveDraw: () => void;
+  showHiddenLabel: (count: number) => string;
+  addPersonLabel: string;
+  selectFaceLabel: string;
+  linkEntireAssetLabel: string;
+  drawModeHelpLabel: string;
+  cancelLabel: string;
+  saveLabel: string;
+  savingLabel: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <AssetPreviewShowHiddenToggle
+        hiddenFaceCount={hiddenFaceCount}
+        checked={showHiddenFaces}
+        onChange={onShowHiddenFacesChange}
+        label={showHiddenLabel}
+      />
+
+      <div className="relative">
+        <button
+          type="button"
+          disabled={isDrawMode}
+          onClick={onToggleAddPersonMenu}
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {addPersonLabel}
+        </button>
+        {isAddPersonMenuOpen && !isDrawMode ? (
+          <div className="absolute left-0 top-full z-30 mt-2 min-w-[15rem] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg">
+            <button
+              type="button"
+              onClick={onStartSelectFace}
+              className="block w-full rounded-md px-3 py-2 text-left text-sm text-zinc-900 hover:bg-zinc-50"
+            >
+              {selectFaceLabel}
+            </button>
+            <button
+              type="button"
+              disabled
+              className="block w-full cursor-not-allowed rounded-md px-3 py-2 text-left text-sm text-zinc-400"
+            >
+              {linkEntireAssetLabel}
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {isDrawMode ? (
+        <>
+          <span className="text-sm text-zinc-600">{drawModeHelpLabel}</span>
+          <button
+            type="button"
+            disabled={isSavingManualFace}
+            onClick={onCancelDraw}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            disabled={!isDraftSaveable || isSavingManualFace}
+            onClick={onSaveDraw}
+            className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          >
+            {isSavingManualFace ? savingLabel : saveLabel}
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function AssetPreviewUnlinkedFaceTray({
   candidates,
   isLoadingCandidates,
@@ -730,9 +894,11 @@ function AssetPreviewUnlinkedFaceTray({
   onSelectCandidate,
   onSave,
   onHide,
+  onBlock,
   onClose,
   isSavingLink,
   isSavingHide,
+  isSavingBlock,
   isConfirmingHide,
   onToggleHideConfirm,
   actionError,
@@ -744,6 +910,8 @@ function AssetPreviewUnlinkedFaceTray({
   savingLabel,
   hideLabel,
   hidingLabel,
+  blockLabel,
+  blockingLabel,
   linkedToFaceLabel,
   moveWarningLabel,
   confirmMoveLabel,
@@ -756,9 +924,11 @@ function AssetPreviewUnlinkedFaceTray({
   onSelectCandidate: (consentId: string) => void;
   onSave: () => void;
   onHide: () => void;
+  onBlock: () => void;
   onClose: () => void;
   isSavingLink: boolean;
   isSavingHide: boolean;
+  isSavingBlock: boolean;
   isConfirmingHide: boolean;
   onToggleHideConfirm: () => void;
   actionError: string | null;
@@ -770,6 +940,8 @@ function AssetPreviewUnlinkedFaceTray({
   savingLabel: string;
   hideLabel: string;
   hidingLabel: string;
+  blockLabel: string;
+  blockingLabel: string;
   linkedToFaceLabel: (face: number) => string;
   moveWarningLabel: (face: number) => string;
   confirmMoveLabel: string;
@@ -947,7 +1119,7 @@ function AssetPreviewUnlinkedFaceTray({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={isSavingLink || isSavingHide || !selectedCandidateConsentId}
+            disabled={isSavingLink || isSavingHide || isSavingBlock || !selectedCandidateConsentId}
             onClick={onSave}
             className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
           >
@@ -956,7 +1128,7 @@ function AssetPreviewUnlinkedFaceTray({
           {isConfirmingHide ? (
             <button
               type="button"
-              disabled={isSavingLink || isSavingHide}
+              disabled={isSavingLink || isSavingHide || isSavingBlock}
               onClick={onHide}
               className="rounded-lg border border-red-700 bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-60"
             >
@@ -965,7 +1137,7 @@ function AssetPreviewUnlinkedFaceTray({
           ) : (
             <button
               type="button"
-              disabled={isSavingLink || isSavingHide}
+              disabled={isSavingLink || isSavingHide || isSavingBlock}
               onClick={onToggleHideConfirm}
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
               aria-label={hideLabel}
@@ -974,6 +1146,14 @@ function AssetPreviewUnlinkedFaceTray({
               <HideFaceIcon />
             </button>
           )}
+          <button
+            type="button"
+            disabled={isSavingLink || isSavingHide || isSavingBlock}
+            onClick={onBlock}
+            className="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+          >
+            {isSavingBlock ? blockingLabel : blockLabel}
+          </button>
         </div>
         {isConfirmingHide ? (
           <button
@@ -986,6 +1166,273 @@ function AssetPreviewUnlinkedFaceTray({
           </button>
         ) : null}
       </div>
+
+      {previewCandidate?.headshotThumbnailUrl ? (
+        <ImagePreviewLightbox
+          open
+          src={previewCandidate.headshotThumbnailUrl}
+          alt={previewCandidate.fullName || `Consent ${previewCandidate.consentId}`}
+          previewImageClassName="object-contain"
+          chrome="floating"
+          onClose={() => setPreviewCandidate(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AssetPreviewBlockedFaceTray({
+  selectedFace,
+  candidates,
+  isAssignPersonOpen,
+  isLoadingCandidates,
+  selectedCandidateConsentId,
+  onToggleAssignPerson,
+  onSelectCandidate,
+  onSave,
+  onClearBlock,
+  isSavingLink,
+  isClearingBlock,
+  actionError,
+  titleLabel,
+  descriptionLabel,
+  assignPersonLabel,
+  closeAssignPersonLabel,
+  pickerLoadingLabel,
+  pickerEmptyLabel,
+  saveLabel,
+  savingLabel,
+  clearBlockedLabel,
+  clearingBlockedLabel,
+  linkedToFaceLabel,
+  moveWarningLabel,
+  confirmMoveLabel,
+  cancelLabel,
+  autoLabel,
+}: {
+  selectedFace: AssetPreviewFace;
+  candidates: AssetPreviewCandidate[];
+  isAssignPersonOpen: boolean;
+  isLoadingCandidates: boolean;
+  selectedCandidateConsentId: string | null;
+  onToggleAssignPerson: () => void;
+  onSelectCandidate: (consentId: string) => void;
+  onSave: () => void;
+  onClearBlock: () => void;
+  isSavingLink: boolean;
+  isClearingBlock: boolean;
+  actionError: string | null;
+  titleLabel: (face: number) => string;
+  descriptionLabel: string;
+  assignPersonLabel: string;
+  closeAssignPersonLabel: string;
+  pickerLoadingLabel: string;
+  pickerEmptyLabel: string;
+  saveLabel: string;
+  savingLabel: string;
+  clearBlockedLabel: string;
+  clearingBlockedLabel: string;
+  linkedToFaceLabel: (face: number) => string;
+  moveWarningLabel: (face: number) => string;
+  confirmMoveLabel: string;
+  cancelLabel: string;
+  autoLabel: string;
+}) {
+  const [previewCandidate, setPreviewCandidate] = useState<AssetPreviewCandidate | null>(null);
+  const [confirmMoveConsentId, setConfirmMoveConsentId] = useState<string | null>(null);
+  const isSaving = isSavingLink || isClearingBlock;
+
+  return (
+    <div className="rounded-xl border border-red-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-zinc-900">{titleLabel(selectedFace.faceRank + 1)}</p>
+          <p className="mt-1 text-sm text-zinc-600">{descriptionLabel}</p>
+        </div>
+        <div className="grid h-14 w-14 place-items-center overflow-hidden rounded-lg border border-red-200 bg-red-50 text-red-700">
+          {selectedFace.faceThumbnailUrl ? (
+            <span
+              aria-hidden="true"
+              className="block h-full w-full bg-cover bg-center"
+              style={{ backgroundImage: `url("${selectedFace.faceThumbnailUrl}")` }}
+            />
+          ) : (
+            <BlockFaceIcon />
+          )}
+        </div>
+      </div>
+
+      {actionError ? (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {actionError}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={onToggleAssignPerson}
+          className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+        >
+          {isAssignPersonOpen ? closeAssignPersonLabel : assignPersonLabel}
+        </button>
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={onClearBlock}
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60"
+        >
+          {isClearingBlock ? clearingBlockedLabel : clearBlockedLabel}
+        </button>
+      </div>
+
+      {isAssignPersonOpen ? (
+        <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <div className="space-y-3">
+            {isLoadingCandidates ? (
+              <p className="text-sm text-zinc-600">{pickerLoadingLabel}</p>
+            ) : candidates.length === 0 ? (
+              <p className="text-sm text-zinc-600">{pickerEmptyLabel}</p>
+            ) : (
+              <div className="max-h-72 space-y-2 overflow-y-auto">
+                {candidates.map((candidate) => {
+                  const candidateName = candidate.fullName || `Consent ${candidate.consentId}`;
+                  const isSelected = candidate.consentId === selectedCandidateConsentId;
+                  const isLinkedElsewhere =
+                    Boolean(candidate.currentAssetLink) &&
+                    candidate.currentAssetLink?.assetFaceId !== selectedFace.assetFaceId;
+                  const isAwaitingMoveConfirm = confirmMoveConsentId === candidate.consentId;
+
+                  return (
+                    <div
+                      key={candidate.consentId}
+                      onClick={() => {
+                        if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
+                          setConfirmMoveConsentId(candidate.consentId);
+                          return;
+                        }
+
+                        setConfirmMoveConsentId(null);
+                        onSelectCandidate(candidate.consentId);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
+                            setConfirmMoveConsentId(candidate.consentId);
+                            return;
+                          }
+
+                          setConfirmMoveConsentId(null);
+                          onSelectCandidate(candidate.consentId);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSelected}
+                      className={`w-full rounded-lg border px-2 py-2 text-left ${
+                        isSelected
+                          ? "border-zinc-900 bg-white"
+                          : isLinkedElsewhere
+                            ? "border-zinc-300 bg-zinc-100 text-zinc-600 opacity-80 ring-1 ring-zinc-200 hover:border-zinc-400"
+                            : "border-zinc-200 bg-white hover:border-zinc-300"
+                      }`}
+                    >
+                      <span className="flex items-start gap-3">
+                        {candidate.headshotThumbnailUrl ? (
+                          <span className="relative block h-16 w-16 shrink-0 overflow-hidden rounded-md border border-zinc-200 bg-zinc-100">
+                            <span
+                              aria-hidden="true"
+                              className={`block h-full w-full bg-cover bg-center ${isLinkedElsewhere ? "opacity-70" : ""}`}
+                              style={{ backgroundImage: `url("${candidate.headshotThumbnailUrl}")` }}
+                            />
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setPreviewCandidate(candidate);
+                              }}
+                              className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/95 text-zinc-700 hover:bg-white"
+                              aria-label={`Open ${candidateName}`}
+                              title={`Open ${candidateName}`}
+                            >
+                              <EnlargeImageIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="grid h-16 w-16 shrink-0 place-items-center rounded-md border border-zinc-200 bg-zinc-100 text-xs font-semibold text-zinc-700">
+                            {getPersonInitials(candidateName)}
+                          </span>
+                        )}
+                        <span className="block min-w-0 flex-1">
+                          <span className={`block truncate text-sm font-medium ${isLinkedElsewhere ? "text-zinc-600" : "text-zinc-900"}`}>
+                            {candidateName}
+                          </span>
+                          <span className="mt-1 flex items-center gap-1 text-xs text-zinc-500">
+                            <AutoCandidateIcon className="h-3.5 w-3.5 text-zinc-700" />
+                            <span>{autoLabel}</span>
+                            {typeof candidate.similarityScore === "number" ? (
+                              <span>{Math.round(candidate.similarityScore * 100)}%</span>
+                            ) : null}
+                          </span>
+                          {candidate.currentAssetLink ? (
+                            <span className="mt-2 inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
+                              {linkedToFaceLabel((candidate.currentAssetLink.faceRank ?? 0) + 1)}
+                            </span>
+                          ) : null}
+                          {isAwaitingMoveConfirm && candidate.currentAssetLink ? (
+                            <span className="mt-2 block rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-xs text-amber-900">
+                              <span className="block">
+                                {moveWarningLabel((candidate.currentAssetLink.faceRank ?? 0) + 1)}
+                              </span>
+                              <span className="mt-2 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    setConfirmMoveConsentId(null);
+                                    onSelectCandidate(candidate.consentId);
+                                  }}
+                                  className="rounded-md border border-zinc-900 bg-zinc-900 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800"
+                                >
+                                  {confirmMoveLabel}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    setConfirmMoveConsentId(null);
+                                  }}
+                                  className="text-xs font-medium text-zinc-600 hover:text-zinc-900"
+                                >
+                                  {cancelLabel}
+                                </button>
+                              </span>
+                            </span>
+                          ) : null}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={isSaving || !selectedCandidateConsentId}
+              onClick={onSave}
+              className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {isSavingLink ? savingLabel : saveLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {previewCandidate?.headshotThumbnailUrl ? (
         <ImagePreviewLightbox
@@ -1089,6 +1536,8 @@ export function ProjectAssetPreviewLightbox({
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [isSavingHide, setIsSavingHide] = useState(false);
   const [isSavingRestore, setIsSavingRestore] = useState(false);
+  const [isSavingBlock, setIsSavingBlock] = useState(false);
+  const [isClearingBlock, setIsClearingBlock] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [hoveredFaceId, setHoveredFaceId] = useState<string | null>(null);
@@ -1097,6 +1546,10 @@ export function ProjectAssetPreviewLightbox({
   const [selectedReplacementConsentId, setSelectedReplacementConsentId] = useState<string | null>(null);
   const [showHiddenFaces, setShowHiddenFaces] = useState(false);
   const [isConfirmingHideFace, setIsConfirmingHideFace] = useState(false);
+  const [isAddPersonMenuOpen, setIsAddPersonMenuOpen] = useState(false);
+  const [isDrawFaceMode, setIsDrawFaceMode] = useState(false);
+  const [draftManualFaceBox, setDraftManualFaceBox] = useState<Record<string, number | null> | null>(null);
+  const [isSavingManualFace, setIsSavingManualFace] = useState(false);
 
   const loadPreviewData = useCallback(async (signal?: AbortSignal) => {
     setIsLoadingPreviewData(true);
@@ -1166,6 +1619,11 @@ export function ProjectAssetPreviewLightbox({
       setSelectedFaceId(null);
       setShowHiddenFaces(false);
       setIsConfirmingHideFace(false);
+      setIsAddPersonMenuOpen(false);
+      setIsDrawFaceMode(false);
+      setDraftManualFaceBox(null);
+      setIsSavingBlock(false);
+      setIsClearingBlock(false);
       return;
     }
 
@@ -1179,6 +1637,11 @@ export function ProjectAssetPreviewLightbox({
     setSelectedReplacementConsentId(null);
     setShowHiddenFaces(false);
     setIsConfirmingHideFace(false);
+    setIsAddPersonMenuOpen(false);
+    setIsDrawFaceMode(false);
+    setDraftManualFaceBox(null);
+    setIsSavingBlock(false);
+    setIsClearingBlock(false);
 
     const controller = new AbortController();
 
@@ -1206,11 +1669,12 @@ export function ProjectAssetPreviewLightbox({
   const selectedLinkedFaceCandidates =
     selectedLinkedFace && candidateData?.assetFaceId === selectedLinkedFace.assetFaceId ? candidateData.candidates : [];
   const selectedFacePreviewCandidate =
-    selectedFace?.faceState === "unlinked" &&
+    (selectedFace?.faceState === "unlinked" || selectedFace?.faceState === "blocked") &&
     selectedReplacementConsentId &&
     candidateData?.assetFaceId === selectedFace.assetFaceId
       ? candidateData.candidates.find((candidate) => candidate.consentId === selectedReplacementConsentId) ?? null
       : null;
+  const isDraftManualFaceSaveable = isManualFaceDraftSaveable(draftManualFaceBox);
 
   const previewFaceOverlays = useMemo(() => {
     if (previewData?.faces?.length) {
@@ -1238,7 +1702,9 @@ export function ProjectAssetPreviewLightbox({
                   `Consent ${selectedFacePreviewCandidate.consentId}`
                 : face.currentLink?.consent.fullName ||
                   face.currentLink?.consent.email ||
-                  t("previewDetectedFaceLabel", { face: face.faceRank + 1 }),
+                  (face.faceState === "blocked"
+                    ? t("previewBlockedFaceLabel", { face: face.faceRank + 1 })
+                    : t("previewDetectedFaceLabel", { face: face.faceRank + 1 })),
             faceBoxNormalized: face.faceBoxNormalized!,
             headshotThumbnailUrl:
               isSelectedUnlinkedPreview
@@ -1254,6 +1720,8 @@ export function ProjectAssetPreviewLightbox({
                 ? t("previewLinkSourceManual")
                 : face.faceState === "linked_auto"
                   ? t("previewLinkSourceAuto")
+                  : face.faceState === "blocked"
+                    ? t("previewFaceStateBlocked")
                   : face.faceState === "hidden"
                     ? t("previewFaceStateHidden")
                     : t("previewFaceStateDetected"),
@@ -1262,16 +1730,20 @@ export function ProjectAssetPreviewLightbox({
                 ? "manual"
                 : face.faceState === "linked_auto"
                   ? "auto"
+                  : face.faceState === "blocked"
+                    ? "blocked"
                   : face.faceState === "hidden"
                     ? "hidden"
                     : "unlinked",
             metaLabel:
-              isSelectedUnlinkedPreview
+              isSelectedUnlinkedPreview && face.faceState !== "blocked"
                 ? t("previewFaceStateDetected")
                 : face.faceState === "linked_manual"
                   ? t("previewLinkSourceManual")
                   : face.faceState === "linked_auto"
                     ? t("previewLinkSourceAuto")
+                    : face.faceState === "blocked"
+                      ? t("previewFaceStateBlocked")
                     : face.faceState === "hidden"
                       ? t("previewFaceStateHidden")
                       : t("previewFaceStateDetected"),
@@ -1283,12 +1755,12 @@ export function ProjectAssetPreviewLightbox({
   }, [asset.initialPreviewFaceOverlays, previewData, selectedFace?.assetFaceId, selectedFacePreviewCandidate, t, visibleFaces]);
 
   const selectedOverlayId = useMemo(() => {
-    if (!selectedFaceId) {
+    if (isDrawFaceMode || !selectedFaceId) {
       return null;
     }
 
     return previewFaceOverlays.find((overlay) => extractAssetFaceId(overlay.id) === selectedFaceId)?.id ?? null;
-  }, [previewFaceOverlays, selectedFaceId]);
+  }, [isDrawFaceMode, previewFaceOverlays, selectedFaceId]);
 
   useEffect(() => {
     if (!selectedFaceId) {
@@ -1301,6 +1773,8 @@ export function ProjectAssetPreviewLightbox({
       setSelectedReplacementConsentId(null);
       setCandidateData(null);
       setIsConfirmingHideFace(false);
+      setIsSavingBlock(false);
+      setIsClearingBlock(false);
     }
   }, [allFaces, selectedFaceId]);
 
@@ -1310,10 +1784,19 @@ export function ProjectAssetPreviewLightbox({
       setCandidateData(null);
       setSelectedReplacementConsentId(null);
       setIsConfirmingHideFace(false);
+      setIsSavingBlock(false);
+      setIsClearingBlock(false);
     }
   }, [selectedFace, showHiddenFaces]);
 
   useEffect(() => {
+    if (isDrawFaceMode) {
+      setCandidateData(null);
+      setSelectedReplacementConsentId(null);
+      setIsConfirmingHideFace(false);
+      return;
+    }
+
     if (!selectedFace) {
       setCandidateData(null);
       setSelectedReplacementConsentId(null);
@@ -1323,6 +1806,7 @@ export function ProjectAssetPreviewLightbox({
 
     const shouldLoadCandidates =
       selectedFace.faceState === "unlinked" ||
+      (selectedFace.faceState === "blocked" && isChangePersonOpen) ||
       ((selectedFace.faceState === "linked_manual" || selectedFace.faceState === "linked_auto") && isChangePersonOpen);
 
     if (!shouldLoadCandidates) {
@@ -1340,7 +1824,29 @@ export function ProjectAssetPreviewLightbox({
     setSelectedReplacementConsentId(null);
     setIsConfirmingHideFace(false);
     void loadCandidateData(selectedFace.assetFaceId);
-  }, [candidateData?.assetFaceId, isChangePersonOpen, loadCandidateData, selectedFace]);
+  }, [candidateData?.assetFaceId, isChangePersonOpen, isDrawFaceMode, loadCandidateData, selectedFace]);
+
+  function startDrawFaceMode() {
+    setIsAddPersonMenuOpen(false);
+    setIsDrawFaceMode(true);
+    setDraftManualFaceBox(null);
+    setHoveredFaceId(null);
+    setSelectedFaceId(null);
+    setCandidateData(null);
+    setIsChangePersonOpen(false);
+    setSelectedReplacementConsentId(null);
+    setIsConfirmingHideFace(false);
+    setActionError(null);
+    setIsSavingBlock(false);
+    setIsClearingBlock(false);
+  }
+
+  function cancelDrawFaceMode() {
+    setIsAddPersonMenuOpen(false);
+    setIsDrawFaceMode(false);
+    setDraftManualFaceBox(null);
+    setActionError(null);
+  }
 
   async function refreshAfterWrite(nextSelectedFaceId: string | null) {
     await loadPreviewData();
@@ -1350,6 +1856,46 @@ export function ProjectAssetPreviewLightbox({
     setIsChangePersonOpen(false);
     setSelectedReplacementConsentId(null);
     setIsConfirmingHideFace(false);
+    setIsAddPersonMenuOpen(false);
+    setIsDrawFaceMode(false);
+    setDraftManualFaceBox(null);
+    setIsSavingBlock(false);
+    setIsClearingBlock(false);
+  }
+
+  async function handleCreateManualFace() {
+    if (!isManualFaceDraftSaveable(draftManualFaceBox)) {
+      return;
+    }
+
+    setIsSavingManualFace(true);
+    setActionError(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/assets/${asset.id}/manual-faces`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            faceBoxNormalized: draftManualFaceBox,
+          }),
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as ManualAssetFaceCreateResponse | null;
+
+      if (!response.ok || !payload?.assetFaceId) {
+        setActionError(payload?.message ?? t("previewManualFaceCreateError"));
+        return;
+      }
+
+      await refreshAfterWrite(payload.assetFaceId);
+    } catch {
+      setActionError(t("previewManualFaceCreateError"));
+    } finally {
+      setIsSavingManualFace(false);
+    }
   }
 
   async function handleRemoveLink() {
@@ -1508,6 +2054,62 @@ export function ProjectAssetPreviewLightbox({
     }
   }
 
+  async function handleBlockFace() {
+    if (!selectedFace || selectedFace.faceState === "hidden" || selectedFace.faceState === "blocked") {
+      return;
+    }
+
+    setIsSavingBlock(true);
+    setActionError(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/assets/${asset.id}/blocked-faces/${selectedFace.assetFaceId}`,
+        {
+          method: "POST",
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) {
+        setActionError(payload?.message ?? t("previewBlockFaceError"));
+        return;
+      }
+
+      await refreshAfterWrite(selectedFace.assetFaceId);
+    } catch {
+      setActionError(t("previewBlockFaceError"));
+    } finally {
+      setIsSavingBlock(false);
+    }
+  }
+
+  async function handleClearBlockedFace() {
+    if (!selectedFace || selectedFace.faceState !== "blocked") {
+      return;
+    }
+
+    setIsClearingBlock(true);
+    setActionError(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/assets/${asset.id}/blocked-faces/${selectedFace.assetFaceId}`,
+        {
+          method: "DELETE",
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) {
+        setActionError(payload?.message ?? t("previewClearBlockedFaceError"));
+        return;
+      }
+
+      await refreshAfterWrite(selectedFace.assetFaceId);
+    } catch {
+      setActionError(t("previewClearBlockedFaceError"));
+    } finally {
+      setIsClearingBlock(false);
+    }
+  }
+
   return (
     <ImagePreviewLightbox
       key={`${asset.id}:project-preview`}
@@ -1532,6 +2134,10 @@ export function ProjectAssetPreviewLightbox({
         setHoveredFaceId(extractAssetFaceId(overlayId));
       }}
       onPreviewOverlayActivate={(overlay) => {
+        if (isDrawFaceMode) {
+          return;
+        }
+
         const nextFaceId = extractAssetFaceId(overlay.id);
         setSelectedFaceId(nextFaceId);
         setIsChangePersonOpen(false);
@@ -1541,7 +2147,7 @@ export function ProjectAssetPreviewLightbox({
         setActionError(null);
       }}
       selectedOverlayDetail={
-        selectedFace?.faceState === "unlinked" ? (
+        !isDrawFaceMode && selectedFace?.faceState === "unlinked" ? (
           <AssetPreviewUnlinkedFaceTray
             candidates={selectedFaceCandidates}
             isLoadingCandidates={isLoadingCandidates}
@@ -1556,6 +2162,9 @@ export function ProjectAssetPreviewLightbox({
             onHide={() => {
               void handleHideFace();
             }}
+            onBlock={() => {
+              void handleBlockFace();
+            }}
             onClose={() => {
               setSelectedFaceId(null);
               setSelectedReplacementConsentId(null);
@@ -1565,6 +2174,7 @@ export function ProjectAssetPreviewLightbox({
             }}
             isSavingLink={isSavingLink}
             isSavingHide={isSavingHide}
+            isSavingBlock={isSavingBlock}
             isConfirmingHide={isConfirmingHideFace}
             onToggleHideConfirm={() => {
               setIsConfirmingHideFace((current) => !current);
@@ -1578,6 +2188,8 @@ export function ProjectAssetPreviewLightbox({
             savingLabel={t("previewSavingFaceLink")}
             hideLabel={t("previewHideFace")}
             hidingLabel={t("previewHidingFace")}
+            blockLabel={t("previewBlockFace")}
+            blockingLabel={t("previewBlockingFace")}
             linkedToFaceLabel={(face) => t("previewLinkedToFace", { face })}
             moveWarningLabel={(face) => t("previewMoveLinkedPersonWarning", { face })}
             confirmMoveLabel={t("previewSelectPerson")}
@@ -1588,11 +2200,28 @@ export function ProjectAssetPreviewLightbox({
       }
       belowScene={
         <div className="space-y-3">
-          <AssetPreviewShowHiddenToggle
+          <AssetPreviewSceneActions
             hiddenFaceCount={previewData?.hiddenFaceCount ?? 0}
-            checked={showHiddenFaces}
-            onChange={(checked) => setShowHiddenFaces(checked)}
-            label={(count) => t("previewShowHiddenFaces", { count })}
+            showHiddenFaces={showHiddenFaces}
+            onShowHiddenFacesChange={(checked) => setShowHiddenFaces(checked)}
+            isAddPersonMenuOpen={isAddPersonMenuOpen}
+            onToggleAddPersonMenu={() => setIsAddPersonMenuOpen((current) => !current)}
+            onStartSelectFace={startDrawFaceMode}
+            isDrawMode={isDrawFaceMode}
+            isDraftSaveable={isDraftManualFaceSaveable}
+            isSavingManualFace={isSavingManualFace}
+            onCancelDraw={cancelDrawFaceMode}
+            onSaveDraw={() => {
+              void handleCreateManualFace();
+            }}
+            showHiddenLabel={(count) => t("previewShowHiddenFaces", { count })}
+            addPersonLabel={t("previewAddPerson")}
+            selectFaceLabel={t("previewAddPersonSelectFace")}
+            linkEntireAssetLabel={t("previewAddPersonLinkEntireAsset")}
+            drawModeHelpLabel={t("previewAddPersonDrawHelp")}
+            cancelLabel={t("previewCancel")}
+            saveLabel={t("previewAddPersonSaveFace")}
+            savingLabel={t("previewAddPersonSavingFace")}
           />
           <AssetPreviewLinkedPeopleStrip
             linkedFaces={linkedFaces}
@@ -1606,6 +2235,49 @@ export function ProjectAssetPreviewLightbox({
             onHoverChange={setHoveredFaceId}
             onSelect={setSelectedFaceId}
           />
+          {selectedFace?.faceState === "blocked" ? (
+            <AssetPreviewBlockedFaceTray
+              selectedFace={selectedFace}
+              candidates={selectedFaceCandidates}
+              isAssignPersonOpen={isChangePersonOpen}
+              isLoadingCandidates={isLoadingCandidates}
+              selectedCandidateConsentId={selectedReplacementConsentId}
+              onToggleAssignPerson={() => {
+                setActionError(null);
+                setCandidateData(null);
+                setSelectedReplacementConsentId(null);
+                setIsChangePersonOpen((current) => !current);
+              }}
+              onSelectCandidate={(consentId) => {
+                setSelectedReplacementConsentId(consentId);
+                setActionError(null);
+              }}
+              onSave={() => {
+                void submitSelectedFaceLink();
+              }}
+              onClearBlock={() => {
+                void handleClearBlockedFace();
+              }}
+              isSavingLink={isSavingLink}
+              isClearingBlock={isClearingBlock}
+              actionError={actionError}
+              titleLabel={(face) => t("previewBlockedFaceTitle", { face })}
+              descriptionLabel={t("previewBlockedFaceHelp")}
+              assignPersonLabel={t("previewAssignBlockedFace")}
+              closeAssignPersonLabel={t("previewCloseChangePerson")}
+              pickerLoadingLabel={t("previewPickerLoading")}
+              pickerEmptyLabel={t("previewPickerEmpty")}
+              saveLabel={t("previewSaveFaceLink")}
+              savingLabel={t("previewSavingFaceLink")}
+              clearBlockedLabel={t("previewClearBlockedFace")}
+              clearingBlockedLabel={t("previewClearingBlockedFace")}
+              linkedToFaceLabel={(face) => t("previewLinkedToFace", { face })}
+              moveWarningLabel={(face) => t("previewMoveLinkedPersonWarning", { face })}
+              confirmMoveLabel={t("previewSelectPerson")}
+              cancelLabel={t("previewCancel")}
+              autoLabel={t("previewLinkSourceAuto")}
+            />
+          ) : null}
           {selectedFace?.faceState === "hidden" && showHiddenFaces ? (
             <AssetPreviewHiddenFaceTray
               selectedFace={selectedFace}
@@ -1650,7 +2322,9 @@ export function ProjectAssetPreviewLightbox({
           moveWarningLabel={(face) => t("previewMoveLinkedPersonWarning", { face })}
           hideFaceLabel={t("previewHideFace")}
           hideFaceBusyLabel={t("previewHidingFace")}
-          isSaving={isSavingLink || isSavingHide}
+          blockFaceLabel={t("previewBlockFace")}
+          blockFaceBusyLabel={t("previewBlockingFace")}
+          isSaving={isSavingLink || isSavingHide || isSavingBlock}
           actionError={actionError}
           isChangePersonOpen={isChangePersonOpen}
           isLoadingCandidates={isLoadingCandidates}
@@ -1663,6 +2337,13 @@ export function ProjectAssetPreviewLightbox({
             selectedLinkedFace
               ? () => {
                   void handleHideFace();
+                }
+              : null
+          }
+          onBlockFace={
+            selectedLinkedFace
+              ? () => {
+                  void handleBlockFace();
                 }
               : null
           }
@@ -1697,6 +2378,9 @@ export function ProjectAssetPreviewLightbox({
       metadataLabel={metadataLabel}
       counterLabel={counterLabel}
       preloadSrcs={preloadSrcs}
+      isDrawFaceMode={isDrawFaceMode}
+      draftFaceBoxNormalized={draftManualFaceBox}
+      onDraftFaceBoxChange={setDraftManualFaceBox}
     />
   );
 }

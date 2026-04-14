@@ -74,6 +74,10 @@ type CurrentMaterializationFace = AssetFaceMaterializationFaceRow & {
   face_box_normalized: Record<string, number | null> | null;
 };
 
+function isDetectorCurrentFace(face: CurrentMaterializationFace) {
+  return face.face_source === "detector";
+}
+
 type FaceLinkRow = {
   asset_face_id: string;
   asset_materialization_id: string;
@@ -115,6 +119,20 @@ type HiddenFaceRow = {
   hidden_by: string | null;
   restored_at: string | null;
   restored_by: string | null;
+};
+
+type BlockedFaceRow = {
+  id: string;
+  asset_face_id: string;
+  asset_materialization_id: string;
+  asset_id: string;
+  tenant_id: string;
+  project_id: string;
+  reason: "no_consent";
+  blocked_at: string;
+  blocked_by: string | null;
+  cleared_at: string | null;
+  cleared_by: string | null;
 };
 
 type ManualFallbackRow = {
@@ -170,6 +188,7 @@ type ResolvedPhotoState = {
   materialization: AssetFaceMaterializationRow | null;
   faces: CurrentMaterializationFace[];
   hiddenFaceIds: Set<string>;
+  blockedFaceIds: Set<string>;
 };
 
 export type PhotoConsentAssignment = {
@@ -267,6 +286,18 @@ export type HideAssetFaceResult = {
 
 export type RestoreHiddenAssetFaceResult = {
   kind: "restored" | "already_restored";
+  assetFaceId: string;
+};
+
+export type BlockAssetFaceResult = {
+  kind: "blocked" | "already_blocked";
+  assetFaceId: string;
+  removedConsentId: string | null;
+  removedLinkSource: "manual" | "auto" | null;
+};
+
+export type ClearBlockedAssetFaceResult = {
+  kind: "cleared" | "already_cleared";
   assetFaceId: string;
 };
 
@@ -464,6 +495,13 @@ async function resolveLikelyCandidateBatch(
     input.tenantId,
     input.projectId,
     assetRows.map((row) => row.id),
+      new Map(Array.from(materializations.entries()).map(([assetId, materialization]) => [assetId, materialization.id])),
+  );
+  const blockedFaces = await loadCurrentBlockedFacesForAssets(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    assetRows.map((row) => row.id),
     new Map(Array.from(materializations.entries()).map(([assetId, materialization]) => [assetId, materialization.id])),
   );
   const links = await loadCurrentFaceLinksForAssets(
@@ -485,6 +523,7 @@ async function resolveLikelyCandidateBatch(
     assetRows.map((row) => row.id),
   );
   const hiddenFaceIds = new Set(hiddenFaces.map((row) => row.asset_face_id));
+  const blockedFaceIds = new Set(blockedFaces.map((row) => row.asset_face_id));
 
   const linkedPairs = new Set<string>();
   links.forEach((row) => {
@@ -493,6 +532,9 @@ async function resolveLikelyCandidateBatch(
       return;
     }
     if (hiddenFaceIds.has(row.asset_face_id)) {
+      return;
+    }
+    if (blockedFaceIds.has(row.asset_face_id)) {
       return;
     }
 
@@ -532,6 +574,9 @@ async function resolveLikelyCandidateBatch(
       }
 
       if (hiddenFaceIds.has(winningFace.id)) {
+        return null;
+      }
+      if (blockedFaceIds.has(winningFace.id)) {
         return null;
       }
 
@@ -659,7 +704,7 @@ async function loadMaterializationFacesMap(
   const rows = await runChunkedRead(materializationIds, async (materializationIdChunk) => {
     const { data, error } = await supabase
       .from("asset_face_materialization_faces")
-      .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, created_at")
+      .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at")
       .in("materialization_id", materializationIdChunk)
       .order("face_rank", { ascending: true });
 
@@ -793,6 +838,37 @@ async function loadActiveHiddenFaceRowsForAssets(
   return rows;
 }
 
+async function loadActiveBlockedFaceRowsForAssets(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  assetIds: string[],
+) {
+  if (assetIds.length === 0) {
+    return [] as BlockedFaceRow[];
+  }
+
+  const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    const { data, error } = await supabase
+      .from("asset_face_block_states")
+      .select(
+        "id, asset_face_id, asset_materialization_id, asset_id, tenant_id, project_id, reason, blocked_at, blocked_by, cleared_at, cleared_by",
+      )
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .in("asset_id", assetIdChunk)
+      .is("cleared_at", null);
+
+    if (error) {
+      throw new HttpError(500, "blocked_face_lookup_failed", "Unable to load blocked face state.");
+    }
+
+    return (data ?? []) as BlockedFaceRow[];
+  });
+
+  return rows;
+}
+
 async function markHiddenFaceRowsInactive(
   supabase: SupabaseClient,
   tenantId: string,
@@ -820,6 +896,33 @@ async function markHiddenFaceRowsInactive(
   }
 }
 
+async function markBlockedFaceRowsInactive(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  blockedStateIds: string[],
+) {
+  if (blockedStateIds.length === 0) {
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from("asset_face_block_states")
+    .update({
+      cleared_at: nowIso,
+      cleared_by: null,
+    })
+    .eq("tenant_id", tenantId)
+    .eq("project_id", projectId)
+    .is("cleared_at", null)
+    .in("id", blockedStateIds);
+
+  if (error) {
+    throw new HttpError(500, "blocked_face_write_failed", "Unable to clear stale blocked face state.");
+  }
+}
+
 async function loadCurrentHiddenFacesForAssets(
   supabase: SupabaseClient,
   tenantId: string,
@@ -844,6 +947,33 @@ async function loadCurrentHiddenFacesForAssets(
   }
 
   await markHiddenFaceRowsInactive(supabase, tenantId, projectId, staleHiddenStateIds);
+  return activeRows;
+}
+
+async function loadCurrentBlockedFacesForAssets(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  assetIds: string[],
+  currentMaterializationIdByAssetId: Map<string, string>,
+) {
+  const rows = await loadActiveBlockedFaceRowsForAssets(supabase, tenantId, projectId, assetIds);
+  if (rows.length === 0) {
+    return [] as BlockedFaceRow[];
+  }
+
+  const activeRows: BlockedFaceRow[] = [];
+  const staleBlockedStateIds: string[] = [];
+  for (const row of rows) {
+    if (currentMaterializationIdByAssetId.get(row.asset_id) === row.asset_materialization_id) {
+      activeRows.push(row);
+      continue;
+    }
+
+    staleBlockedStateIds.push(row.id);
+  }
+
+  await markBlockedFaceRowsInactive(supabase, tenantId, projectId, staleBlockedStateIds);
   return activeRows;
 }
 
@@ -1106,6 +1236,13 @@ async function cleanupCurrentPhotoStateForAsset(
       projectId,
       hiddenRows.map((row) => row.id),
     );
+    const blockedRows = await loadActiveBlockedFaceRowsForAssets(supabase, tenantId, projectId, [assetId]);
+    await markBlockedFaceRowsInactive(
+      supabase,
+      tenantId,
+      projectId,
+      blockedRows.map((row) => row.id),
+    );
     return;
   }
 
@@ -1142,8 +1279,21 @@ async function cleanupCurrentPhotoStateForAsset(
       .filter((row) => row.asset_materialization_id !== materialization.id)
       .map((row) => row.id),
   );
+  const blockedRows = await loadActiveBlockedFaceRowsForAssets(supabase, tenantId, projectId, [assetId]);
+  await markBlockedFaceRowsInactive(
+    supabase,
+    tenantId,
+    projectId,
+    blockedRows
+      .filter((row) => row.asset_materialization_id !== materialization.id)
+      .map((row) => row.id),
+  );
 
-  if (materialization.face_count > 0) {
+  const hasCurrentFaceRows =
+    materialization.face_count > 0 ||
+    (((await loadMaterializationFacesMap(supabase, [materialization.id])).get(materialization.id) ?? []).length > 0);
+
+  if (hasCurrentFaceRows) {
     const { error: fallbackDeleteError } = await supabase
       .from("asset_consent_manual_photo_fallbacks")
       .delete()
@@ -1227,6 +1377,17 @@ async function resolvePhotoState(input: PhotoAssetInput) {
     hiddenFaceIds: new Set(
       (
         await loadCurrentHiddenFacesForAssets(
+          input.supabase,
+          input.tenantId,
+          input.projectId,
+          [input.assetId],
+          new Map(current?.materialization ? [[input.assetId, current.materialization.id]] : []),
+        )
+      ).map((row) => row.asset_face_id),
+    ),
+    blockedFaceIds: new Set(
+      (
+        await loadCurrentBlockedFacesForAssets(
           input.supabase,
           input.tenantId,
           input.projectId,
@@ -1397,6 +1558,7 @@ async function unlinkCurrentExactFaceAssignmentWithSuppression(input: {
   materializationId: string;
   assetFaceId: string;
   actorUserId?: string | null;
+  suppressionReason?: "manual_unlink" | "manual_replace";
 }) {
   const currentAssignment = await loadCurrentFaceAssignmentForAssetFace(input);
   if (!currentAssignment) {
@@ -1423,7 +1585,7 @@ async function unlinkCurrentExactFaceAssignmentWithSuppression(input: {
     assetFaceId: input.assetFaceId,
     consentId: currentAssignment.consent_id,
     actorUserId: input.actorUserId,
-    reason: "manual_unlink",
+    reason: input.suppressionReason ?? "manual_unlink",
   });
   await deleteCandidatePair(
     input.supabase,
@@ -1546,6 +1708,173 @@ export async function loadCurrentHiddenFacesForAsset(input: {
   );
 }
 
+export async function loadCurrentBlockedFacesForAsset(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+}) {
+  const state = await resolvePhotoState({
+    ...input,
+    consentId: "",
+  });
+
+  if (!state.materialization) {
+    return [] as BlockedFaceRow[];
+  }
+
+  return loadCurrentBlockedFacesForAssets(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    [input.assetId],
+    new Map([[input.assetId, state.materialization.id]]),
+  );
+}
+
+async function clearBlockedFaceStateForFace(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  materializationId: string;
+  assetFaceId: string;
+  actorUserId?: string | null;
+}) {
+  const nowIso = new Date().toISOString();
+  const { data, error } = await input.supabase
+    .from("asset_face_block_states")
+    .update({
+      cleared_at: nowIso,
+      cleared_by: input.actorUserId ?? null,
+    })
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("asset_id", input.assetId)
+    .eq("asset_materialization_id", input.materializationId)
+    .eq("asset_face_id", input.assetFaceId)
+    .is("cleared_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, "blocked_face_write_failed", "Unable to clear blocked face state.");
+  }
+
+  return data ? "cleared" : "already_cleared";
+}
+
+export async function blockAssetFace(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  assetFaceId: string;
+  actorUserId?: string | null;
+}): Promise<BlockAssetFaceResult> {
+  const state = await resolvePhotoState({
+    ...input,
+    consentId: "",
+  });
+
+  if (!state.materialization) {
+    throw new HttpError(409, "photo_materialization_pending", "Photo face materialization is still pending for this photo.");
+  }
+
+  const targetFace = state.faces.find((face) => face.id === input.assetFaceId) ?? null;
+  if (!targetFace) {
+    throw new HttpError(400, "invalid_asset_face_id", "The selected face is invalid.");
+  }
+
+  if (state.hiddenFaceIds.has(input.assetFaceId)) {
+    throw new HttpError(409, "hidden_face_restore_required", "Restore the hidden face before blocking it.");
+  }
+
+  const removedAssignment = await unlinkCurrentExactFaceAssignmentWithSuppression({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+    materializationId: state.materialization.id,
+    assetFaceId: input.assetFaceId,
+    actorUserId: input.actorUserId,
+    suppressionReason: "manual_replace",
+  });
+
+  let blockKind: BlockAssetFaceResult["kind"] = "blocked";
+  const { error: insertError } = await input.supabase.from("asset_face_block_states").insert({
+    asset_face_id: input.assetFaceId,
+    asset_materialization_id: state.materialization.id,
+    asset_id: input.assetId,
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    reason: "no_consent" as const,
+    blocked_by: input.actorUserId ?? null,
+  });
+
+  if (insertError) {
+    if (insertError.code !== "23505") {
+      throw new HttpError(500, "blocked_face_write_failed", "Unable to block the selected face.");
+    }
+
+    blockKind = "already_blocked";
+  }
+
+  if (removedAssignment?.link_source === "auto") {
+    await reconcilePhotoFaceCanonicalStateForAsset({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+    });
+  }
+
+  return {
+    kind: blockKind,
+    assetFaceId: input.assetFaceId,
+    removedConsentId: removedAssignment?.consent_id ?? null,
+    removedLinkSource: removedAssignment?.link_source ?? null,
+  };
+}
+
+export async function clearBlockedAssetFace(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  assetFaceId: string;
+  actorUserId?: string | null;
+}): Promise<ClearBlockedAssetFaceResult> {
+  const state = await resolvePhotoState({
+    ...input,
+    consentId: "",
+  });
+
+  if (!state.materialization) {
+    throw new HttpError(409, "photo_materialization_pending", "Photo face materialization is still pending for this photo.");
+  }
+
+  const targetFace = state.faces.find((face) => face.id === input.assetFaceId) ?? null;
+  if (!targetFace) {
+    throw new HttpError(400, "invalid_asset_face_id", "The selected face is invalid.");
+  }
+
+  const kind = await clearBlockedFaceStateForFace({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+    materializationId: state.materialization.id,
+    assetFaceId: input.assetFaceId,
+    actorUserId: input.actorUserId,
+  });
+
+  return {
+    kind,
+    assetFaceId: input.assetFaceId,
+  };
+}
+
 export async function hideAssetFace(input: {
   supabase: SupabaseClient;
   tenantId: string;
@@ -1566,6 +1895,9 @@ export async function hideAssetFace(input: {
   const targetFace = state.faces.find((face) => face.id === input.assetFaceId) ?? null;
   if (!targetFace) {
     throw new HttpError(400, "invalid_asset_face_id", "The selected face is invalid.");
+  }
+  if (state.blockedFaceIds.has(input.assetFaceId)) {
+    throw new HttpError(409, "blocked_face_clear_required", "Clear the blocked face before hiding it.");
   }
 
   const removedAssignment = await unlinkCurrentExactFaceAssignmentWithSuppression({
@@ -2603,10 +2935,6 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
     );
   }
 
-  if (state.materialization.face_count <= 0) {
-    throw new HttpError(409, "photo_zero_faces_only_fallback", "No detected faces are available for this photo.");
-  }
-
   const faceLinksByFaceId = new Map(assignments.faceLinks.map((row) => [row.asset_face_id, row]));
   const faceLinksByConsentId = new Map(assignments.faceLinks.map((row) => [row.consent_id, row]));
   const currentFaceAssignee = faceLinksByFaceId.get(requested.resolvedFace.id) ?? null;
@@ -2701,6 +3029,18 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
       consentId: input.consentId,
       actorUserId: input.actorUserId,
       reason: "manual_replace",
+    });
+  }
+
+  if (state.blockedFaceIds.has(requested.resolvedFace.id)) {
+    await clearBlockedFaceStateForFace({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      materializationId: state.materialization.id,
+      assetFaceId: requested.resolvedFace.id,
+      actorUserId: input.actorUserId,
     });
   }
 
@@ -2971,6 +3311,17 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       )
     ).map((row) => row.asset_face_id),
   );
+  const blockedFaceIds = new Set(
+    (
+      await loadCurrentBlockedFacesForAssets(
+        input.supabase,
+        input.tenantId,
+        input.projectId,
+        [input.assetId],
+        new Map([[input.assetId, current.materialization.id]]),
+      )
+    ).map((row) => row.asset_face_id),
+  );
   const manualByFaceId = new Map(
     currentAssignments.faceLinks
       .filter((row) => row.link_source === "manual")
@@ -3004,7 +3355,9 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     input.projectId,
     consentStateIds,
   );
-  const faceIds = new Set(current.faces.map((face) => face.id));
+  const autoEligibleFaceIds = new Set(
+    current.faces.filter(isDetectorCurrentFace).map((face) => face.id),
+  );
   const confidenceThreshold = getAutoMatchConfidenceThreshold();
 
   const contendersByFaceId = new Map<string, Array<{ consentId: string; confidence: number }>>();
@@ -3031,11 +3384,15 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       continue;
     }
 
-    if (!faceIds.has(compare.winning_asset_face_id)) {
+    if (!autoEligibleFaceIds.has(compare.winning_asset_face_id)) {
       continue;
     }
 
     if (hiddenFaceIds.has(compare.winning_asset_face_id)) {
+      continue;
+    }
+
+    if (blockedFaceIds.has(compare.winning_asset_face_id)) {
       continue;
     }
 
@@ -3061,7 +3418,15 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
 
   const desiredAutoRows = new Map<string, { consentId: string; confidence: number }>();
   for (const face of current.faces) {
+    if (!isDetectorCurrentFace(face)) {
+      continue;
+    }
+
     if (hiddenFaceIds.has(face.id)) {
+      continue;
+    }
+
+    if (blockedFaceIds.has(face.id)) {
       continue;
     }
 
@@ -3128,7 +3493,13 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       continue;
     }
 
-    if (hiddenFaceIds.has(assetFaceId) || manualByFaceId.has(assetFaceId) || !desired || desired.consentId !== existing.consent_id) {
+    if (
+      hiddenFaceIds.has(assetFaceId) ||
+      blockedFaceIds.has(assetFaceId) ||
+      manualByFaceId.has(assetFaceId) ||
+      !desired ||
+      desired.consentId !== existing.consent_id
+    ) {
       const { error } = await input.supabase
         .from("asset_face_consent_links")
         .delete()

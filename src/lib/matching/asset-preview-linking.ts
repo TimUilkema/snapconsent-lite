@@ -14,6 +14,7 @@ import {
 } from "@/lib/matching/face-materialization";
 import {
   listLinkedFaceOverlaysForAssetIds,
+  loadCurrentBlockedFacesForAsset,
   loadCurrentHiddenFacesForAsset,
 } from "@/lib/matching/photo-face-linking";
 import {
@@ -412,11 +413,14 @@ export type AssetPreviewFacesResponse = {
   faces: Array<{
     assetFaceId: string;
     faceRank: number;
+    faceSource: "detector" | "manual";
     faceBoxNormalized: Record<string, number | null> | null;
     faceThumbnailUrl: string | null;
     detectionProbability: number | null;
-    faceState: "linked_manual" | "linked_auto" | "unlinked" | "hidden";
+    faceState: "linked_manual" | "linked_auto" | "unlinked" | "hidden" | "blocked";
     hiddenAt: string | null;
+    blockedAt: string | null;
+    blockedReason: "no_consent" | null;
     currentLink: null | {
       consentId: string;
       linkSource: "manual" | "auto";
@@ -527,8 +531,14 @@ export async function getAssetPreviewFaces(
     };
   }
 
-  const [hiddenFaces, overlays] = await Promise.all([
+  const [hiddenFaces, blockedFaces, overlays] = await Promise.all([
     loadCurrentHiddenFacesForAsset({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+    }),
+    loadCurrentBlockedFacesForAsset({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
@@ -543,6 +553,7 @@ export async function getAssetPreviewFaces(
   ]);
   const exactLinkedFaces = overlays.filter((overlay) => overlay.assetId === input.assetId);
   const hiddenFaceById = new Map(hiddenFaces.map((row) => [row.asset_face_id, row] as const));
+  const blockedFaceById = new Map(blockedFaces.map((row) => [row.asset_face_id, row] as const));
   const consentIds = Array.from(new Set(exactLinkedFaces.map((overlay) => overlay.consentId)));
   const faceIds = Array.from(new Set(current.faces.map((face) => face.id)));
   const [consentSummaryMap, faceDerivatives, headshotImageMap] = await Promise.all([
@@ -564,6 +575,7 @@ export async function getAssetPreviewFaces(
       .sort((left, right) => left.face_rank - right.face_rank)
       .map((face) => {
         const hiddenFace = hiddenFaceById.get(face.id) ?? null;
+        const blockedFace = hiddenFace ? null : blockedFaceById.get(face.id) ?? null;
         const overlay = hiddenFace ? null : overlayByFaceId.get(face.id) ?? null;
         const consent = overlay ? consentSummaryMap.get(overlay.consentId) ?? null : null;
         const subject = firstRelation(consent?.subjects);
@@ -572,6 +584,7 @@ export async function getAssetPreviewFaces(
         return {
           assetFaceId: face.id,
           faceRank: face.face_rank,
+          faceSource: face.face_source,
           faceBoxNormalized: (face.face_box_normalized as Record<string, number | null> | null) ?? null,
           faceThumbnailUrl: signedFaceUrl
             ? resolveLoopbackStorageUrlForHostHeader(signedFaceUrl, input.requestHostHeader)
@@ -579,12 +592,16 @@ export async function getAssetPreviewFaces(
           detectionProbability: face.detection_probability ?? null,
           faceState: hiddenFace
             ? "hidden"
+            : blockedFace
+              ? "blocked"
             : overlay?.linkSource === "manual"
               ? "linked_manual"
               : overlay?.linkSource === "auto"
                 ? "linked_auto"
                 : "unlinked",
           hiddenAt: hiddenFace?.hidden_at ?? null,
+          blockedAt: blockedFace?.blocked_at ?? null,
+          blockedReason: blockedFace?.reason ?? null,
           currentLink: overlay
             ? {
                 consentId: overlay.consentId,

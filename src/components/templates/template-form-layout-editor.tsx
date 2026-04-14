@@ -229,7 +229,12 @@ export function TemplateFormLayoutEditor({
         <span>{strings.allowFaceMatchLabel}</span>
       </label>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext
+        id="template-layout-editor"
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
         <SortableContext
           items={definition.blocks.map(getFormLayoutBlockId)}
           strategy={verticalListSortingStrategy}

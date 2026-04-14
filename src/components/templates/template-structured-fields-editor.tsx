@@ -26,7 +26,6 @@ import {
   STRUCTURED_FIELD_OPTIONS_MAX_COUNT,
   STRUCTURED_SCOPE_OPTIONS_MAX_COUNT,
   STRUCTURED_TEXT_INPUT_DEFAULT_MAX_LENGTH,
-  STRUCTURED_TEXT_INPUT_MAX_LENGTH_LIMIT,
   type StructuredCustomFieldDefinition,
   type StructuredCustomFieldType,
   type StructuredFieldOption,
@@ -59,7 +58,6 @@ type TemplateStructuredFieldsEditorProps = {
     fieldTypeField: string;
     helpTextField: string;
     placeholderField: string;
-    maxLengthField: string;
     requiredFieldLabel: string;
     requiredValue: string;
     optionalValue: string;
@@ -73,8 +71,6 @@ type TemplateStructuredFieldsEditorProps = {
     typeTextInput: string;
   };
 };
-
-type OptionEditorKind = "single_select" | "checkbox_list";
 
 function reindexOptions(options: StructuredFieldOption[]) {
   return options.map((option, index) => ({
@@ -155,21 +151,6 @@ function updateDefinition(
   };
 }
 
-function getFieldTypeLabel(
-  fieldType: StructuredCustomFieldType,
-  strings: TemplateStructuredFieldsEditorProps["strings"],
-) {
-  if (fieldType === "single_select") {
-    return strings.typeSingleSelect;
-  }
-
-  if (fieldType === "checkbox_list") {
-    return strings.typeCheckboxList;
-  }
-
-  return strings.typeTextInput;
-}
-
 function DragHandleIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-current">
@@ -183,36 +164,13 @@ function DragHandleIcon() {
   );
 }
 
-function OptionGlyph({ kind }: { kind: OptionEditorKind }) {
-  if (kind === "checkbox_list") {
-    return <span className="h-4 w-4 rounded border border-zinc-400 bg-white" />;
-  }
-
-  return (
-    <span className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-500">
-      <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 stroke-current" fill="none">
-        <path d="M4 6l4 4 4-4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </span>
-  );
-}
-
 function buildOptionKey(label: string, options: StructuredFieldOption[]) {
   const existingKeys = new Set(options.map((option) => option.optionKey));
   return buildUniqueKey(label || `option_${options.length + 1}`, existingKeys, "option");
 }
 
-function PlusIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 stroke-current" fill="none">
-      <path d="M8 3.5v9M3.5 8h9" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function SortableOptionRow({
   option,
-  kind,
   readOnly,
   dragLabel,
   removeLabel,
@@ -220,7 +178,6 @@ function SortableOptionRow({
   onRemove,
 }: {
   option: StructuredFieldOption;
-  kind: OptionEditorKind;
   readOnly: boolean;
   dragLabel: string;
   removeLabel: string;
@@ -250,8 +207,7 @@ function SortableOptionRow({
       >
         <DragHandleIcon />
       </button>
-      <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-zinc-300 bg-white px-3 py-2.5">
-        <OptionGlyph kind={kind} />
+      <div className="flex min-w-0 flex-1 items-center rounded-xl border border-zinc-300 bg-white px-3 py-2.5">
         <input
           value={option.label}
           onChange={(event) => onChange(event.target.value)}
@@ -279,14 +235,12 @@ function SortableOptionRow({
 }
 
 function NewOptionRow({
-  kind,
   value,
   placeholder,
   disabled,
   onChange,
   onCommit,
 }: {
-  kind: OptionEditorKind;
   value: string;
   placeholder: string;
   disabled: boolean;
@@ -302,11 +256,8 @@ function NewOptionRow({
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex h-10 w-10 items-center justify-center text-zinc-500">
-        <PlusIcon />
-      </div>
-      <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-white/70 px-3 py-2.5">
-        <OptionGlyph kind={kind} />
+      <div className="h-10 w-10" />
+      <div className="flex min-w-0 flex-1 items-center rounded-xl border border-dashed border-zinc-300 bg-white/70 px-3 py-2.5">
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -325,9 +276,9 @@ function NewOptionRow({
 
 function OptionsEditor({
   options,
-  kind,
   readOnly,
   maxOptions,
+  dndContextId,
   onChange,
   placeholder,
   emptyButtonLabel,
@@ -335,9 +286,9 @@ function OptionsEditor({
   removeOption,
 }: {
   options: StructuredFieldOption[];
-  kind: OptionEditorKind;
   readOnly: boolean;
   maxOptions: number;
+  dndContextId: string;
   onChange: (nextOptions: StructuredFieldOption[]) => void;
   placeholder: string;
   emptyButtonLabel: string;
@@ -412,7 +363,6 @@ function OptionsEditor({
     <div className="space-y-2">
       {options.length === 0 && !readOnly && !isCreatingFirstOption ? (
         <NewOptionRow
-          kind={kind}
           value={newOptionLabel}
           placeholder={emptyButtonLabel}
           disabled={!canAddOption}
@@ -426,14 +376,18 @@ function OptionsEditor({
           }}
         />
       ) : null}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext
+        id={dndContextId}
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
         <SortableContext items={options.map((option) => option.optionKey)} strategy={verticalListSortingStrategy}>
           <ol className="space-y-2">
             {options.map((option, index) => (
               <SortableOptionRow
                 key={option.optionKey}
                 option={option}
-                kind={kind}
                 readOnly={readOnly}
                 dragLabel={dragLabel}
                 removeLabel={removeOption}
@@ -446,7 +400,6 @@ function OptionsEditor({
       </DndContext>
       {!readOnly && (options.length > 0 || isCreatingFirstOption) ? (
         <NewOptionRow
-          kind={kind}
           value={newOptionLabel}
           placeholder={placeholder}
           disabled={!canAddOption}
@@ -582,7 +535,7 @@ export function TemplateStructuredFieldsEditor({
     <section className="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
       <div>
         <h2 className="text-lg font-semibold text-zinc-900">{strings.title}</h2>
-        <p className="mt-1 text-sm text-zinc-600">{strings.subtitle}</p>
+        {strings.subtitle ? <p className="mt-1 text-sm text-zinc-600">{strings.subtitle}</p> : null}
       </div>
 
       <div className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
@@ -595,12 +548,14 @@ export function TemplateStructuredFieldsEditor({
             <h4 className="text-sm font-medium text-zinc-900">{strings.scopeFieldTitle}</h4>
             <span className="text-xs font-medium text-zinc-600">{strings.requiredValue}</span>
           </div>
-          <p className="text-sm text-zinc-600">{strings.scopeFieldDescription}</p>
+          {strings.scopeFieldDescription ? (
+            <p className="text-sm text-zinc-600">{strings.scopeFieldDescription}</p>
+          ) : null}
           <OptionsEditor
             options={definition.builtInFields.scope.options}
-            kind="checkbox_list"
             readOnly={readOnly}
             maxOptions={STRUCTURED_SCOPE_OPTIONS_MAX_COUNT}
+            dndContextId="structured-options-scope"
             onChange={patchScopeOptions}
             placeholder={strings.addScopeOption}
             emptyButtonLabel={strings.addScopeOption}
@@ -619,12 +574,14 @@ export function TemplateStructuredFieldsEditor({
             <h4 className="text-sm font-medium text-zinc-900">{strings.durationFieldTitle}</h4>
             <span className="text-xs font-medium text-zinc-600">{strings.requiredValue}</span>
           </div>
-          <p className="text-sm text-zinc-600">{strings.durationFieldDescription}</p>
+          {strings.durationFieldDescription ? (
+            <p className="text-sm text-zinc-600">{strings.durationFieldDescription}</p>
+          ) : null}
           <OptionsEditor
             options={definition.builtInFields.duration.options}
-            kind="single_select"
             readOnly={readOnly}
             maxOptions={STRUCTURED_DURATION_OPTIONS_MAX_COUNT}
+            dndContextId="structured-options-duration"
             onChange={patchDurationOptions}
             placeholder={strings.addDurationOption}
             emptyButtonLabel={strings.addDurationOption}
@@ -642,48 +599,28 @@ export function TemplateStructuredFieldsEditor({
       <div className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
         <div>
           <h3 className="text-sm font-semibold text-zinc-900">{strings.customFieldsTitle}</h3>
-          {definition.customFields.length === 0 ? (
+          {definition.customFields.length === 0 && strings.customFieldsEmpty ? (
             <p className="mt-1 text-sm text-zinc-600">{strings.customFieldsEmpty}</p>
           ) : null}
         </div>
 
         {definition.customFields.map((field, index) => (
           <section key={`${field.fieldKey}-${index}`} className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h4 className="text-sm font-medium text-zinc-900">{field.label || `Field ${index + 1}`}</h4>
-                <p className="mt-1 text-xs text-zinc-600">
-                  {getFieldTypeLabel(field.fieldType, strings)} ·{" "}
-                  {field.required ? strings.requiredValue : strings.optionalValue}
-                </p>
-              </div>
-              {!readOnly ? (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => removeCustomField(index)}
-                    className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
-                  >
-                    {strings.removeField}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start">
               <label className="block text-sm text-zinc-800">
-                <span className="mb-1 block font-medium">{strings.fieldLabelField}</span>
                 <input
+                  aria-label={strings.fieldLabelField}
                   value={field.label}
                   onChange={(event) => patchCustomField(index, (current) => ({ ...current, label: event.target.value }))}
                   className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
                   maxLength={120}
                   disabled={readOnly}
+                  placeholder={strings.fieldLabelField}
                 />
               </label>
               <label className="block text-sm text-zinc-800">
-                <span className="mb-1 block font-medium">{strings.fieldTypeField}</span>
                 <select
+                  aria-label={strings.fieldTypeField}
                   value={field.fieldType}
                   onChange={(event) =>
                     patchCustomField(index, (current) => {
@@ -708,16 +645,38 @@ export function TemplateStructuredFieldsEditor({
                   <option value="text_input">{strings.typeTextInput}</option>
                 </select>
               </label>
-              <label className="flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-800">
-                <input
-                  type="checkbox"
-                  checked={field.required}
-                  onChange={(event) => patchCustomField(index, (current) => ({ ...current, required: event.target.checked }))}
-                  disabled={readOnly}
-                />
-                <span>{strings.requiredFieldLabel}</span>
-              </label>
+              {!readOnly ? (
+                <button
+                  type="button"
+                  onClick={() => removeCustomField(index)}
+                  className="flex h-10 w-10 self-center items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-950 hover:bg-zinc-100 sm:self-end"
+                  aria-label={strings.removeField}
+                  title={strings.removeField}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 stroke-current" fill="none">
+                    <path d="M3.75 4.5h8.5" strokeWidth="1.5" strokeLinecap="round" />
+                    <path
+                      d="M5.25 4.5v7.25c0 .41.34.75.75.75h4c.41 0 .75-.34.75-.75V4.5"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                    <path d="M6.25 4.5V3.75c0-.41.34-.75.75-.75h2c.41 0 .75.34.75.75v.75" strokeWidth="1.5" />
+                  </svg>
+                </button>
+              ) : null}
             </div>
+
+            <label className="flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-800">
+              <input
+                type="checkbox"
+                checked={field.required}
+                onChange={(event) =>
+                  patchCustomField(index, (current) => ({ ...current, required: event.target.checked }))
+                }
+                disabled={readOnly}
+              />
+              <span>{strings.requiredFieldLabel}</span>
+            </label>
 
             <label className="block text-sm text-zinc-800">
               <span className="mb-1 block font-medium">{strings.helpTextField}</span>
@@ -737,7 +696,7 @@ export function TemplateStructuredFieldsEditor({
             </label>
 
             {field.fieldType === "text_input" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div>
                 <label className="block text-sm text-zinc-800">
                   <span className="mb-1 block font-medium">{strings.placeholderField}</span>
                   <input
@@ -753,32 +712,15 @@ export function TemplateStructuredFieldsEditor({
                     disabled={readOnly}
                   />
                 </label>
-                <label className="block text-sm text-zinc-800">
-                  <span className="mb-1 block font-medium">{strings.maxLengthField}</span>
-                  <input
-                    type="number"
-                    value={field.maxLength ?? STRUCTURED_TEXT_INPUT_DEFAULT_MAX_LENGTH}
-                    onChange={(event) =>
-                      patchCustomField(index, (current) => ({
-                        ...current,
-                        maxLength: Number(event.target.value) || STRUCTURED_TEXT_INPUT_DEFAULT_MAX_LENGTH,
-                      }))
-                    }
-                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5"
-                    min={1}
-                    max={STRUCTURED_TEXT_INPUT_MAX_LENGTH_LIMIT}
-                    disabled={readOnly}
-                  />
-                </label>
               </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-sm font-medium text-zinc-900">{strings.optionsField}</p>
                 <OptionsEditor
                   options={field.options ?? []}
-                  kind={field.fieldType}
                   readOnly={readOnly}
                   maxOptions={STRUCTURED_FIELD_OPTIONS_MAX_COUNT}
+                  dndContextId={`structured-options-${field.fieldKey}`}
                   onChange={(nextOptions) =>
                     patchCustomField(index, (current) => ({
                       ...current,

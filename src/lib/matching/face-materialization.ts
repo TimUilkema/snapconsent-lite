@@ -54,7 +54,9 @@ export type AssetFaceMaterializationFaceRow = {
   detection_probability: number | null;
   face_box: Record<string, unknown>;
   face_box_normalized: Record<string, unknown> | null;
-  embedding: number[];
+  embedding: number[] | null;
+  face_source: "detector" | "manual";
+  created_by: string | null;
   created_at: string;
 };
 
@@ -169,7 +171,7 @@ async function loadMaterializationFaces(
 ): Promise<AssetFaceMaterializationFaceRow[]> {
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
-    .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, created_at")
+    .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at")
     .eq("materialization_id", materializationId)
     .order("face_rank", { ascending: true });
 
@@ -405,9 +407,10 @@ function normalizeMaterializedNormalizedFaceBox(face: AutoMatcherMaterializedFac
   };
 }
 
-const FACE_DERIVATIVE_BUCKET = "asset-face-derivatives";
+export const FACE_DERIVATIVE_BUCKET = "asset-face-derivatives";
+const MANUAL_FACE_TEMP_RANK_OFFSET = 1000;
 
-function buildFaceDerivativeStoragePath(input: {
+export function buildFaceDerivativeStoragePath(input: {
   tenantId: string;
   projectId: string;
   materializationId: string;
@@ -415,6 +418,59 @@ function buildFaceDerivativeStoragePath(input: {
   derivativeKind: AutoMatcherFaceDerivative["derivativeKind"];
 }) {
   return `tenant/${input.tenantId}/project/${input.projectId}/materialization/${input.materializationId}/face/${input.assetFaceId}/${input.derivativeKind}.webp`;
+}
+
+export async function persistAssetFaceDerivative(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  materializationId: string;
+  assetFaceId: string;
+  derivative: AutoMatcherFaceDerivative;
+}) {
+  const storagePath = buildFaceDerivativeStoragePath({
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    materializationId: input.materializationId,
+    assetFaceId: input.assetFaceId,
+    derivativeKind: input.derivative.derivativeKind,
+  });
+
+  const { error: uploadError } = await input.supabase.storage
+    .from(FACE_DERIVATIVE_BUCKET)
+    .upload(storagePath, input.derivative.data, {
+      contentType: input.derivative.contentType,
+      upsert: true,
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  const { error: derivativeError } = await input.supabase
+    .from("asset_face_image_derivatives")
+    .upsert(
+      {
+        asset_face_id: input.assetFaceId,
+        materialization_id: input.materializationId,
+        asset_id: input.assetId,
+        tenant_id: input.tenantId,
+        project_id: input.projectId,
+        derivative_kind: input.derivative.derivativeKind,
+        storage_bucket: FACE_DERIVATIVE_BUCKET,
+        storage_path: storagePath,
+        width: input.derivative.width,
+        height: input.derivative.height,
+      },
+      {
+        onConflict: "asset_face_id,derivative_kind",
+      },
+    );
+
+  if (derivativeError) {
+    throw derivativeError;
+  }
 }
 
 async function persistFaceDerivatives(input: {
@@ -443,49 +499,16 @@ async function persistFaceDerivatives(input: {
     .filter((entry): entry is { faceRow: AssetFaceMaterializationFaceRow; derivative: AutoMatcherFaceDerivative } => Boolean(entry));
 
   for (const entry of derivatives) {
-    const storagePath = buildFaceDerivativeStoragePath({
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      materializationId: input.materializationId,
-      assetFaceId: entry.faceRow.id,
-      derivativeKind: entry.derivative.derivativeKind,
-    });
-
     try {
-      const { error: uploadError } = await input.supabase.storage
-        .from(FACE_DERIVATIVE_BUCKET)
-        .upload(storagePath, entry.derivative.data, {
-          contentType: entry.derivative.contentType,
-          upsert: true,
-        });
-
-      if (uploadError) {
-        continue;
-      }
-
-      const { error: derivativeError } = await input.supabase
-        .from("asset_face_image_derivatives")
-        .upsert(
-          {
-            asset_face_id: entry.faceRow.id,
-            materialization_id: input.materializationId,
-            asset_id: input.assetId,
-            tenant_id: input.tenantId,
-            project_id: input.projectId,
-            derivative_kind: entry.derivative.derivativeKind,
-            storage_bucket: FACE_DERIVATIVE_BUCKET,
-            storage_path: storagePath,
-            width: entry.derivative.width,
-            height: entry.derivative.height,
-          },
-          {
-            onConflict: "asset_face_id,derivative_kind",
-          },
-        );
-
-      if (derivativeError) {
-        continue;
-      }
+      await persistAssetFaceDerivative({
+        supabase: input.supabase,
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        assetId: input.assetId,
+        materializationId: input.materializationId,
+        assetFaceId: entry.faceRow.id,
+        derivative: entry.derivative,
+      });
     } catch {
       continue;
     }
@@ -503,6 +526,63 @@ async function deleteMaterializationFaces(
 
   if (error) {
     throw new HttpError(500, "face_materialization_write_failed", "Unable to replace stale materialized faces.");
+  }
+}
+
+function isManualMaterializedFace(face: AssetFaceMaterializationFaceRow) {
+  return face.face_source === "manual";
+}
+
+async function deleteDetectorMaterializationFaces(
+  supabase: SupabaseClient,
+  materializationId: string,
+) {
+  const { error } = await supabase
+    .from("asset_face_materialization_faces")
+    .delete()
+    .eq("materialization_id", materializationId)
+    .eq("face_source", "detector");
+
+  if (error) {
+    throw new HttpError(500, "face_materialization_write_failed", "Unable to replace detector materialized faces.");
+  }
+}
+
+async function updateMaterializationFaceRank(
+  supabase: SupabaseClient,
+  faceId: string,
+  faceRank: number,
+) {
+  const { error } = await supabase
+    .from("asset_face_materialization_faces")
+    .update({ face_rank: faceRank })
+    .eq("id", faceId);
+
+  if (error) {
+    throw new HttpError(500, "face_materialization_write_failed", "Unable to preserve manual face ranks.");
+  }
+}
+
+async function reassignManualFaceRanks(
+  supabase: SupabaseClient,
+  manualFaces: AssetFaceMaterializationFaceRow[],
+  nextDetectorFaceCount: number,
+) {
+  const orderedManualFaces = manualFaces
+    .slice()
+    .sort((left, right) => left.face_rank - right.face_rank);
+
+  if (orderedManualFaces.length === 0) {
+    return;
+  }
+
+  const tempRankBase = nextDetectorFaceCount + orderedManualFaces.length + MANUAL_FACE_TEMP_RANK_OFFSET;
+  for (const [index, face] of orderedManualFaces.entries()) {
+    await updateMaterializationFaceRank(supabase, face.id, tempRankBase + index);
+  }
+
+  for (const [index, face] of orderedManualFaces.entries()) {
+    await updateMaterializationFaceRank(supabase, face.id, nextDetectorFaceCount + index);
   }
 }
 
@@ -587,8 +667,24 @@ export async function ensureAssetFaceMaterialization(
     throw new HttpError(500, "face_materialization_write_failed", "Unable to persist face materialization.");
   }
 
+  const existingFaces =
+    existing && asset.assetType === "photo"
+      ? await loadMaterializationFacesWithRetry({
+          supabase: input.supabase,
+          materializationId: existing.id,
+          source: "ensure_existing_faces",
+          includeFaces: true,
+        })
+      : [];
+  const manualFacesToPreserve = asset.assetType === "photo" ? existingFaces.filter(isManualMaterializedFace) : [];
+
   if (forceRematerialize && existing?.asset_type === "headshot" && existing.face_count > 0) {
     await deleteMaterializationFaces(input.supabase, materializationRow.id);
+  }
+
+  if (asset.assetType === "photo" && existing) {
+    await deleteDetectorMaterializationFaces(input.supabase, materializationRow.id);
+    await reassignManualFaceRanks(input.supabase, manualFacesToPreserve, providerResult.faces.length);
   }
 
   const faceRows = providerResult.faces.map((face) => ({
@@ -602,6 +698,8 @@ export async function ensureAssetFaceMaterialization(
     face_box: normalizeMaterializedFaceBox(face),
     face_box_normalized: normalizeMaterializedNormalizedFaceBox(face),
     embedding: face.embedding,
+    face_source: "detector" as const,
+    created_by: null,
   }));
 
   if (faceRows.length > 0) {

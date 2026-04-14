@@ -376,7 +376,7 @@ async function loadMaterializationFacesMap(
     const { data, error } = await supabase
       .from("asset_face_materialization_faces")
       .select(
-        "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, created_at",
+        "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
       )
       .in("materialization_id", materializationIdChunk)
       .order("face_rank", { ascending: true });

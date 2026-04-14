@@ -142,3 +142,13 @@ As the app grows:
 - Migrations must be included for any schema changes.
 - Update docs when architecture or invariants change.
 - Prefer explicit modeling over hidden logic.
+- 
+## Internationalization (i18n)
+
+If the repo includes the UI language switch / i18n framework:
+
+- Reuse the existing i18n setup for all new user-facing UI text.
+- Do not introduce new hardcoded inline UI strings in components when translation keys should be used.
+- Add new translation keys/messages for Dutch and English when adding new UI copy.
+- Keep stored domain content unchanged; only localize UI chrome, labels, buttons, helper text, and validation copy that belongs to the app UI.
+- Follow the existing translation key structure and naming conventions already used in the repo.

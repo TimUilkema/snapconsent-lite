@@ -1,17 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 
 import { TemplateConsentPreview } from "@/components/templates/template-consent-preview";
-import { TemplateFormLayoutEditor } from "@/components/templates/template-form-layout-editor";
 import { TemplateStructuredFieldsEditor } from "@/components/templates/template-structured-fields-editor";
-import { TemplateStatusBadge } from "@/components/templates/template-status-badge";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
-import { formatDateTime } from "@/lib/i18n/format";
-import { reconcileFormLayoutDefinition } from "@/lib/templates/form-layout";
+import { reconcileFormLayoutDefinition, type ConsentFormLayoutDefinition } from "@/lib/templates/form-layout";
 import { createStarterStructuredFieldsDefinition } from "@/lib/templates/structured-fields";
 import type { TemplateDetail } from "@/lib/templates/template-service";
 
@@ -27,6 +24,46 @@ type TemplateActionResponse = {
   message?: string;
 };
 
+type PersistedTemplateEditorDraft = {
+  version: 1;
+  templateId: string;
+  sourceUpdatedAt: string;
+  name: string;
+  body: string;
+  structuredFieldsDefinition: TemplateDetail["structuredFieldsDefinition"];
+  formLayoutDefinition: TemplateDetail["formLayoutDefinition"];
+};
+
+function getTemplateEditorDraftStorageKey(templateId: string) {
+  return `template-editor-draft:${templateId}`;
+}
+
+function parsePersistedTemplateEditorDraft(rawValue: string | null): PersistedTemplateEditorDraft | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<PersistedTemplateEditorDraft> | null;
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      typeof parsed.templateId !== "string" ||
+      typeof parsed.sourceUpdatedAt !== "string" ||
+      typeof parsed.name !== "string" ||
+      typeof parsed.body !== "string" ||
+      !("structuredFieldsDefinition" in parsed) ||
+      !("formLayoutDefinition" in parsed)
+    ) {
+      return null;
+    }
+
+    return parsed as PersistedTemplateEditorDraft;
+  } catch {
+    return null;
+  }
+}
+
 function getEditableStructuredDefinition(template: TemplateDetail) {
   if (template.structuredFieldsDefinition) {
     return template.structuredFieldsDefinition;
@@ -35,37 +72,140 @@ function getEditableStructuredDefinition(template: TemplateDetail) {
   return template.canEdit ? createStarterStructuredFieldsDefinition() : null;
 }
 
+function isFaceMatchEnabled(definition: ConsentFormLayoutDefinition) {
+  return definition.blocks.some(
+    (block) => block.kind === "system" && block.key === "face_match_section",
+  );
+}
+
+function setFaceMatchEnabled(
+  definition: ConsentFormLayoutDefinition,
+  enabled: boolean,
+): ConsentFormLayoutDefinition {
+  if (enabled) {
+    if (isFaceMatchEnabled(definition)) {
+      return definition;
+    }
+
+    const consentTextIndex = definition.blocks.findIndex(
+      (block) => block.kind === "system" && block.key === "consent_text",
+    );
+    const nextBlocks = [...definition.blocks];
+    const insertionIndex = consentTextIndex === -1 ? nextBlocks.length : consentTextIndex;
+    nextBlocks.splice(insertionIndex, 0, { kind: "system", key: "face_match_section" });
+
+    return {
+      schemaVersion: definition.schemaVersion,
+      blocks: nextBlocks,
+    };
+  }
+
+  return {
+    schemaVersion: definition.schemaVersion,
+    blocks: definition.blocks.filter(
+      (block) => !(block.kind === "system" && block.key === "face_match_section"),
+    ),
+  };
+}
+
 export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
-  const locale = useLocale();
   const t = useTranslations("templates.detail");
   const tInvite = useTranslations("publicInvite");
   const tPublic = useTranslations("publicInvite.form");
   const tErrors = useTranslations("errors");
   const router = useRouter();
-  const editableStructuredDefinition = getEditableStructuredDefinition(template);
+  const editableStructuredDefinition = useMemo(() => getEditableStructuredDefinition(template), [template]);
+  const draftStorageKey = getTemplateEditorDraftStorageKey(template.id);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [isCreatingVersion, setIsCreatingVersion] = useState(false);
+  const [hasLoadedPersistedDraft, setHasLoadedPersistedDraft] = useState(false);
   const [name, setName] = useState(template.name);
   const [body, setBody] = useState(template.body);
   const [structuredFieldsDefinition, setStructuredFieldsDefinition] = useState(editableStructuredDefinition);
   const [formLayoutDefinition, setFormLayoutDefinition] = useState(template.formLayoutDefinition);
 
   useEffect(() => {
+    if (!template.canEdit || typeof window === "undefined") {
+      setName(template.name);
+      setBody(template.body);
+      setStructuredFieldsDefinition(editableStructuredDefinition);
+      setFormLayoutDefinition(template.formLayoutDefinition);
+      setHasLoadedPersistedDraft(true);
+      return;
+    }
+
+    const persistedDraft = parsePersistedTemplateEditorDraft(window.localStorage.getItem(draftStorageKey));
+    if (
+      persistedDraft &&
+      persistedDraft.templateId === template.id &&
+      persistedDraft.sourceUpdatedAt === template.updatedAt
+    ) {
+      setName(persistedDraft.name);
+      setBody(persistedDraft.body);
+      setStructuredFieldsDefinition(persistedDraft.structuredFieldsDefinition);
+      setFormLayoutDefinition(persistedDraft.formLayoutDefinition);
+      setHasLoadedPersistedDraft(true);
+      return;
+    }
+
+    if (persistedDraft) {
+      window.localStorage.removeItem(draftStorageKey);
+    }
+
     setName(template.name);
     setBody(template.body);
     setStructuredFieldsDefinition(editableStructuredDefinition);
     setFormLayoutDefinition(template.formLayoutDefinition);
+    setHasLoadedPersistedDraft(true);
   }, [
+    draftStorageKey,
     template.id,
+    template.canEdit,
     template.updatedAt,
     template.name,
     template.body,
     template.formLayoutDefinition,
     editableStructuredDefinition,
   ]);
+
+  useEffect(() => {
+    if (!template.canEdit || !hasLoadedPersistedDraft || typeof window === "undefined") {
+      return;
+    }
+
+    const persistedDraft: PersistedTemplateEditorDraft = {
+      version: 1,
+      templateId: template.id,
+      sourceUpdatedAt: template.updatedAt,
+      name,
+      body,
+      structuredFieldsDefinition,
+      formLayoutDefinition,
+    };
+
+    window.localStorage.setItem(draftStorageKey, JSON.stringify(persistedDraft));
+  }, [
+    body,
+    draftStorageKey,
+    formLayoutDefinition,
+    hasLoadedPersistedDraft,
+    name,
+    structuredFieldsDefinition,
+    template.canEdit,
+    template.id,
+    template.updatedAt,
+  ]);
+
+  function clearPersistedDraft() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.removeItem(draftStorageKey);
+  }
 
   async function saveDraft() {
     setError(null);
@@ -91,6 +231,7 @@ export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
         return;
       }
 
+      clearPersistedDraft();
       router.refresh();
     } catch {
       setError(tErrors("generic"));
@@ -134,8 +275,11 @@ export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
         return;
       }
 
+      clearPersistedDraft();
+
       if (mode === "version" && payload?.template?.id) {
         router.push(`/templates/${payload.template.id}`);
+        return;
       }
 
       router.refresh();
@@ -149,34 +293,10 @@ export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
   }
 
   const readOnly = !template.canEdit;
+  const faceMatchEnabled = isFaceMatchEnabled(formLayoutDefinition);
 
   return (
     <div className="space-y-6">
-      <section className="content-card space-y-4 rounded-xl p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold text-zinc-900">{template.name}</h1>
-            <p className="mt-1 text-sm text-zinc-600">
-              {template.scope === "app" ? t("scopeApp") : t("scopeOrganization")} - {template.version}
-            </p>
-          </div>
-          <TemplateStatusBadge status={template.status} />
-        </div>
-
-        <dl className="grid gap-3 text-sm sm:grid-cols-2">
-          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            <dt className="text-zinc-500">{t("updatedLabel")}</dt>
-            <dd className="mt-1 font-medium text-zinc-900">{formatDateTime(template.updatedAt, locale)}</dd>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            <dt className="text-zinc-500">{t("publishedLabel")}</dt>
-            <dd className="mt-1 font-medium text-zinc-900">
-              {template.publishedAt ? formatDateTime(template.publishedAt, locale) : t("notPublished")}
-            </dd>
-          </div>
-        </dl>
-      </section>
-
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)] xl:items-start">
         <form onSubmit={handleSave} className="content-card space-y-4 rounded-xl p-5">
           <label className="block text-sm text-zinc-800">
@@ -237,7 +357,6 @@ export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
               fieldTypeField: t("structuredFieldTypeField"),
               helpTextField: t("structuredHelpTextField"),
               placeholderField: t("structuredPlaceholderField"),
-              maxLengthField: t("structuredMaxLengthField"),
               requiredFieldLabel: t("structuredRequiredField"),
               requiredValue: t("requiredValue"),
               optionalValue: t("optionalValue"),
@@ -252,27 +371,19 @@ export function TemplateDetailClient({ template }: TemplateDetailClientProps) {
             }}
           />
 
-          <TemplateFormLayoutEditor
-            definition={formLayoutDefinition}
-            structuredFieldsDefinition={structuredFieldsDefinition}
-            readOnly={readOnly}
-            onChange={setFormLayoutDefinition}
-            strings={{
-              title: t("layoutTitle"),
-              subtitle: t("layoutSubtitle"),
-              allowFaceMatchLabel: t("layoutAllowFaceMatch"),
-              systemBadge: t("layoutBadgeSystem"),
-              builtInBadge: t("layoutBadgeBuiltIn"),
-              customBadge: t("layoutBadgeCustom"),
-              dragHandle: t("layoutDragHandle"),
-              subjectNameLabel: t("layoutSubjectName"),
-              subjectEmailLabel: t("layoutSubjectEmail"),
-              scopeLabel: t("layoutScope"),
-              durationLabel: t("layoutDuration"),
-              faceMatchLabel: t("layoutFaceMatch"),
-              consentTextLabel: t("layoutConsentText"),
-            }}
-          />
+          <label className="flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-3 text-sm text-zinc-800">
+            <input
+              type="checkbox"
+              checked={faceMatchEnabled}
+              disabled={readOnly}
+              onChange={(event) =>
+                setFormLayoutDefinition((current) =>
+                  setFaceMatchEnabled(current, event.target.checked),
+                )
+              }
+            />
+            <span>{t("layoutAllowFaceMatch")}</span>
+          </label>
 
           {error ? <p className="text-sm text-red-700">{error}</p> : null}
 

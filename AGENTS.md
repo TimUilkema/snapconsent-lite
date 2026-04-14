@@ -53,6 +53,16 @@ Research and plan documents should be created under:
 
 docs/rpi/<feature-id>/
 
+## Internationalization (i18n)
+
+If the repo includes the UI language switch / i18n framework:
+
+- Reuse the existing i18n setup for all new user-facing UI text.
+- Do not introduce new hardcoded inline UI strings in components when translation keys should be used.
+- Add new translation keys/messages for Dutch and English when adding new UI copy.
+- Keep stored domain content unchanged; only localize UI chrome, labels, buttons, helper text, and validation copy that belongs to the app UI.
+- Follow the existing translation key structure and naming conventions already used in the repo.
+
 ## Large document writing + encoding safety
 
 When creating or updating large markdown documents (especially `research.md` and `plan.md`):

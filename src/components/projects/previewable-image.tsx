@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { getFaceOverlayStyle, type MeasuredSize, type NormalizedFaceBox } from "@/lib/client/face-overlay";
+import {
+  getContainedImageRect,
+  getFaceOverlayStyle,
+  type ContainedImageRect,
+  type MeasuredSize,
+  type NormalizedFaceBox,
+} from "@/lib/client/face-overlay";
 
 export type PreviewFaceOverlay = {
   id: string;
@@ -14,7 +20,7 @@ export type PreviewFaceOverlay = {
   matchConfidence?: number | null;
   linkSource?: "manual" | "auto" | null;
   linkSourceLabel?: string | null;
-  tone?: "manual" | "auto" | "unlinked" | "hidden" | null;
+  tone?: "manual" | "auto" | "unlinked" | "hidden" | "blocked" | null;
   metaLabel?: string | null;
 };
 
@@ -54,6 +60,11 @@ type PreviewOverlayBoxStyle = {
   height: string;
 };
 
+type DrawFacePointerPoint = {
+  x: number;
+  y: number;
+};
+
 type ImagePreviewLightboxProps = {
   open: boolean;
   src: string | null;
@@ -86,6 +97,9 @@ type ImagePreviewLightboxProps = {
   belowScene?: React.ReactNode;
   sidePanel?: React.ReactNode;
   chrome?: "header" | "floating";
+  isDrawFaceMode?: boolean;
+  draftFaceBoxNormalized?: NormalizedFaceBox;
+  onDraftFaceBoxChange?: (faceBoxNormalized: NormalizedFaceBox) => void;
 };
 
 function getConsentInitials(label: string) {
@@ -211,6 +225,90 @@ function parsePixelValue(value: string | undefined) {
 
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function getPreviewSceneImageRect(
+  frameSize: MeasuredSize | null,
+  imageSize: MeasuredSize | null,
+) {
+  return getContainedImageRect(frameSize, imageSize);
+}
+
+export function getPreviewScenePointFromClientPoint(input: {
+  clientX: number;
+  clientY: number;
+  frameRect: DOMRect;
+  frameSize: MeasuredSize;
+  zoom: number;
+  pan: LightboxPan;
+}) {
+  const localX = input.clientX - input.frameRect.left;
+  const localY = input.clientY - input.frameRect.top;
+  const centerX = input.frameSize.width / 2;
+  const centerY = input.frameSize.height / 2;
+
+  return {
+    x: centerX + (localX - centerX - input.pan.x) / input.zoom,
+    y: centerY + (localY - centerY - input.pan.y) / input.zoom,
+  };
+}
+
+export function getConstrainedPreviewDrawPoint(input: {
+  clientX: number;
+  clientY: number;
+  frameRect: DOMRect;
+  frameSize: MeasuredSize | null;
+  imageRect: ContainedImageRect | null;
+  zoom: number;
+  pan: LightboxPan;
+}) {
+  if (!input.frameSize || !input.imageRect) {
+    return null;
+  }
+
+  const scenePoint = getPreviewScenePointFromClientPoint({
+    clientX: input.clientX,
+    clientY: input.clientY,
+    frameRect: input.frameRect,
+    frameSize: input.frameSize,
+    zoom: input.zoom,
+    pan: input.pan,
+  });
+  const isInsideImage =
+    scenePoint.x >= input.imageRect.left &&
+    scenePoint.x <= input.imageRect.left + input.imageRect.width &&
+    scenePoint.y >= input.imageRect.top &&
+    scenePoint.y <= input.imageRect.top + input.imageRect.height;
+
+  return {
+    point: {
+      x: clampNumber(scenePoint.x, input.imageRect.left, input.imageRect.left + input.imageRect.width),
+      y: clampNumber(scenePoint.y, input.imageRect.top, input.imageRect.top + input.imageRect.height),
+    },
+    isInsideImage,
+  };
+}
+
+export function buildNormalizedFaceBoxFromPreviewPoints(
+  startPoint: DrawFacePointerPoint | null,
+  endPoint: DrawFacePointerPoint | null,
+  imageRect: ContainedImageRect | null,
+): NormalizedFaceBox {
+  if (!startPoint || !endPoint || !imageRect || imageRect.width <= 0 || imageRect.height <= 0) {
+    return null;
+  }
+
+  const xMin = clampNumber((Math.min(startPoint.x, endPoint.x) - imageRect.left) / imageRect.width, 0, 1);
+  const yMin = clampNumber((Math.min(startPoint.y, endPoint.y) - imageRect.top) / imageRect.height, 0, 1);
+  const xMax = clampNumber((Math.max(startPoint.x, endPoint.x) - imageRect.left) / imageRect.width, 0, 1);
+  const yMax = clampNumber((Math.max(startPoint.y, endPoint.y) - imageRect.top) / imageRect.height, 0, 1);
+
+  return {
+    x_min: xMin,
+    y_min: yMin,
+    x_max: xMax,
+    y_max: yMax,
+  };
 }
 
 export function transformPreviewOverlayStyle(
@@ -394,6 +492,28 @@ function renderOverlayBadge(overlay: PreviewFaceOverlay, size: "inline" | "previ
     );
   }
 
+  if (toneKey === "blocked") {
+    return (
+      <span
+        aria-hidden="true"
+        className={`inline-flex items-center justify-center border-2 border-white bg-red-700 text-white shadow-sm ${badgeSizeClass}`}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className={size === "inline" ? "h-4 w-4" : "h-6 w-6"}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="8" />
+          <path d="m8.5 15.5 7-7" />
+        </svg>
+      </span>
+    );
+  }
+
   return (
     <span
       className={`inline-flex items-center justify-center border-2 border-white bg-emerald-700 font-semibold text-white shadow-sm ${badgeSizeClass}`}
@@ -467,6 +587,26 @@ function getPreviewOverlayToneClasses(
         };
   }
 
+  if (tone === "blocked") {
+    return active
+      ? {
+          box: "border-red-950 bg-red-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.98),0_0_0_4px_rgba(239,68,68,0.2),0_16px_32px_rgba(127,29,29,0.24)]",
+          card: "border-red-300 bg-red-50/95 ring-red-200/90 shadow-[0_24px_48px_rgba(239,68,68,0.14),0_8px_16px_rgba(15,23,42,0.12)]",
+          hoverCard: "border-red-200 bg-red-50/92 ring-red-100/80 hover:border-red-300 hover:shadow-[0_22px_44px_rgba(239,68,68,0.12),0_6px_14px_rgba(15,23,42,0.1)]",
+          label: "text-zinc-950",
+          meta: "text-zinc-500",
+          icon: "text-red-700",
+        }
+      : {
+          box: "border-red-700 bg-red-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.96),0_10px_20px_rgba(127,29,29,0.18)] hover:border-red-800",
+          card: "border-white/95 bg-red-50/92 ring-red-100/80 shadow-[0_18px_38px_rgba(15,23,42,0.14),0_4px_12px_rgba(15,23,42,0.1)]",
+          hoverCard: "border-red-200 bg-red-50/92 ring-red-100/80 hover:border-red-300 hover:shadow-[0_22px_44px_rgba(239,68,68,0.12),0_6px_14px_rgba(15,23,42,0.1)]",
+          label: "text-zinc-900",
+          meta: "text-zinc-500",
+          icon: "text-red-700",
+        };
+  }
+
   return active
     ? {
         box: "border-emerald-950 bg-emerald-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.98),0_0_0_4px_rgba(5,150,105,0.18),0_16px_32px_rgba(6,95,70,0.28)]",
@@ -514,6 +654,15 @@ function renderLinkSourceIcon(
     );
   }
 
+  if (tone === "blocked") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${className}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="8" />
+        <path d="m8.5 15.5 7-7" />
+      </svg>
+    );
+  }
+
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${className}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11 3 9.7 6.7 6 8l3.7 1.3L11 13l1.3-3.7L16 8l-3.7-1.3Z" />
@@ -527,6 +676,7 @@ export function PreviewImageFaceOverlayLink({
   overlayStyle,
   size,
   cardStyle,
+  interactive = true,
   active,
   selected,
   dimmed,
@@ -537,6 +687,7 @@ export function PreviewImageFaceOverlayLink({
   overlayStyle: PreviewOverlayBoxStyle;
   size: "inline" | "preview";
   cardStyle?: React.CSSProperties | null;
+  interactive?: boolean;
   active?: boolean;
   selected?: boolean;
   dimmed?: boolean;
@@ -549,7 +700,8 @@ export function PreviewImageFaceOverlayLink({
     overlay.metaLabel ?? overlay.linkSourceLabel ?? (overlay.linkSource === "manual" ? "Manual" : "Auto");
 
   if (size === "preview" && cardStyle) {
-    const sharedHoverProps = {
+    const sharedHoverProps = interactive
+      ? {
       onMouseEnter: () => onHoverChange?.(true),
           onMouseLeave: () => onHoverChange?.(false),
           onFocus: () => onHoverChange?.(true),
@@ -562,23 +714,25 @@ export function PreviewImageFaceOverlayLink({
             event.preventDefault();
             onActivate(overlay, event);
           },
-        };
+        }
+      : {};
+    const interactiveClassName = interactive ? "pointer-events-auto" : "pointer-events-none";
+    const CardElement = interactive ? "a" : "div";
 
     return (
       <div className="pointer-events-none absolute inset-0" style={{ zIndex: active ? 40 : selected ? 30 : 20 }}>
-        <a
-          href={overlay.href}
-          tabIndex={-1}
+        <CardElement
+          {...(interactive ? { href: overlay.href, tabIndex: -1 } : {})}
           data-preview-overlay-link="true"
-          className={`pointer-events-auto absolute block rounded-[10px] border-[3px] transition-[border-color,box-shadow,opacity] ${tone.box} ${dimmed ? "opacity-40" : "opacity-100"}`}
+          className={`${interactiveClassName} absolute block rounded-[10px] border-[3px] transition-[border-color,box-shadow,opacity] ${tone.box} ${dimmed ? "opacity-40" : "opacity-100"}`}
           style={overlayStyle}
           title={`Open ${overlay.label}`}
           {...sharedHoverProps}
         />
-        <a
-          href={overlay.href}
+        <CardElement
+          {...(interactive ? { href: overlay.href } : {})}
           data-preview-overlay-link="true"
-          className={`pointer-events-auto absolute flex items-center gap-3 rounded-2xl border px-3 py-2 ring-1 transition-[transform,border-color,box-shadow,opacity] ${
+          className={`${interactiveClassName} absolute flex items-center gap-3 rounded-2xl border px-3 py-2 ring-1 transition-[transform,border-color,box-shadow,opacity] ${
             active || selected ? tone.card : tone.hoverCard
           } ${dimmed ? "opacity-50" : "opacity-100"} ${active ? "-translate-y-0.5" : "translate-y-0"}`}
           style={cardStyle}
@@ -596,7 +750,7 @@ export function PreviewImageFaceOverlayLink({
                 <span>{linkSourceLabel}</span>
               </span>
             </span>
-          </a>
+          </CardElement>
       </div>
     );
   }
@@ -649,6 +803,9 @@ export function ImagePreviewLightbox({
   belowScene,
   sidePanel,
   chrome = "header",
+  isDrawFaceMode = false,
+  draftFaceBoxNormalized = null,
+  onDraftFaceBoxChange,
 }: ImagePreviewLightboxProps) {
   const [failedPreviewSrc, setFailedPreviewSrc] = useState<string | null>(null);
   const [uncontrolledHoveredOverlayId, setUncontrolledHoveredOverlayId] = useState<string | null>(null);
@@ -667,8 +824,13 @@ export function ImagePreviewLightbox({
     startClientY: number;
     startPan: LightboxPan;
   } | null>(null);
-  const canPan = zoom > 1.01;
+  const drawStateRef = useRef<{
+    pointerId: number;
+    startPoint: DrawFacePointerPoint;
+  } | null>(null);
+  const canPan = zoom > 1.01 && !isDrawFaceMode;
   const clampedPan = clampPreviewPan(pan, zoom, previewFrameSize);
+  const previewImageRect = getPreviewSceneImageRect(previewFrameSize, previewImageSize);
   const hoveredOverlayId =
     controlledHoveredOverlayId !== undefined ? controlledHoveredOverlayId : uncontrolledHoveredOverlayId;
   const activeOverlayId = hoveredOverlayId ?? selectedOverlayId ?? null;
@@ -767,11 +929,46 @@ export function ImagePreviewLightbox({
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const target = event.target;
     if (
-      !canPan ||
       !(target instanceof HTMLElement) ||
       target.closest("[data-preview-overlay-link='true']") ||
       target.closest("button")
     ) {
+      return;
+    }
+
+    if (isDrawFaceMode) {
+      const frameRect = event.currentTarget.getBoundingClientRect();
+      const constrainedPoint = getConstrainedPreviewDrawPoint({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        frameRect,
+        frameSize: previewFrameSize,
+        imageRect: previewImageRect,
+        zoom,
+        pan: clampedPan,
+      });
+
+      if (!constrainedPoint?.isInsideImage) {
+        return;
+      }
+
+      drawStateRef.current = {
+        pointerId: event.pointerId,
+        startPoint: constrainedPoint.point,
+      };
+      onDraftFaceBoxChange?.(
+        buildNormalizedFaceBoxFromPreviewPoints(
+          constrainedPoint.point,
+          constrainedPoint.point,
+          previewImageRect,
+        ),
+      );
+      setHoveredOverlayId(null);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (!canPan) {
       return;
     }
 
@@ -786,6 +983,33 @@ export function ImagePreviewLightbox({
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drawState = drawStateRef.current;
+    if (drawState && drawState.pointerId === event.pointerId) {
+      const frameRect = event.currentTarget.getBoundingClientRect();
+      const constrainedPoint = getConstrainedPreviewDrawPoint({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        frameRect,
+        frameSize: previewFrameSize,
+        imageRect: previewImageRect,
+        zoom,
+        pan: clampedPan,
+      });
+
+      if (!constrainedPoint) {
+        return;
+      }
+
+      onDraftFaceBoxChange?.(
+        buildNormalizedFaceBoxFromPreviewPoints(
+          drawState.startPoint,
+          constrainedPoint.point,
+          previewImageRect,
+        ),
+      );
+      return;
+    }
+
     const dragState = dragStateRef.current;
     if (!dragState || dragState.pointerId !== event.pointerId) {
       return;
@@ -799,6 +1023,14 @@ export function ImagePreviewLightbox({
   }
 
   function handlePointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    if (drawStateRef.current?.pointerId === event.pointerId) {
+      drawStateRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
+
     if (dragStateRef.current?.pointerId !== event.pointerId) {
       return;
     }
@@ -837,6 +1069,21 @@ export function ImagePreviewLightbox({
           })
           .filter((entry): entry is { overlay: PreviewFaceOverlay; overlayStyle: PreviewOverlayBoxStyle } => Boolean(entry))
       : [];
+  const draftOverlayStyle =
+    draftFaceBoxNormalized && previewFrameSize
+      ? (() => {
+          const baseOverlayStyle = getFaceOverlayStyle(
+            draftFaceBoxNormalized,
+            previewFrameSize,
+            previewImageSize,
+          );
+          if (!baseOverlayStyle) {
+            return null;
+          }
+
+          return transformPreviewOverlayStyle(baseOverlayStyle, previewFrameSize, zoom, clampedPan);
+        })()
+      : null;
   const previewCardLayout =
     previewFrameSize && overlayEntries.length > 0
       ? getPreviewOverlayCardLayout(
@@ -899,7 +1146,9 @@ export function ImagePreviewLightbox({
 
       <div
         ref={previewFrameRef}
-        className={`relative h-full w-full overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.88),_rgba(244,244,245,0.96)_42%,_rgba(228,228,231,1)_100%)] ${canPan ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+        className={`relative h-full w-full overflow-hidden rounded-[18px] bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.88),_rgba(244,244,245,0.96)_42%,_rgba(228,228,231,1)_100%)] ${
+          isDrawFaceMode ? "cursor-crosshair" : canPan ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+        }`}
         onWheel={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -936,6 +1185,7 @@ export function ImagePreviewLightbox({
                 overlay={overlay}
                 overlayStyle={overlayStyle}
                 size="preview"
+                interactive={!isDrawFaceMode}
                 cardStyle={
                   cardRect
                     ? {
@@ -957,6 +1207,12 @@ export function ImagePreviewLightbox({
               />
             );
           })}
+          {draftOverlayStyle ? (
+            <div
+              className="absolute z-50 rounded-[10px] border-[3px] border-amber-700 bg-amber-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.96),0_10px_20px_rgba(180,83,9,0.2)]"
+              style={draftOverlayStyle}
+            />
+          ) : null}
           {selectedOverlayId && selectedOverlayDetail && previewFrameSize
             ? (() => {
                 const cardRect = previewCardLayout.get(selectedOverlayId);
