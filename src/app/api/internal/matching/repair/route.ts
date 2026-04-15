@@ -9,6 +9,8 @@ type RepairRequestBody = {
   photoCursorAssetId?: string;
   headshotCursorCreatedAt?: string;
   headshotCursorConsentId?: string;
+  recurringCursorParticipantCreatedAt?: string;
+  recurringCursorProjectProfileParticipantId?: string;
 };
 
 const DEFAULT_BATCH_SIZE = 500;
@@ -53,6 +55,8 @@ export async function POST(request: Request) {
       photoCursorAssetId: body?.photoCursorAssetId ?? null,
       headshotCursorCreatedAt: body?.headshotCursorCreatedAt ?? null,
       headshotCursorConsentId: body?.headshotCursorConsentId ?? null,
+      recurringCursorParticipantCreatedAt: body?.recurringCursorParticipantCreatedAt ?? null,
+      recurringCursorProjectProfileParticipantId: body?.recurringCursorProjectProfileParticipantId ?? null,
     });
 
     return Response.json(
@@ -62,6 +66,7 @@ export async function POST(request: Request) {
         tenant_id: result.tenantId,
         scanned_photos: result.scannedPhotos,
         scanned_headshots: result.scannedHeadshots,
+        scanned_recurring_participants: result.scannedRecurringParticipants,
         enqueued: result.enqueued,
         requeued: result.requeued,
         already_processing: result.alreadyProcessing,
@@ -71,6 +76,8 @@ export async function POST(request: Request) {
         next_photo_cursor_asset_id: result.nextPhotoCursorAssetId,
         next_headshot_cursor_created_at: result.nextHeadshotCursorCreatedAt,
         next_headshot_cursor_consent_id: result.nextHeadshotCursorConsentId,
+        next_recurring_cursor_participant_created_at: result.nextRecurringCursorParticipantCreatedAt,
+        next_recurring_cursor_project_profile_participant_id: result.nextRecurringCursorProjectProfileParticipantId,
       },
       { status: 200 },
     );

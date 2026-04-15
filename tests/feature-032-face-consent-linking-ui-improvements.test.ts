@@ -37,6 +37,7 @@ import {
   listLinkedFaceOverlaysForAssetIds,
   manualLinkPhotoToConsent,
 } from "../src/lib/matching/photo-face-linking";
+import { ensureProjectConsentFaceAssignee } from "../src/lib/matching/project-face-assignees";
 
 type ProjectContext = {
   tenantId: string;
@@ -840,12 +841,19 @@ test("manual review and queue reads expose current consent confidence on the win
     winningSimilarity: 0.8732,
     targetFaceCount: multiFace.faces.length,
   });
+  const competingAssignee = await ensureProjectConsentFaceAssignee({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentId: competingConsent.consentId,
+  });
   const nowIso = new Date().toISOString();
   const { error: competingLinkError } = await admin.from("asset_face_consent_links").upsert(
     {
       asset_face_id: multiFace.faces[0]?.id,
       asset_materialization_id: multiFace.materialization.id,
       asset_id: multiFaceAssetId,
+      project_face_assignee_id: competingAssignee.id,
       consent_id: competingConsent.consentId,
       tenant_id: context.tenantId,
       project_id: context.projectId,

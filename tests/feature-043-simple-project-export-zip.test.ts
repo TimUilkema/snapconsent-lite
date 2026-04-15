@@ -196,7 +196,15 @@ function createBaseRecords(): LoadedProjectExportRecords {
     faceLinks: [
       {
         assetId: "asset-1",
+        projectFaceAssigneeId: "assignee-consent-1",
+        identityKind: "project_consent",
         consentId: "consent-1",
+        recurringProfileConsentId: null,
+        projectProfileParticipantId: null,
+        profileId: null,
+        displayName: "Tim Uilkema",
+        email: "tim@example.com",
+        currentStatus: "active",
         assetFaceId: "face-1",
         assetMaterializationId: "mat-1",
         linkSource: "manual",
@@ -227,6 +235,7 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
     .select("id")
     .single();
   assertNoPostgrestError(tenantError, "insert feature 043 tenant");
+  assert.ok(tenant);
 
   const { error: membershipError } = await adminClient.from("memberships").insert([
     {
@@ -250,6 +259,7 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
     .select("id")
     .single();
   assertNoPostgrestError(outsiderTenantError, "insert feature 043 outsider tenant");
+  assert.ok(outsiderTenant);
 
   const { error: outsiderMembershipError } = await adminClient.from("memberships").insert({
     tenant_id: outsiderTenant.id,
@@ -270,6 +280,7 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
     .select("id")
     .single();
   assertNoPostgrestError(projectError, "insert feature 043 project");
+  assert.ok(project);
 
   const { data: consentTemplate, error: consentTemplateError } = await adminClient
     .from("consent_templates")
@@ -287,6 +298,7 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
     .select("id")
     .single();
   assertNoPostgrestError(consentTemplateError, "insert feature 043 consent template");
+  assert.ok(consentTemplate);
 
   return {
     tenantId: tenant.id,
@@ -316,6 +328,7 @@ async function createInvite(input: {
     .select("id")
     .single();
   assertNoPostgrestError(error, "insert feature 043 invite");
+  assert.ok(data);
   return data.id as string;
 }
 
@@ -396,6 +409,7 @@ async function createSubjectAndConsent(input: {
     .select("id")
     .single();
   assertNoPostgrestError(subjectError, "insert feature 043 subject");
+  assert.ok(subject);
 
   const consentId = randomUUID();
   const { error: consentError } = await adminClient.from("consents").insert({
@@ -642,6 +656,8 @@ test("feature 043 prepared export keeps canonical face links, fallback links, an
   assert.equal(assetOne.metadata.metadataFilename, "DSC001_metadata.json");
   assert.equal(assetOne.metadata.materialization?.faceCount, 2);
   assert.equal(assetOne.metadata.detectedFaces.length, 2);
+  assert.equal(assetOne.metadata.detectedFaces[0]?.linkedProjectFaceAssigneeId, "assignee-consent-1");
+  assert.equal(assetOne.metadata.detectedFaces[0]?.linkedIdentityKind, "project_consent");
   assert.equal(assetOne.metadata.detectedFaces[0]?.linkedConsentId, "consent-1");
   assert.equal(assetOne.metadata.detectedFaces[0]?.linkSource, "manual");
   assert.equal(assetOne.metadata.detectedFaces[1]?.linkedConsentId, null);
@@ -654,6 +670,24 @@ test("feature 043 prepared export keeps canonical face links, fallback links, an
       currentStatus: "active",
       revokedAt: null,
       revokeReason: null,
+      linkMode: "face",
+      linkSource: "manual",
+      assetFaceId: "face-1",
+      faceRank: 0,
+      matchConfidence: null,
+    },
+  ]);
+  assert.deepEqual(assetOne.metadata.linkedAssignees, [
+    {
+      projectFaceAssigneeId: "assignee-consent-1",
+      identityKind: "project_consent",
+      consentId: "consent-1",
+      recurringProfileConsentId: null,
+      projectProfileParticipantId: null,
+      profileId: null,
+      displayName: "Tim Uilkema",
+      email: "tim@example.com",
+      currentStatus: "active",
       linkMode: "face",
       linkSource: "manual",
       assetFaceId: "face-1",
@@ -682,12 +716,31 @@ test("feature 043 prepared export keeps canonical face links, fallback links, an
       matchConfidence: null,
     },
   ]);
+  assert.deepEqual(assetTwo.metadata.linkedAssignees, [
+    {
+      projectFaceAssigneeId: "fallback:consent-2",
+      identityKind: "project_consent",
+      consentId: "consent-2",
+      recurringProfileConsentId: null,
+      projectProfileParticipantId: null,
+      profileId: null,
+      displayName: "Tim Uilkema",
+      email: "tim+revoked@example.com",
+      currentStatus: "revoked",
+      linkMode: "asset_fallback",
+      linkSource: "manual",
+      assetFaceId: null,
+      faceRank: null,
+      matchConfidence: null,
+    },
+  ]);
 
   const assetThree = prepared.assets.find((asset) => asset.assetId === "asset-3");
   assert.ok(assetThree);
   assert.equal(assetThree.metadata.materialization, null);
   assert.deepEqual(assetThree.metadata.detectedFaces, []);
   assert.deepEqual(assetThree.metadata.linkedConsents, []);
+  assert.deepEqual(assetThree.metadata.linkedAssignees, []);
 
   const revokedConsent = prepared.consents.find((consent) => consent.consentId === "consent-2");
   assert.ok(revokedConsent);

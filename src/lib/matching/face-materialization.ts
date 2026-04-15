@@ -111,6 +111,16 @@ type MaterializationLoadOptions = {
   includeFaces?: boolean;
 };
 
+type MaterializeFacesForStorageObjectInput = {
+  supabase: SupabaseClient;
+  matcher: AutoMatcher;
+  tenantId: string;
+  projectId?: string | null;
+  assetId: string;
+  assetType: "photo" | "headshot";
+  storage: AutoMatcherStorageRef;
+};
+
 type MaterializationReadKind = "materialization" | "faces";
 type MaterializationReadSource =
   | "ensure_existing_materialization"
@@ -163,6 +173,20 @@ function requireMaterializer(matcher: AutoMatcher) {
   }
 
   return matcher.materializeAssetFaces;
+}
+
+export async function materializeFacesForStorageObject(
+  input: MaterializeFacesForStorageObjectInput,
+) {
+  const materializeAssetFaces = requireMaterializer(input.matcher);
+  return materializeAssetFaces({
+    tenantId: input.tenantId,
+    projectId: input.projectId ?? null,
+    assetId: input.assetId,
+    assetType: input.assetType,
+    storage: input.storage,
+    supabase: input.supabase,
+  });
 }
 
 async function loadMaterializationFaces(
@@ -622,14 +646,14 @@ export async function ensureAssetFaceMaterialization(
     };
   }
 
-  const materializeAssetFaces = requireMaterializer(input.matcher);
-  const providerResult = await materializeAssetFaces({
+  const providerResult = await materializeFacesForStorageObject({
+    supabase: input.supabase,
+    matcher: input.matcher,
     tenantId: input.tenantId,
     projectId: input.projectId,
     assetId: asset.assetId,
     assetType: asset.assetType,
     storage: asset.storage,
-    supabase: input.supabase,
   });
   const usability = getMaterializationUsability(asset.assetType, providerResult.faces);
   const nowIso = new Date().toISOString();

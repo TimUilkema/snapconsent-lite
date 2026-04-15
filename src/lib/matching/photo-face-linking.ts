@@ -8,6 +8,7 @@ import {
 } from "@/lib/matching/auto-match-config";
 import {
   enqueueMaterializeAssetFacesJob,
+  type EnqueueFaceMatchJobResult,
   type RepairFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
 import { getAutoMatcher, type AutoMatcher } from "@/lib/matching/auto-matcher";
@@ -18,6 +19,19 @@ import {
   type AssetFaceMaterializationFaceRow,
   type AssetFaceMaterializationRow,
 } from "@/lib/matching/face-materialization";
+import {
+  ensureProjectConsentFaceAssignee,
+  ensureProjectRecurringConsentFaceAssignee,
+  loadProjectConsentFaceAssigneeIdsByConsentIds,
+  loadProjectFaceAssigneeDisplayMap,
+  loadProjectFaceAssigneeRowsByIds,
+  loadProjectRecurringConsentAssigneeIdsByRecurringConsentIds,
+  loadProjectRecurringConsentStateByParticipantIds,
+  isProjectRecurringConsentStateAutoEligible,
+  type ProjectFaceAssigneeRow,
+  type ProjectFaceAssigneeKind,
+} from "@/lib/matching/project-face-assignees";
+import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type MatchingScopeInput = {
@@ -82,7 +96,8 @@ type FaceLinkRow = {
   asset_face_id: string;
   asset_materialization_id: string;
   asset_id: string;
-  consent_id: string;
+  project_face_assignee_id: string;
+  consent_id: string | null;
   tenant_id: string;
   project_id: string;
   link_source: "manual" | "auto";
@@ -99,7 +114,7 @@ type FaceSuppressionRow = {
   asset_face_id: string;
   asset_materialization_id: string;
   asset_id: string;
-  consent_id: string;
+  project_face_assignee_id: string;
   tenant_id: string;
   project_id: string;
   reason: "manual_unlink" | "manual_replace";
@@ -177,6 +192,33 @@ type CompareRow = {
   compare_version: string;
 };
 
+type RecurringCompareRow = {
+  asset_id: string;
+  project_profile_participant_id: string;
+  profile_id: string;
+  recurring_headshot_materialization_id: string;
+  recurring_selection_face_id: string;
+  asset_materialization_id: string;
+  winning_asset_face_id: string | null;
+  winning_asset_face_rank: number | null;
+  winning_similarity: number | string;
+  compare_status: string;
+  compare_version: string;
+};
+
+type AutoAssigneeContender = {
+  assigneeKind: ProjectFaceAssigneeKind;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  recurringProfileConsentId: string | null;
+  confidence: number;
+  stableContenderKey: string;
+};
+
+type DesiredAutoAssigneeRow = AutoAssigneeContender & {
+  projectFaceAssigneeId: string;
+};
+
 type ConsentSummary = {
   consentId: string;
   fullName: string | null;
@@ -250,7 +292,10 @@ export type ManualPhotoLinkConflict = {
   kind: "manual_conflict";
   canForceReplace: boolean;
   currentAssignee: {
-    consentId: string;
+    projectFaceAssigneeId: string;
+    identityKind: ProjectFaceAssigneeKind;
+    consentId: string | null;
+    projectProfileParticipantId: string | null;
     fullName: string | null;
     email: string | null;
     linkSource: "manual" | "auto";
@@ -340,7 +385,12 @@ export type ManualPhotoLinkState = {
 export type AssetLinkedFaceOverlayRow = {
   assetId: string;
   assetFaceId: string;
-  consentId: string;
+  projectFaceAssigneeId: string;
+  identityKind: ProjectFaceAssigneeKind;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  recurringProfileConsentId: string | null;
   faceRank: number;
   faceBoxNormalized: Record<string, number | null> | null;
   linkSource: "manual" | "auto";
@@ -406,6 +456,65 @@ function toNumericConfidence(value: number | string | null | undefined) {
 
 function buildPairKey(assetId: string, consentId: string) {
   return `${assetId}:${consentId}`;
+}
+
+function buildFaceAssigneeSuppressionKey(assetFaceId: string, projectFaceAssigneeId: string) {
+  return `${assetFaceId}:${projectFaceAssigneeId}`;
+}
+
+function buildAutoContenderStableKey(input: {
+  assigneeKind: ProjectFaceAssigneeKind;
+  consentId: string | null;
+  recurringProfileConsentId: string | null;
+}) {
+  if (input.assigneeKind === "project_consent" && input.consentId) {
+    return `consent:${input.consentId}`;
+  }
+
+  if (input.assigneeKind === "project_recurring_consent" && input.recurringProfileConsentId) {
+    return `recurring_consent:${input.recurringProfileConsentId}`;
+  }
+
+  throw new HttpError(500, "project_face_assignee_lookup_failed", "Unable to derive the assignee contender key.");
+}
+
+function buildStableContenderKeyFromAssigneeRow(assignee: ProjectFaceAssigneeRow) {
+  return buildAutoContenderStableKey({
+    assigneeKind: assignee.assignee_kind,
+    consentId: assignee.consent_id,
+    recurringProfileConsentId: assignee.recurring_profile_consent_id,
+  });
+}
+
+type ProjectFaceAssigneeTarget = {
+  projectFaceAssigneeId: string;
+  identityKind: ProjectFaceAssigneeKind;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+};
+
+type ProjectFaceAssignmentScopeInput = {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetId: string;
+  actorUserId?: string | null;
+  matcher?: AutoMatcher;
+};
+
+type ManualProjectFaceAssignmentInput = ProjectFaceAssignmentScopeInput & {
+  target: ProjectFaceAssigneeTarget;
+  assetFaceId: string;
+  forceReplace?: boolean;
+};
+
+export type ManualProjectFaceAssignmentResult = ManualPhotoLinkResult;
+
+function isConsentBackedLink(
+  link: Pick<FaceLinkRow, "consent_id">,
+): link is Pick<FaceLinkRow, "consent_id"> & { consent_id: string } {
+  return typeof link.consent_id === "string" && link.consent_id.length > 0;
 }
 
 function toMatchablePhotoRow(asset: PhotoAssetRow, candidate?: {
@@ -531,6 +640,9 @@ async function resolveLikelyCandidateBatch(
     if (!materialization || materialization.id !== row.asset_materialization_id) {
       return;
     }
+    if (!isConsentBackedLink(row)) {
+      return;
+    }
     if (hiddenFaceIds.has(row.asset_face_id)) {
       return;
     }
@@ -550,13 +662,25 @@ async function resolveLikelyCandidateBatch(
   });
 
   const suppressionPairs = new Set<string>();
+  const consentAssigneeId = (
+    await loadProjectConsentFaceAssigneeIdsByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: [input.consentId],
+    })
+  ).get(input.consentId) ?? null;
   suppressions.forEach((row) => {
     const materialization = materializations.get(row.asset_id);
     if (!materialization || materialization.id !== row.asset_materialization_id) {
       return;
     }
 
-    suppressionPairs.add(`${row.asset_face_id}:${row.consent_id}`);
+    if (row.project_face_assignee_id !== consentAssigneeId) {
+      return;
+    }
+
+    suppressionPairs.add(`${row.asset_face_id}:${input.consentId}`);
   });
 
   return candidateRows
@@ -761,7 +885,7 @@ async function loadCurrentFaceLinksForAssets(
     const { data, error } = await supabase
       .from("asset_face_consent_links")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -789,9 +913,9 @@ async function loadCurrentFaceSuppressionsForAssets(
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
     const { data, error } = await supabase
-      .from("asset_face_consent_link_suppressions")
+      .from("asset_face_assignee_link_suppressions")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, reason, created_at, created_by",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, tenant_id, project_id, reason, created_at, created_by",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -1146,6 +1270,50 @@ async function loadCurrentCompareRowsForAsset(
   return loadCurrentCompareRowsForAssets(supabase, tenantId, projectId, [assetId]);
 }
 
+async function loadCurrentRecurringCompareRowsForAsset(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  assetId: string,
+) {
+  const { data, error } = await supabase
+    .from("asset_project_profile_face_compares")
+    .select(
+      "asset_id, project_profile_participant_id, profile_id, recurring_headshot_materialization_id, recurring_selection_face_id, asset_materialization_id, winning_asset_face_id, winning_asset_face_rank, winning_similarity, compare_status, compare_version",
+    )
+    .eq("tenant_id", tenantId)
+    .eq("project_id", projectId)
+    .eq("asset_id", assetId)
+    .eq("compare_version", getAutoMatchCompareVersion());
+
+  if (error) {
+    throw new HttpError(500, "photo_face_compare_lookup_failed", "Unable to load recurring compare rows.");
+  }
+
+  return (data ?? []) as RecurringCompareRow[];
+}
+
+async function loadReadyRecurringSourceMap(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  participantIds: string[];
+}) {
+  const readySourceMap = new Map<string, Awaited<ReturnType<typeof resolveReadyProjectRecurringSource>>>();
+  for (const participantId of Array.from(new Set(input.participantIds))) {
+    const readySource = await resolveReadyProjectRecurringSource(input.supabase, {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      projectProfileParticipantId: participantId,
+    });
+    if (readySource) {
+      readySourceMap.set(participantId, readySource);
+    }
+  }
+
+  return readySourceMap;
+}
+
 async function deleteCandidatePair(
   supabase: SupabaseClient,
   tenantId: string,
@@ -1259,7 +1427,7 @@ async function cleanupCurrentPhotoStateForAsset(
   }
 
   const { error: staleSuppressionDeleteError } = await supabase
-    .from("asset_face_consent_link_suppressions")
+    .from("asset_face_assignee_link_suppressions")
     .delete()
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
@@ -1332,7 +1500,7 @@ async function cleanupCurrentPhotoStateForAsset(
     }
 
     const { error: faceSuppressionDeleteError } = await supabase
-      .from("asset_face_consent_link_suppressions")
+      .from("asset_face_assignee_link_suppressions")
       .delete()
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -1370,10 +1538,11 @@ async function resolvePhotoState(input: PhotoAssetInput) {
   return {
     asset,
     materialization: current?.materialization ?? null,
-    faces: (current?.faces ?? []).map((row) => ({
+    faces: ((current?.faces ?? []).map((row) => ({
       ...row,
       face_box: row.face_box as Record<string, number | null>,
-    })),
+      face_box_normalized: (row.face_box_normalized as Record<string, number | null> | null) ?? null,
+    })) as CurrentMaterializationFace[]),
     hiddenFaceIds: new Set(
       (
         await loadCurrentHiddenFacesForAssets(
@@ -1459,7 +1628,7 @@ async function loadCurrentAssignmentsForAsset(
     ? supabase
         .from("asset_face_consent_links")
         .select(
-          "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+          "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
         )
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
@@ -1474,9 +1643,9 @@ async function loadCurrentAssignmentsForAsset(
 
   const suppressionsQuery = materializationId
     ? supabase
-        .from("asset_face_consent_link_suppressions")
+        .from("asset_face_assignee_link_suppressions")
         .select(
-          "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, reason, created_at, created_by",
+          "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, tenant_id, project_id, reason, created_at, created_by",
         )
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
@@ -1534,7 +1703,7 @@ async function loadCurrentFaceAssignmentForAssetFace(input: {
   const { data, error } = await input.supabase
     .from("asset_face_consent_links")
     .select(
-      "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+      "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
     )
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
@@ -1571,7 +1740,7 @@ async function unlinkCurrentExactFaceAssignmentWithSuppression(input: {
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("asset_face_id", input.assetFaceId)
-    .eq("consent_id", currentAssignment.consent_id);
+    .eq("project_face_assignee_id", currentAssignment.project_face_assignee_id);
 
   if (deleteError) {
     throw new HttpError(500, "photo_face_link_write_failed", "Unable to unlink the selected face.");
@@ -1583,17 +1752,20 @@ async function unlinkCurrentExactFaceAssignmentWithSuppression(input: {
     assetId: input.assetId,
     materializationId: input.materializationId,
     assetFaceId: input.assetFaceId,
-    consentId: currentAssignment.consent_id,
+    projectFaceAssigneeId: currentAssignment.project_face_assignee_id,
     actorUserId: input.actorUserId,
     reason: input.suppressionReason ?? "manual_unlink",
   });
-  await deleteCandidatePair(
-    input.supabase,
-    input.tenantId,
-    input.projectId,
-    input.assetId,
-    currentAssignment.consent_id,
-  );
+
+  if (isConsentBackedLink(currentAssignment)) {
+    await deleteCandidatePair(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      input.assetId,
+      currentAssignment.consent_id,
+    );
+  }
 
   return currentAssignment;
 }
@@ -1638,23 +1810,23 @@ async function upsertFaceSuppression(
     assetId: string;
     materializationId: string;
     assetFaceId: string;
-    consentId: string;
+    projectFaceAssigneeId: string;
     actorUserId?: string | null;
     reason: "manual_unlink" | "manual_replace";
   },
 ) {
-  const { error } = await supabase.from("asset_face_consent_link_suppressions").upsert(
+  const { error } = await supabase.from("asset_face_assignee_link_suppressions").upsert(
     {
       asset_face_id: input.assetFaceId,
       asset_materialization_id: input.materializationId,
       asset_id: input.assetId,
-      consent_id: input.consentId,
+      project_face_assignee_id: input.projectFaceAssigneeId,
       tenant_id: input.tenantId,
       project_id: input.projectId,
       reason: input.reason,
       created_by: input.actorUserId ?? null,
     },
-    { onConflict: "asset_face_id,consent_id" },
+    { onConflict: "asset_face_id,project_face_assignee_id" },
   );
 
   if (error) {
@@ -1668,16 +1840,16 @@ async function deleteFaceSuppression(
     tenantId: string;
     projectId: string;
     assetFaceId: string;
-    consentId: string;
+    projectFaceAssigneeId: string;
   },
 ) {
   const { error } = await supabase
-    .from("asset_face_consent_link_suppressions")
+    .from("asset_face_assignee_link_suppressions")
     .delete()
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("asset_face_id", input.assetFaceId)
-    .eq("consent_id", input.consentId);
+    .eq("project_face_assignee_id", input.projectFaceAssigneeId);
 
   if (error) {
     throw new HttpError(500, "photo_face_suppression_write_failed", "Unable to update face suppression.");
@@ -2063,6 +2235,9 @@ export async function listPhotoConsentAssignmentsForAssetIds(
     if (!materialization || materialization.id !== row.asset_materialization_id) {
       return;
     }
+    if (!isConsentBackedLink(row)) {
+      return;
+    }
     if (hiddenFaceIds.has(row.asset_face_id)) {
       return;
     }
@@ -2119,6 +2294,12 @@ export async function listLinkedFaceOverlaysForAssetIds(
     uniqueAssetIds,
   );
   const hiddenFaceIds = new Set(hiddenFaces.map((row) => row.asset_face_id));
+  const assigneeRowsById = await loadProjectFaceAssigneeRowsByIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assigneeIds: currentLinks.map((row) => row.project_face_assignee_id),
+  });
 
   const overlays: AssetLinkedFaceOverlayRow[] = [];
   currentLinks.forEach((row) => {
@@ -2137,10 +2318,20 @@ export async function listLinkedFaceOverlaysForAssetIds(
       return;
     }
 
+    const assignee = assigneeRowsById.get(row.project_face_assignee_id) ?? null;
+    if (!assignee) {
+      return;
+    }
+
     overlays.push({
       assetId: row.asset_id,
       assetFaceId: row.asset_face_id,
-      consentId: row.consent_id,
+      projectFaceAssigneeId: assignee.id,
+      identityKind: assignee.assignee_kind,
+      consentId: assignee.consent_id,
+      projectProfileParticipantId: assignee.project_profile_participant_id,
+      profileId: assignee.recurring_profile_id,
+      recurringProfileConsentId: assignee.recurring_profile_consent_id,
       faceRank: face.face_rank,
       faceBoxNormalized: face.face_box_normalized,
       linkSource: row.link_source,
@@ -2352,7 +2543,7 @@ export async function listLinkedPhotosForConsent(
     const { data, error } = await input.supabase
       .from("asset_face_consent_links")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
       )
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
@@ -2497,8 +2688,11 @@ export async function listLinkedPhotosForConsent(
   return rows.sort((left, right) => right.created_at.localeCompare(left.created_at));
 }
 
-function getPendingMaterializationStatus(result: RepairFaceMatchJobResult): "queued" | "processing" {
-  if (result.alreadyProcessing || result.status === "processing") {
+function getPendingMaterializationStatus(
+  result: Pick<RepairFaceMatchJobResult, "alreadyProcessing" | "status">
+    | Pick<EnqueueFaceMatchJobResult, "status">,
+): "queued" | "processing" {
+  if (("alreadyProcessing" in result && result.alreadyProcessing) || result.status === "processing") {
     return "processing";
   }
 
@@ -2666,13 +2860,29 @@ async function buildReadyManualPhotoLinkState(input: {
       )
     ).map((row) => row.asset_face_id),
   );
-  const faceLinksByFaceId = new Map(assignments.faceLinks.map((row) => [row.asset_face_id, row]));
-  const suppressionByFaceKey = new Set(assignments.suppressions.map((row) => `${row.asset_face_id}:${row.consent_id}`));
+  const faceLinksByFaceId = new Map(
+    assignments.faceLinks
+      .filter((row) => isConsentBackedLink(row))
+      .map((row) => [row.asset_face_id, row]),
+  );
+  const consentAssigneeId = (
+    await loadProjectConsentFaceAssigneeIdsByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: [input.consentId],
+    })
+  ).get(input.consentId) ?? null;
+  const suppressionByFaceId = new Set(
+    assignments.suppressions
+      .filter((row) => row.project_face_assignee_id === consentAssigneeId)
+      .map((row) => row.asset_face_id),
+  );
   const consentSummaries = await loadConsentSummaries(
     input.supabase,
     input.tenantId,
     input.projectId,
-    assignments.faceLinks.map((row) => row.consent_id),
+    assignments.faceLinks.filter((row) => isConsentBackedLink(row)).map((row) => row.consent_id),
   );
   const faceConfidenceByAssetFaceKey = await loadCurrentConsentFaceConfidenceByAssetFaceKey({
     supabase: input.supabase,
@@ -2683,7 +2893,8 @@ async function buildReadyManualPhotoLinkState(input: {
     currentMaterializationIdByAssetId: new Map([[input.asset.id, input.current.materialization.id]]),
   });
 
-  const currentConsentFaceLink = assignments.faceLinks.find((row) => row.consent_id === input.consentId) ?? null;
+  const currentConsentFaceLink =
+    assignments.faceLinks.find((row) => isConsentBackedLink(row) && row.consent_id === input.consentId) ?? null;
   const currentConsentFallback =
     input.current.materialization.face_count === 0
       ? assignments.fallbacks.find((row) => row.consent_id === input.consentId) ?? null
@@ -2697,7 +2908,7 @@ async function buildReadyManualPhotoLinkState(input: {
     faces: input.current.faces.filter((face) => !hiddenFaceIds.has(face.id)).map((face) => {
       const assignee = faceLinksByFaceId.get(face.id) ?? null;
       const summary = assignee ? consentSummaries.get(assignee.consent_id) : undefined;
-      const isSuppressedForConsent = suppressionByFaceKey.has(`${face.id}:${input.consentId}`);
+      const isSuppressedForConsent = suppressionByFaceId.has(face.id);
       const isCurrentConsentFace = currentConsentFaceLink?.asset_face_id === face.id;
       return {
         assetFaceId: face.id,
@@ -2847,6 +3058,217 @@ export async function getManualPhotoLinkState(input: PhotoAssetInput): Promise<M
   });
 }
 
+export async function manualLinkPhotoToProjectFaceAssignee(
+  input: ManualProjectFaceAssignmentInput,
+): Promise<ManualProjectFaceAssignmentResult> {
+  const state = await resolvePhotoState({
+    ...input,
+    consentId: input.target.consentId ?? "",
+  });
+  const assignments = await loadCurrentAssignmentsForAsset(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.assetId,
+    state.materialization?.id ?? null,
+  );
+  const requested = resolveRequestedFace("face", state.faces, state.hiddenFaceIds, input.assetFaceId);
+
+  if (!state.materialization || !requested.resolvedFace) {
+    throw new HttpError(
+      409,
+      "photo_materialization_pending",
+      "Photo face materialization is still pending for this photo.",
+    );
+  }
+
+  const faceLinksByFaceId = new Map(assignments.faceLinks.map((row) => [row.asset_face_id, row]));
+  const faceLinksByAssigneeId = new Map(assignments.faceLinks.map((row) => [row.project_face_assignee_id, row]));
+  const currentFaceAssignee = faceLinksByFaceId.get(requested.resolvedFace.id) ?? null;
+  const currentTargetFace = faceLinksByAssigneeId.get(input.target.projectFaceAssigneeId) ?? null;
+
+  if (
+    currentFaceAssignee &&
+    currentFaceAssignee.project_face_assignee_id !== input.target.projectFaceAssigneeId &&
+    currentFaceAssignee.link_source === "manual" &&
+    !input.forceReplace
+  ) {
+    const currentAssigneeSummary = (
+      await loadProjectFaceAssigneeDisplayMap({
+        supabase: input.supabase,
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        assigneeIds: [currentFaceAssignee.project_face_assignee_id],
+      })
+    ).get(currentFaceAssignee.project_face_assignee_id) ?? null;
+
+    return {
+      kind: "manual_conflict",
+      canForceReplace: true,
+      currentAssignee: currentAssigneeSummary
+        ? {
+            projectFaceAssigneeId: currentAssigneeSummary.projectFaceAssigneeId,
+            identityKind: currentAssigneeSummary.identityKind,
+            consentId: currentAssigneeSummary.consentId,
+            projectProfileParticipantId: currentAssigneeSummary.projectProfileParticipantId,
+            fullName: currentAssigneeSummary.fullName,
+            email: currentAssigneeSummary.email,
+            linkSource: currentFaceAssignee.link_source,
+          }
+        : null,
+    };
+  }
+
+  if (
+    currentFaceAssignee?.project_face_assignee_id === input.target.projectFaceAssigneeId
+    && currentFaceAssignee.link_source === "manual"
+  ) {
+    await deleteFaceSuppression(input.supabase, {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetFaceId: requested.resolvedFace.id,
+      projectFaceAssigneeId: input.target.projectFaceAssigneeId,
+    });
+
+    if (input.target.consentId) {
+      await clearFallbackRowsForConsent(
+        input.supabase,
+        input.tenantId,
+        input.projectId,
+        input.assetId,
+        input.target.consentId,
+      );
+    }
+
+    return {
+      kind: "already_linked",
+      mode: "face",
+      assetFaceId: requested.resolvedFace.id,
+    };
+  }
+
+  let replacedConsentId: string | null = null;
+  if (
+    currentFaceAssignee &&
+    currentFaceAssignee.project_face_assignee_id !== input.target.projectFaceAssigneeId
+  ) {
+    const { error: deleteCurrentFaceError } = await input.supabase
+      .from("asset_face_consent_links")
+      .delete()
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_face_id", requested.resolvedFace.id)
+      .eq("project_face_assignee_id", currentFaceAssignee.project_face_assignee_id);
+
+    if (deleteCurrentFaceError) {
+      throw new HttpError(500, "photo_face_link_write_failed", "Unable to replace the current face assignee.");
+    }
+
+    await upsertFaceSuppression(input.supabase, {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      materializationId: state.materialization.id,
+      assetFaceId: requested.resolvedFace.id,
+      projectFaceAssigneeId: currentFaceAssignee.project_face_assignee_id,
+      actorUserId: input.actorUserId,
+      reason: "manual_replace",
+    });
+
+    if (isConsentBackedLink(currentFaceAssignee)) {
+      replacedConsentId = currentFaceAssignee.consent_id;
+    }
+  }
+
+  if (currentTargetFace && currentTargetFace.asset_face_id !== requested.resolvedFace.id) {
+    const { error: deletePriorAssigneeFaceError } = await input.supabase
+      .from("asset_face_consent_links")
+      .delete()
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_face_id", currentTargetFace.asset_face_id)
+      .eq("project_face_assignee_id", input.target.projectFaceAssigneeId);
+
+    if (deletePriorAssigneeFaceError) {
+      throw new HttpError(500, "photo_face_link_write_failed", "Unable to move the current face assignment.");
+    }
+
+    await upsertFaceSuppression(input.supabase, {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      materializationId: state.materialization.id,
+      assetFaceId: currentTargetFace.asset_face_id,
+      projectFaceAssigneeId: input.target.projectFaceAssigneeId,
+      actorUserId: input.actorUserId,
+      reason: "manual_replace",
+    });
+  }
+
+  if (state.blockedFaceIds.has(requested.resolvedFace.id)) {
+    await clearBlockedFaceStateForFace({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      materializationId: state.materialization.id,
+      assetFaceId: requested.resolvedFace.id,
+      actorUserId: input.actorUserId,
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error: upsertError } = await input.supabase.from("asset_face_consent_links").upsert(
+    {
+      asset_face_id: requested.resolvedFace.id,
+      asset_materialization_id: state.materialization.id,
+      asset_id: input.assetId,
+      project_face_assignee_id: input.target.projectFaceAssigneeId,
+      consent_id: input.target.consentId,
+      tenant_id: input.tenantId,
+      project_id: input.projectId,
+      link_source: "manual",
+      match_confidence: null,
+      matched_at: null,
+      reviewed_at: nowIso,
+      reviewed_by: input.actorUserId ?? null,
+      matcher_version: null,
+      updated_at: nowIso,
+    },
+    { onConflict: "asset_face_id" },
+  );
+
+  if (upsertError) {
+    throw new HttpError(500, "photo_face_link_write_failed", "Unable to link the selected face.");
+  }
+
+  await deleteFaceSuppression(input.supabase, {
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetFaceId: requested.resolvedFace.id,
+    projectFaceAssigneeId: input.target.projectFaceAssigneeId,
+  });
+
+  if (input.target.consentId) {
+    await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
+    await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
+  }
+
+  await reconcilePhotoFaceCanonicalStateForAsset({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+  });
+
+  return {
+    kind: "linked",
+    mode: "face",
+    replacedConsentId,
+    assetFaceId: requested.resolvedFace.id,
+  };
+}
+
 export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Promise<ManualPhotoLinkResult> {
   await assertConsentInProject(input, { requireNotRevoked: true });
   const state = await resolvePhotoState(input);
@@ -2935,147 +3357,75 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
     );
   }
 
-  const faceLinksByFaceId = new Map(assignments.faceLinks.map((row) => [row.asset_face_id, row]));
-  const faceLinksByConsentId = new Map(assignments.faceLinks.map((row) => [row.consent_id, row]));
-  const currentFaceAssignee = faceLinksByFaceId.get(requested.resolvedFace.id) ?? null;
-  const currentConsentFace = faceLinksByConsentId.get(input.consentId) ?? null;
-
-  if (
-    currentFaceAssignee &&
-    currentFaceAssignee.consent_id !== input.consentId &&
-    currentFaceAssignee.link_source === "manual" &&
-    !input.forceReplace
-  ) {
-    const consentSummaries = await loadConsentSummaries(
-      input.supabase,
-      input.tenantId,
-      input.projectId,
-      [currentFaceAssignee.consent_id],
-    );
-    const currentAssigneeSummary = consentSummaries.get(currentFaceAssignee.consent_id);
-    return {
-      kind: "manual_conflict",
-      canForceReplace: true,
-      currentAssignee: {
-        consentId: currentFaceAssignee.consent_id,
-        fullName: currentAssigneeSummary?.fullName ?? null,
-        email: currentAssigneeSummary?.email ?? null,
-        linkSource: currentFaceAssignee.link_source,
-      },
-    };
-  }
-
-  if (currentFaceAssignee?.consent_id === input.consentId && currentFaceAssignee.link_source === "manual") {
-    await deleteFaceSuppression(input.supabase, {
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      assetFaceId: requested.resolvedFace.id,
-      consentId: input.consentId,
-    });
-    await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.consentId);
-    return {
-      kind: "already_linked",
-      mode: "face",
-      assetFaceId: requested.resolvedFace.id,
-    };
-  }
-
-  let replacedConsentId: string | null = null;
-  if (currentFaceAssignee && currentFaceAssignee.consent_id !== input.consentId) {
-    const { error: deleteCurrentFaceError } = await input.supabase
-      .from("asset_face_consent_links")
-      .delete()
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("asset_face_id", requested.resolvedFace.id)
-      .eq("consent_id", currentFaceAssignee.consent_id);
-
-    if (deleteCurrentFaceError) {
-      throw new HttpError(500, "photo_face_link_write_failed", "Unable to replace the current face assignee.");
-    }
-
-    await upsertFaceSuppression(input.supabase, {
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      assetId: input.assetId,
-      materializationId: state.materialization.id,
-      assetFaceId: requested.resolvedFace.id,
-      consentId: currentFaceAssignee.consent_id,
-      actorUserId: input.actorUserId,
-      reason: "manual_replace",
-    });
-    replacedConsentId = currentFaceAssignee.consent_id;
-  }
-
-  if (currentConsentFace && currentConsentFace.asset_face_id !== requested.resolvedFace.id) {
-    const { error: deletePriorConsentFaceError } = await input.supabase
-      .from("asset_face_consent_links")
-      .delete()
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("asset_face_id", currentConsentFace.asset_face_id)
-      .eq("consent_id", input.consentId);
-
-    if (deletePriorConsentFaceError) {
-      throw new HttpError(500, "photo_face_link_write_failed", "Unable to move the current face assignment.");
-    }
-
-    await upsertFaceSuppression(input.supabase, {
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      assetId: input.assetId,
-      materializationId: state.materialization.id,
-      assetFaceId: currentConsentFace.asset_face_id,
-      consentId: input.consentId,
-      actorUserId: input.actorUserId,
-      reason: "manual_replace",
-    });
-  }
-
-  if (state.blockedFaceIds.has(requested.resolvedFace.id)) {
-    await clearBlockedFaceStateForFace({
-      supabase: input.supabase,
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      assetId: input.assetId,
-      materializationId: state.materialization.id,
-      assetFaceId: requested.resolvedFace.id,
-      actorUserId: input.actorUserId,
-    });
-  }
-
-  const nowIso = new Date().toISOString();
-  const { error: upsertError } = await input.supabase.from("asset_face_consent_links").upsert(
-    {
-      asset_face_id: requested.resolvedFace.id,
-      asset_materialization_id: state.materialization.id,
-      asset_id: input.assetId,
-      consent_id: input.consentId,
-      tenant_id: input.tenantId,
-      project_id: input.projectId,
-      link_source: "manual",
-      match_confidence: null,
-      matched_at: null,
-      reviewed_at: nowIso,
-      reviewed_by: input.actorUserId ?? null,
-      matcher_version: null,
-      updated_at: nowIso,
-    },
-    { onConflict: "asset_face_id" },
-  );
-
-  if (upsertError) {
-    throw new HttpError(500, "photo_face_link_write_failed", "Unable to link the selected face.");
-  }
-
-  await deleteFaceSuppression(input.supabase, {
+  const assignee = await ensureProjectConsentFaceAssignee({
+    supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
-    assetFaceId: requested.resolvedFace.id,
     consentId: input.consentId,
   });
-  await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.consentId);
-  await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, input.consentId);
+
+  return manualLinkPhotoToProjectFaceAssignee({
+    ...input,
+    assetFaceId: requested.resolvedFace.id,
+    target: {
+      projectFaceAssigneeId: assignee.id,
+      identityKind: assignee.assignee_kind,
+      consentId: assignee.consent_id,
+      projectProfileParticipantId: null,
+      profileId: null,
+    },
+  });
+}
+
+export async function manualLinkPhotoToRecurringProjectParticipant(input: ProjectFaceAssignmentScopeInput & {
+  projectProfileParticipantId: string;
+  assetFaceId: string;
+  forceReplace?: boolean;
+}) {
+  const { assignee, participant } = await ensureProjectRecurringConsentFaceAssignee({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    projectProfileParticipantId: input.projectProfileParticipantId,
+  });
+
+  return manualLinkPhotoToProjectFaceAssignee({
+    ...input,
+    target: {
+      projectFaceAssigneeId: assignee.id,
+      identityKind: assignee.assignee_kind,
+      consentId: null,
+      projectProfileParticipantId: participant.id,
+      profileId: participant.recurring_profile_id,
+    },
+  });
+}
+
+export async function manualUnlinkPhotoFaceAssignment(input: ProjectFaceAssignmentScopeInput & {
+  assetFaceId: string;
+}) {
+  const state = await resolvePhotoState({
+    ...input,
+    consentId: "",
+  });
+  if (!state.materialization) {
+    throw new HttpError(
+      409,
+      "photo_materialization_pending",
+      "Photo face materialization is still pending for this photo.",
+    );
+  }
+
+  const currentAssignment = await unlinkCurrentExactFaceAssignmentWithSuppression({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+    materializationId: state.materialization.id,
+    assetFaceId: input.assetFaceId,
+    actorUserId: input.actorUserId,
+  });
+
   await reconcilePhotoFaceCanonicalStateForAsset({
     supabase: input.supabase,
     tenantId: input.tenantId,
@@ -3084,10 +3434,9 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
   });
 
   return {
-    kind: "linked",
-    mode: "face",
-    replacedConsentId,
-    assetFaceId: requested.resolvedFace.id,
+    kind: "unlinked" as const,
+    mode: "face" as const,
+    assetFaceId: currentAssignment?.asset_face_id ?? input.assetFaceId,
   };
 }
 
@@ -3184,13 +3533,36 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
       actorUserId: input.actorUserId,
     });
   } else {
+    const assigneeIdByConsentId = await loadProjectConsentFaceAssigneeIdsByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: [input.consentId],
+    });
+    const projectFaceAssigneeId = assigneeIdByConsentId.get(input.consentId) ?? null;
+    if (!projectFaceAssigneeId) {
+      await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, input.consentId);
+      await reconcilePhotoFaceCanonicalStateForAsset({
+        supabase: input.supabase,
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        assetId: input.assetId,
+      });
+
+      return {
+        kind: "unlinked",
+        mode: "face",
+        assetFaceId: requested.resolvedFace.id,
+      };
+    }
+
     await upsertFaceSuppression(input.supabase, {
       tenantId: input.tenantId,
       projectId: input.projectId,
       assetId: input.assetId,
       materializationId: state.materialization.id,
       assetFaceId: requested.resolvedFace.id,
-      consentId: input.consentId,
+      projectFaceAssigneeId,
       actorUserId: input.actorUserId,
       reason: "manual_unlink",
     });
@@ -3213,15 +3585,25 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
 export async function clearConsentPhotoSuppressions(input: MatchingScopeInput) {
   await assertConsentInProject(input);
 
-  const { error: faceSuppressionDeleteError } = await input.supabase
-    .from("asset_face_consent_link_suppressions")
-    .delete()
-    .eq("tenant_id", input.tenantId)
-    .eq("project_id", input.projectId)
-    .eq("consent_id", input.consentId);
+  const assigneeIdByConsentId = await loadProjectConsentFaceAssigneeIdsByConsentIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    consentIds: [input.consentId],
+  });
+  const projectFaceAssigneeId = assigneeIdByConsentId.get(input.consentId) ?? null;
 
-  if (faceSuppressionDeleteError) {
-    throw new HttpError(500, "photo_face_suppression_delete_failed", "Unable to clear face suppressions.");
+  if (projectFaceAssigneeId) {
+    const { error: faceSuppressionDeleteError } = await input.supabase
+      .from("asset_face_assignee_link_suppressions")
+      .delete()
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("project_face_assignee_id", projectFaceAssigneeId);
+
+    if (faceSuppressionDeleteError) {
+      throw new HttpError(500, "photo_face_suppression_delete_failed", "Unable to clear face suppressions.");
+    }
   }
 
   const { error: fallbackSuppressionDeleteError } = await input.supabase
@@ -3300,6 +3682,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     input.assetId,
     current.materialization.id,
   );
+  const currentFaces = normalizeCurrentMaterializationFaces(current.faces);
   const hiddenFaceIds = new Set(
     (
       await loadCurrentHiddenFacesForAssets(
@@ -3322,32 +3705,36 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       )
     ).map((row) => row.asset_face_id),
   );
-  const manualByFaceId = new Map(
-    currentAssignments.faceLinks
-      .filter((row) => row.link_source === "manual")
-      .map((row) => [row.asset_face_id, row]),
-  );
-  const autoByFaceId = new Map(
-    currentAssignments.faceLinks
-      .filter((row) => row.link_source === "auto")
-      .map((row) => [row.asset_face_id, row]),
-  );
-  const manualConsentIds = new Set(
-    currentAssignments.faceLinks.filter((row) => row.link_source === "manual").map((row) => row.consent_id),
-  );
+  const manualFaceLinks = currentAssignments.faceLinks.filter((row) => row.link_source === "manual");
+  const autoFaceLinks = currentAssignments.faceLinks.filter((row) => row.link_source === "auto");
+  const manualByFaceId = new Map(manualFaceLinks.map((row) => [row.asset_face_id, row] as const));
+  const autoByFaceId = new Map(autoFaceLinks.map((row) => [row.asset_face_id, row] as const));
+  const manualAssigneeIds = new Set(manualFaceLinks.map((row) => row.project_face_assignee_id));
   const suppressions = new Set(
-    currentAssignments.suppressions.map((row) => `${row.asset_face_id}:${row.consent_id}`),
+    currentAssignments.suppressions.map((row) =>
+      buildFaceAssigneeSuppressionKey(row.asset_face_id, row.project_face_assignee_id),
+    ),
   );
 
   const compares = await loadCurrentCompareRowsForAsset(input.supabase, input.tenantId, input.projectId, input.assetId);
+  const recurringCompares = await loadCurrentRecurringCompareRowsForAsset(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.assetId,
+  );
   const consentStateIds = Array.from(
     new Set([
       ...compares.map((row) => row.consent_id),
-      ...currentAssignments.faceLinks
-        .filter((row) => row.link_source === "auto")
-        .map((row) => row.consent_id),
+      ...autoFaceLinks.filter(isConsentBackedLink).map((row) => row.consent_id),
     ]),
   );
+  const consentAssigneeIdByConsentId = await loadProjectConsentFaceAssigneeIdsByConsentIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    consentIds: consentStateIds,
+  });
   const consentStateById = await loadConsentStateMap(input.supabase, input.tenantId, input.projectId, consentStateIds);
   const currentHeadshotMaterializationIdByConsentId = await loadCurrentHeadshotMaterializationIds(
     input.supabase,
@@ -3355,12 +3742,58 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     input.projectId,
     consentStateIds,
   );
+  const autoAssigneeRowsById = await loadProjectFaceAssigneeRowsByIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assigneeIds: autoFaceLinks.map((row) => row.project_face_assignee_id),
+  });
+  const recurringParticipantIds = Array.from(
+    new Set([
+      ...recurringCompares.map((row) => row.project_profile_participant_id),
+      ...Array.from(autoAssigneeRowsById.values())
+        .map((row) =>
+          row.assignee_kind === "project_recurring_consent" ? row.project_profile_participant_id : null,
+        )
+        .filter((value): value is string => Boolean(value)),
+    ]),
+  );
+  const recurringConsentStateByParticipantId = await loadProjectRecurringConsentStateByParticipantIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    participantIds: recurringParticipantIds,
+  });
+  const readyRecurringSourceByParticipantId = await loadReadyRecurringSourceMap({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    participantIds: recurringParticipantIds,
+  });
+  const recurringConsentIds = Array.from(
+    new Set(
+      recurringParticipantIds
+        .map((participantId) => {
+          const consentState = recurringConsentStateByParticipantId.get(participantId) ?? null;
+          return isProjectRecurringConsentStateAutoEligible(consentState)
+            ? consentState.activeConsent.id
+            : null;
+        })
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const recurringAssigneeIdByRecurringConsentId = await loadProjectRecurringConsentAssigneeIdsByRecurringConsentIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    recurringConsentIds,
+  });
   const autoEligibleFaceIds = new Set(
-    current.faces.filter(isDetectorCurrentFace).map((face) => face.id),
+    currentFaces.filter(isDetectorCurrentFace).map((face) => face.id),
   );
   const confidenceThreshold = getAutoMatchConfidenceThreshold();
 
-  const contendersByFaceId = new Map<string, Array<{ consentId: string; confidence: number }>>();
+  const contendersByFaceId = new Map<string, AutoAssigneeContender[]>();
   for (const compare of compares) {
     const consentState = consentStateById.get(compare.consent_id);
     const confidence = toNumericConfidence(compare.winning_similarity);
@@ -3400,24 +3833,105 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       continue;
     }
 
-    if (manualConsentIds.has(compare.consent_id)) {
+    const projectFaceAssigneeId = consentAssigneeIdByConsentId.get(compare.consent_id) ?? null;
+    if (projectFaceAssigneeId && manualAssigneeIds.has(projectFaceAssigneeId)) {
       continue;
     }
 
-    if (suppressions.has(`${compare.winning_asset_face_id}:${compare.consent_id}`)) {
+    if (
+      projectFaceAssigneeId
+      && suppressions.has(buildFaceAssigneeSuppressionKey(compare.winning_asset_face_id, projectFaceAssigneeId))
+    ) {
       continue;
     }
 
     const existing = contendersByFaceId.get(compare.winning_asset_face_id) ?? [];
     existing.push({
+      assigneeKind: "project_consent",
       consentId: compare.consent_id,
+      projectProfileParticipantId: null,
+      recurringProfileConsentId: null,
       confidence,
+      stableContenderKey: buildAutoContenderStableKey({
+        assigneeKind: "project_consent",
+        consentId: compare.consent_id,
+        recurringProfileConsentId: null,
+      }),
     });
     contendersByFaceId.set(compare.winning_asset_face_id, existing);
   }
 
-  const desiredAutoRows = new Map<string, { consentId: string; confidence: number }>();
-  for (const face of current.faces) {
+  for (const compare of recurringCompares) {
+    const consentState = recurringConsentStateByParticipantId.get(compare.project_profile_participant_id) ?? null;
+    const readySource = readyRecurringSourceByParticipantId.get(compare.project_profile_participant_id) ?? null;
+    const confidence = toNumericConfidence(compare.winning_similarity);
+    if (!isProjectRecurringConsentStateAutoEligible(consentState) || !readySource || !compare.winning_asset_face_id || confidence === null) {
+      continue;
+    }
+
+    if (compare.compare_status !== "matched") {
+      continue;
+    }
+
+    if (compare.asset_materialization_id !== current.materialization.id) {
+      continue;
+    }
+
+    if (compare.recurring_headshot_materialization_id !== readySource.recurringHeadshotMaterializationId) {
+      continue;
+    }
+
+    if (compare.recurring_selection_face_id !== readySource.selectionFaceId) {
+      continue;
+    }
+
+    if (!autoEligibleFaceIds.has(compare.winning_asset_face_id)) {
+      continue;
+    }
+
+    if (hiddenFaceIds.has(compare.winning_asset_face_id)) {
+      continue;
+    }
+
+    if (blockedFaceIds.has(compare.winning_asset_face_id)) {
+      continue;
+    }
+
+    if (confidence < confidenceThreshold) {
+      continue;
+    }
+
+    const projectFaceAssigneeId =
+      recurringAssigneeIdByRecurringConsentId.get(consentState.activeConsent.id) ?? null;
+    if (projectFaceAssigneeId && manualAssigneeIds.has(projectFaceAssigneeId)) {
+      continue;
+    }
+
+    if (
+      projectFaceAssigneeId
+      && suppressions.has(buildFaceAssigneeSuppressionKey(compare.winning_asset_face_id, projectFaceAssigneeId))
+    ) {
+      continue;
+    }
+
+    const existing = contendersByFaceId.get(compare.winning_asset_face_id) ?? [];
+    existing.push({
+      assigneeKind: "project_recurring_consent",
+      consentId: null,
+      projectProfileParticipantId: compare.project_profile_participant_id,
+      recurringProfileConsentId: consentState.activeConsent.id,
+      confidence,
+      stableContenderKey: buildAutoContenderStableKey({
+        assigneeKind: "project_recurring_consent",
+        consentId: null,
+        recurringProfileConsentId: consentState.activeConsent.id,
+      }),
+    });
+    contendersByFaceId.set(compare.winning_asset_face_id, existing);
+  }
+
+  const desiredAutoContendersByFaceId = new Map<string, AutoAssigneeContender>();
+  for (const face of currentFaces) {
     if (!isDetectorCurrentFace(face)) {
       continue;
     }
@@ -3444,7 +3958,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
         return right.confidence - left.confidence;
       }
 
-      return left.consentId.localeCompare(right.consentId);
+      return left.stableContenderKey.localeCompare(right.stableContenderKey);
     });
 
     const winner = contenders[0] ?? null;
@@ -3452,11 +3966,70 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       continue;
     }
 
-    desiredAutoRows.set(face.id, winner);
+    desiredAutoContendersByFaceId.set(face.id, winner);
   }
 
   const nowIso = new Date().toISOString();
+  const assigneeByConsentId = new Map(consentAssigneeIdByConsentId);
+  for (const consentId of Array.from(
+    new Set(
+      Array.from(desiredAutoContendersByFaceId.values())
+        .map((row) => row.consentId)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  )) {
+    if (assigneeByConsentId.has(consentId)) {
+      continue;
+    }
+
+    const assignee = await ensureProjectConsentFaceAssignee({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentId,
+    });
+    assigneeByConsentId.set(consentId, assignee.id);
+  }
+  const assigneeByRecurringConsentId = new Map(recurringAssigneeIdByRecurringConsentId);
+  for (const winner of desiredAutoContendersByFaceId.values()) {
+    if (winner.assigneeKind !== "project_recurring_consent" || !winner.projectProfileParticipantId || !winner.recurringProfileConsentId) {
+      continue;
+    }
+
+    if (assigneeByRecurringConsentId.has(winner.recurringProfileConsentId)) {
+      continue;
+    }
+
+    const { assignee } = await ensureProjectRecurringConsentFaceAssignee({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      projectProfileParticipantId: winner.projectProfileParticipantId,
+    });
+    assigneeByRecurringConsentId.set(winner.recurringProfileConsentId, assignee.id);
+  }
+  const desiredAutoRows = new Map<string, DesiredAutoAssigneeRow>();
+  for (const [assetFaceId, winner] of desiredAutoContendersByFaceId.entries()) {
+    const projectFaceAssigneeId =
+      winner.assigneeKind === "project_consent"
+        ? (winner.consentId ? assigneeByConsentId.get(winner.consentId) ?? null : null)
+        : (winner.recurringProfileConsentId
+          ? assigneeByRecurringConsentId.get(winner.recurringProfileConsentId) ?? null
+          : null);
+
+    if (!projectFaceAssigneeId) {
+      throw new HttpError(500, "project_face_assignee_write_failed", "Unable to resolve the face assignee.");
+    }
+
+    desiredAutoRows.set(assetFaceId, {
+      ...winner,
+      projectFaceAssigneeId,
+    });
+  }
   const upserts = Array.from(desiredAutoRows.entries()).map(([assetFaceId, winner]) => ({
+    project_face_assignee_id: (() => {
+      return winner.projectFaceAssigneeId;
+    })(),
     asset_face_id: assetFaceId,
     asset_materialization_id: current.materialization.id,
     asset_id: input.assetId,
@@ -3484,21 +4057,50 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
 
   for (const [assetFaceId, existing] of autoByFaceId.entries()) {
     const desired = desiredAutoRows.get(assetFaceId);
-    const existingConsentState = consentStateById.get(existing.consent_id) ?? null;
-    const preserveHistoricalAutoRow = Boolean(
-      existingConsentState && (existingConsentState.revoked_at || !existingConsentState.face_match_opt_in),
-    );
+    const existingAssignee = autoAssigneeRowsById.get(existing.project_face_assignee_id) ?? null;
+    const preserveHistoricalAutoRow = (() => {
+      if (!existingAssignee) {
+        return false;
+      }
+
+      if (existingAssignee.assignee_kind === "project_consent" && existingAssignee.consent_id) {
+        const existingConsentState = consentStateById.get(existingAssignee.consent_id) ?? null;
+        return Boolean(existingConsentState && (existingConsentState.revoked_at || !existingConsentState.face_match_opt_in));
+      }
+
+      if (
+        existingAssignee.assignee_kind === "project_recurring_consent"
+        && existingAssignee.project_profile_participant_id
+      ) {
+        const recurringConsentState =
+          recurringConsentStateByParticipantId.get(existingAssignee.project_profile_participant_id) ?? null;
+        return Boolean(
+          recurringConsentState
+          && (
+            recurringConsentState.state === "revoked"
+            || (
+              recurringConsentState.state === "signed"
+              && recurringConsentState.activeConsent
+              && !recurringConsentState.activeConsent.face_match_opt_in
+            )
+          ),
+        );
+      }
+
+      return false;
+    })();
 
     if (preserveHistoricalAutoRow) {
       continue;
     }
 
+    const existingStableContenderKey = existingAssignee ? buildStableContenderKeyFromAssigneeRow(existingAssignee) : null;
     if (
       hiddenFaceIds.has(assetFaceId) ||
       blockedFaceIds.has(assetFaceId) ||
       manualByFaceId.has(assetFaceId) ||
       !desired ||
-      desired.consentId !== existing.consent_id
+      desired.stableContenderKey !== existingStableContenderKey
     ) {
       const { error } = await input.supabase
         .from("asset_face_consent_links")
@@ -3506,7 +4108,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
         .eq("tenant_id", input.tenantId)
         .eq("project_id", input.projectId)
         .eq("asset_face_id", assetFaceId)
-        .eq("consent_id", existing.consent_id)
+        .eq("project_face_assignee_id", existing.project_face_assignee_id)
         .eq("link_source", "auto");
 
       if (error) {
@@ -3516,7 +4118,9 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
   }
 
   for (const winner of desiredAutoRows.values()) {
-    await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, winner.consentId);
+    if (winner.consentId) {
+      await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, winner.consentId);
+    }
   }
 
   return {

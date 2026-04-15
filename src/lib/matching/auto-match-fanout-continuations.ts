@@ -5,9 +5,17 @@ import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 import { getAutoMatchCompareVersion } from "@/lib/matching/auto-match-config";
 import {
   enqueueCompareMaterializedPairJob,
+  enqueueCompareRecurringProfileMaterializedPairJob,
   enqueueMaterializeAssetFacesJob,
   type RepairFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
+import {
+  getCurrentProjectRecurringSourceBoundary,
+  listReadyProjectRecurringSourcesPage,
+  resolveReadyProjectRecurringSource,
+  type ProjectRecurringSourceBoundary,
+  type ReadyProjectRecurringSource,
+} from "@/lib/matching/project-recurring-sources";
 import {
   loadConsentHeadshotMaterialization,
   loadCurrentAssetFaceMaterialization,
@@ -27,7 +35,17 @@ export type HeadshotFanoutBoundary = {
   boundaryPhotoAssetId: string | null;
 };
 
-export type FanoutDirection = "photo_to_headshots" | "headshot_to_photos";
+export type RecurringProfileFanoutBoundary = {
+  boundarySnapshotAt: string;
+  boundaryParticipantCreatedAt: string | null;
+  boundaryProjectProfileParticipantId: string | null;
+};
+
+export type FanoutDirection =
+  | "photo_to_headshots"
+  | "headshot_to_photos"
+  | "photo_to_recurring_profiles"
+  | "recurring_profile_to_photos";
 export type FanoutDispatchMode = "normal" | "backfill_repair";
 
 export const FACE_MATCH_FANOUT_CONTINUATION_MAX_ATTEMPTS = 50;
@@ -97,8 +115,12 @@ export type ClaimedFanoutContinuationRow = {
   tenant_id: string;
   project_id: string;
   direction: FanoutDirection;
-  source_asset_id: string;
+  source_asset_id: string | null;
   source_consent_id: string | null;
+  source_project_profile_participant_id: string | null;
+  source_profile_id: string | null;
+  source_headshot_id: string | null;
+  source_selection_face_id: string | null;
   source_materialization_id: string;
   source_materializer_version: string;
   compare_version: string;
@@ -106,9 +128,11 @@ export type ClaimedFanoutContinuationRow = {
   boundary_sort_at: string | null;
   boundary_asset_id: string | null;
   boundary_consent_id: string | null;
+  boundary_project_profile_participant_id: string | null;
   cursor_sort_at: string | null;
   cursor_asset_id: string | null;
   cursor_consent_id: string | null;
+  cursor_project_profile_participant_id: string | null;
   dispatch_mode: FanoutDispatchMode;
   status: string;
   attempt_count: number;
@@ -160,12 +184,20 @@ type FanoutContinuationBatchResult = {
   nextCursorSortAt: string | null;
   nextCursorAssetId: string | null;
   nextCursorConsentId: string | null;
+  nextCursorProjectProfileParticipantId: string | null;
 };
 
 type CompareExistsRow = {
   consent_id: string;
   asset_id: string;
   headshot_materialization_id: string;
+  asset_materialization_id: string;
+};
+
+type RecurringCompareExistsRow = {
+  project_profile_participant_id: string;
+  asset_id: string;
+  recurring_selection_face_id: string;
   asset_materialization_id: string;
 };
 
@@ -339,15 +371,20 @@ export async function enqueueFaceMatchFanoutContinuation(
     tenantId: string;
     projectId: string;
     direction: FanoutDirection;
-    sourceAssetId: string;
+    sourceAssetId?: string | null;
     sourceConsentId?: string | null;
+    sourceProjectProfileParticipantId?: string | null;
+    sourceProfileId?: string | null;
+    sourceHeadshotId?: string | null;
+    sourceSelectionFaceId?: string | null;
     sourceMaterializationId: string;
     sourceMaterializerVersion: string;
     compareVersion: string;
     boundarySnapshotAt: string;
-    boundarySortAt: string;
+    boundarySortAt?: string | null;
     boundaryAssetId?: string | null;
     boundaryConsentId?: string | null;
+    boundaryProjectProfileParticipantId?: string | null;
     dispatchMode: FanoutDispatchMode;
     resetTerminal?: boolean;
   },
@@ -356,15 +393,20 @@ export async function enqueueFaceMatchFanoutContinuation(
     p_tenant_id: input.tenantId,
     p_project_id: input.projectId,
     p_direction: input.direction,
-    p_source_asset_id: input.sourceAssetId,
+    p_source_asset_id: input.sourceAssetId ?? null,
     p_source_consent_id: input.sourceConsentId ?? null,
+    p_source_project_profile_participant_id: input.sourceProjectProfileParticipantId ?? null,
+    p_source_profile_id: input.sourceProfileId ?? null,
+    p_source_headshot_id: input.sourceHeadshotId ?? null,
+    p_source_selection_face_id: input.sourceSelectionFaceId ?? null,
     p_source_materialization_id: input.sourceMaterializationId,
     p_source_materializer_version: input.sourceMaterializerVersion,
     p_compare_version: input.compareVersion,
     p_boundary_snapshot_at: input.boundarySnapshotAt,
-    p_boundary_sort_at: input.boundarySortAt,
+    p_boundary_sort_at: input.boundarySortAt ?? null,
     p_boundary_asset_id: input.boundaryAssetId ?? null,
     p_boundary_consent_id: input.boundaryConsentId ?? null,
+    p_boundary_project_profile_participant_id: input.boundaryProjectProfileParticipantId ?? null,
     p_dispatch_mode: input.dispatchMode,
     p_max_attempts: FACE_MATCH_FANOUT_CONTINUATION_MAX_ATTEMPTS,
     p_run_after: null,
@@ -421,6 +463,7 @@ export async function completeFaceMatchFanoutContinuationBatch(
     cursorSortAt?: string | null;
     cursorAssetId?: string | null;
     cursorConsentId?: string | null;
+    cursorProjectProfileParticipantId?: string | null;
   },
 ) {
   if (!input.lockToken) {
@@ -435,6 +478,7 @@ export async function completeFaceMatchFanoutContinuationBatch(
     p_cursor_sort_at: input.cursorSortAt ?? null,
     p_cursor_asset_id: input.cursorAssetId ?? null,
     p_cursor_consent_id: input.cursorConsentId ?? null,
+    p_cursor_project_profile_participant_id: input.cursorProjectProfileParticipantId ?? null,
   });
 
   if (error) {
@@ -514,6 +558,23 @@ function parseHeadshotBoundaryFromPayload(payload: Record<string, unknown> | nul
   };
 }
 
+function parseRecurringBoundaryFromPayload(
+  payload: Record<string, unknown> | null | undefined,
+): RecurringProfileFanoutBoundary | null {
+  const boundarySnapshotAt = parsePayloadTimestamp(payload?.recurringBoundarySnapshotAt);
+  const boundaryParticipantCreatedAt = parsePayloadTimestamp(payload?.recurringBoundaryParticipantCreatedAt);
+  const boundaryProjectProfileParticipantId = parsePayloadUuid(payload?.recurringBoundaryParticipantId);
+  if (!boundarySnapshotAt || !boundaryParticipantCreatedAt || !boundaryProjectProfileParticipantId) {
+    return null;
+  }
+
+  return {
+    boundarySnapshotAt,
+    boundaryParticipantCreatedAt,
+    boundaryProjectProfileParticipantId,
+  };
+}
+
 async function loadPhotoIntakeBoundary(
   supabase: SupabaseClient,
   tenantId: string,
@@ -536,6 +597,34 @@ async function loadPhotoIntakeBoundary(
   }
 
   return parsePhotoBoundaryFromPayload((data as IntakeJobBoundaryRow | null)?.payload ?? null);
+}
+
+async function loadPhotoIntakeRecurringBoundary(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  assetId: string,
+) {
+  const { data, error } = await supabase
+    .from("face_match_jobs")
+    .select("payload")
+    .eq("tenant_id", tenantId)
+    .eq("project_id", projectId)
+    .eq("job_type", "photo_uploaded")
+    .eq("scope_asset_id", assetId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(
+      500,
+      "face_match_photo_intake_lookup_failed",
+      "Unable to load recurring photo intake boundary.",
+    );
+  }
+
+  return parseRecurringBoundaryFromPayload((data as IntakeJobBoundaryRow | null)?.payload ?? null);
 }
 
 async function loadHeadshotIntakeBoundaries(
@@ -667,6 +756,78 @@ async function loadExistingHeadshotToPhotoCompareKeys(
   return new Set(rows.map((row) => `${row.asset_id}:${row.asset_materialization_id}`));
 }
 
+async function loadExistingPhotoToRecurringCompareKeys(
+  supabase: SupabaseClient,
+  input: {
+    tenantId: string;
+    projectId: string;
+    sourceAssetId: string;
+    assetMaterializationId: string;
+    compareVersion: string;
+    projectProfileParticipantIds: string[];
+  },
+) {
+  if (input.projectProfileParticipantIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const rows = await runChunkedRead(input.projectProfileParticipantIds, async (participantIdChunk) => {
+    const { data, error } = await supabase
+      .from("asset_project_profile_face_compares")
+      .select("project_profile_participant_id, recurring_selection_face_id")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("asset_id", input.sourceAssetId)
+      .eq("asset_materialization_id", input.assetMaterializationId)
+      .eq("compare_version", input.compareVersion)
+      .in("project_profile_participant_id", participantIdChunk);
+
+    if (error) {
+      throw new HttpError(500, "face_match_compare_lookup_failed", "Unable to load existing recurring compare rows.");
+    }
+
+    return ((data ?? []) as Array<Pick<RecurringCompareExistsRow, "project_profile_participant_id" | "recurring_selection_face_id">>) ?? [];
+  });
+
+  return new Set(rows.map((row) => `${row.project_profile_participant_id}:${row.recurring_selection_face_id}`));
+}
+
+async function loadExistingRecurringToPhotoCompareKeys(
+  supabase: SupabaseClient,
+  input: {
+    tenantId: string;
+    projectId: string;
+    projectProfileParticipantId: string;
+    recurringSelectionFaceId: string;
+    compareVersion: string;
+    assetIds: string[];
+  },
+) {
+  if (input.assetIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const rows = await runChunkedRead(input.assetIds, async (assetIdChunk) => {
+    const { data, error } = await supabase
+      .from("asset_project_profile_face_compares")
+      .select("asset_id, asset_materialization_id")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("project_profile_participant_id", input.projectProfileParticipantId)
+      .eq("recurring_selection_face_id", input.recurringSelectionFaceId)
+      .eq("compare_version", input.compareVersion)
+      .in("asset_id", assetIdChunk);
+
+    if (error) {
+      throw new HttpError(500, "face_match_compare_lookup_failed", "Unable to load existing recurring compare rows.");
+    }
+
+    return ((data ?? []) as Array<Pick<RecurringCompareExistsRow, "asset_id" | "asset_materialization_id">>) ?? [];
+  });
+
+  return new Set(rows.map((row) => `${row.asset_id}:${row.asset_materialization_id}`));
+}
+
 export async function loadConsentEligibility(
   supabase: SupabaseClient,
   tenantId: string,
@@ -709,6 +870,16 @@ export async function createOrResetFanoutContinuationsForMaterializedAsset(
       ? await getCurrentConsentHeadshotFanoutBoundary(supabase, input.tenantId, input.projectId)
       : ((await loadPhotoIntakeBoundary(supabase, input.tenantId, input.projectId, input.assetId))
           ?? (await getCurrentConsentHeadshotFanoutBoundary(supabase, input.tenantId, input.projectId)));
+    const recurringBoundary = input.repairRequested
+      ? await getCurrentProjectRecurringSourceBoundary(supabase, {
+          tenantId: input.tenantId,
+          projectId: input.projectId,
+        })
+      : ((await loadPhotoIntakeRecurringBoundary(supabase, input.tenantId, input.projectId, input.assetId))
+          ?? (await getCurrentProjectRecurringSourceBoundary(supabase, {
+            tenantId: input.tenantId,
+            projectId: input.projectId,
+          })));
 
     if (boundary.boundaryConsentCreatedAt && boundary.boundaryConsentId) {
       const result = await enqueueFaceMatchFanoutContinuation(supabase, {
@@ -722,6 +893,27 @@ export async function createOrResetFanoutContinuationsForMaterializedAsset(
         boundarySnapshotAt: boundary.boundarySnapshotAt,
         boundarySortAt: boundary.boundaryConsentCreatedAt,
         boundaryConsentId: boundary.boundaryConsentId,
+        dispatchMode: input.repairRequested ? "backfill_repair" : "normal",
+        resetTerminal: input.repairRequested,
+      });
+
+      if (result.enqueued || result.requeued || result.alreadyProcessing || result.alreadyQueued) {
+        scheduledCount += 1;
+      }
+    }
+
+    if (recurringBoundary.boundaryParticipantCreatedAt && recurringBoundary.boundaryProjectProfileParticipantId) {
+      const result = await enqueueFaceMatchFanoutContinuation(supabase, {
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        direction: "photo_to_recurring_profiles",
+        sourceAssetId: input.assetId,
+        sourceMaterializationId: input.sourceMaterializationId,
+        sourceMaterializerVersion: input.sourceMaterializerVersion,
+        compareVersion,
+        boundarySnapshotAt: recurringBoundary.boundarySnapshotAt,
+        boundarySortAt: recurringBoundary.boundaryParticipantCreatedAt,
+        boundaryProjectProfileParticipantId: recurringBoundary.boundaryProjectProfileParticipantId,
         dispatchMode: input.repairRequested ? "backfill_repair" : "normal",
         resetTerminal: input.repairRequested,
       });
@@ -805,7 +997,7 @@ export async function createOrResetFanoutContinuationsForMaterializedAsset(
 
 function isBatchExhausted(
   continuation: ClaimedFanoutContinuationRow,
-  lastItem: UploadedPhotoPageItem | CurrentConsentHeadshotPageItem | null,
+  lastItem: UploadedPhotoPageItem | CurrentConsentHeadshotPageItem | ReadyProjectRecurringSource | null,
   itemsExamined: number,
   batchLimit: number,
 ) {
@@ -822,6 +1014,14 @@ function isBatchExhausted(
     return (
       typedItem.consentCreatedAt === continuation.boundary_sort_at &&
       typedItem.consentId === continuation.boundary_consent_id
+    );
+  }
+
+  if (continuation.direction === "photo_to_recurring_profiles") {
+    const typedItem = lastItem as ReadyProjectRecurringSource;
+    return (
+      typedItem.participantCreatedAt === continuation.boundary_sort_at &&
+      typedItem.projectProfileParticipantId === continuation.boundary_project_profile_participant_id
     );
   }
 
@@ -883,11 +1083,16 @@ async function scheduleCompareJobForContinuation(
   supabase: SupabaseClient,
   continuation: ClaimedFanoutContinuationRow,
   input: {
-    consentId: string;
     assetId: string;
-    headshotMaterializationId: string;
     assetMaterializationId: string;
     scheduledCount: number;
+    consentId?: string;
+    headshotMaterializationId?: string;
+    projectProfileParticipantId?: string;
+    profileId?: string;
+    recurringHeadshotId?: string;
+    recurringHeadshotMaterializationId?: string;
+    recurringSelectionFaceId?: string;
   },
 ) {
   await fanoutContinuationTestHooks?.beforeDownstreamSchedule?.({
@@ -896,25 +1101,70 @@ async function scheduleCompareJobForContinuation(
     kind: "compare",
     scheduledCount: input.scheduledCount,
     targetAssetId: input.assetId,
-    targetConsentId: input.consentId,
+    targetConsentId: input.consentId ?? null,
   });
 
-  const result = await enqueueCompareMaterializedPairJob({
-    tenantId: continuation.tenant_id,
-    projectId: continuation.project_id,
-    consentId: input.consentId,
-    assetId: input.assetId,
-    headshotMaterializationId: input.headshotMaterializationId,
-    assetMaterializationId: input.assetMaterializationId,
-    compareVersion: continuation.compare_version,
-    mode: "repair_requeue",
-    requeueReason: `fanout_continuation:${continuation.continuation_id}:compare_materialized_pair`,
-    payload: {
-      source: "fanout_continuation",
-      continuationId: continuation.continuation_id,
-    },
-    supabase,
-  }) as RepairFaceMatchJobResult;
+  let result: RepairFaceMatchJobResult;
+  if (continuation.direction === "photo_to_headshots" || continuation.direction === "headshot_to_photos") {
+    if (!input.consentId || !input.headshotMaterializationId) {
+      throw new HttpError(
+        400,
+        "face_match_fanout_invalid_compare_scope",
+        "Consent fan-out compare scheduling requires consent and headshot materialization scope.",
+      );
+    }
+
+    result = await enqueueCompareMaterializedPairJob({
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      consentId: input.consentId,
+      assetId: input.assetId,
+      headshotMaterializationId: input.headshotMaterializationId,
+      assetMaterializationId: input.assetMaterializationId,
+      compareVersion: continuation.compare_version,
+      mode: "repair_requeue",
+      requeueReason: `fanout_continuation:${continuation.continuation_id}:compare_materialized_pair`,
+      payload: {
+        source: "fanout_continuation",
+        continuationId: continuation.continuation_id,
+      },
+      supabase,
+    }) as RepairFaceMatchJobResult;
+  } else {
+    if (
+      !input.projectProfileParticipantId
+      || !input.profileId
+      || !input.recurringHeadshotId
+      || !input.recurringHeadshotMaterializationId
+      || !input.recurringSelectionFaceId
+    ) {
+      throw new HttpError(
+        400,
+        "face_match_fanout_invalid_compare_scope",
+        "Recurring fan-out compare scheduling requires participant, source, and selection scope.",
+      );
+    }
+
+    result = await enqueueCompareRecurringProfileMaterializedPairJob({
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      projectProfileParticipantId: input.projectProfileParticipantId,
+      profileId: input.profileId,
+      assetId: input.assetId,
+      recurringHeadshotId: input.recurringHeadshotId,
+      recurringHeadshotMaterializationId: input.recurringHeadshotMaterializationId,
+      recurringSelectionFaceId: input.recurringSelectionFaceId,
+      assetMaterializationId: input.assetMaterializationId,
+      compareVersion: continuation.compare_version,
+      mode: "repair_requeue",
+      requeueReason: `fanout_continuation:${continuation.continuation_id}:compare_recurring_profile_materialized_pair`,
+      payload: {
+        source: "fanout_continuation",
+        continuationId: continuation.continuation_id,
+      },
+      supabase,
+    }) as RepairFaceMatchJobResult;
+  }
 
   if (!isPendingOrScheduled(result)) {
     throw new HttpError(
@@ -927,6 +1177,92 @@ async function scheduleCompareJobForContinuation(
   return {
     newlyScheduled: wasNewlyScheduled(result),
   };
+}
+
+function buildSupersededBatchResult(continuation: ClaimedFanoutContinuationRow): FanoutContinuationBatchResult {
+  return {
+    skippedIneligible: true,
+    itemsExamined: 0,
+    compareJobsScheduled: 0,
+    materializeJobsScheduled: 0,
+    completed: false,
+    superseded: true,
+    nextCursorSortAt: continuation.cursor_sort_at,
+    nextCursorAssetId: continuation.cursor_asset_id,
+    nextCursorConsentId: continuation.cursor_consent_id,
+    nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
+  };
+}
+
+export async function supersedeRecurringProfileFanoutContinuations(
+  supabase: SupabaseClient,
+  input: {
+    tenantId: string;
+    projectId: string;
+    projectProfileParticipantId: string;
+    keepSourceMaterializationId?: string | null;
+    keepSelectionFaceId?: string | null;
+  },
+) {
+  const { data, error } = await supabase
+    .from("face_match_fanout_continuations")
+    .select("id, source_materialization_id, source_selection_face_id")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("direction", "recurring_profile_to_photos")
+    .eq("source_project_profile_participant_id", input.projectProfileParticipantId)
+    .in("status", ["queued", "processing"]);
+
+  if (error) {
+    throw new HttpError(
+      500,
+      "face_match_fanout_supersede_failed",
+      "Unable to load recurring fan-out continuations for supersede.",
+    );
+  }
+
+  const staleIds = ((data ?? []) as Array<{
+    id: string;
+    source_materialization_id: string | null;
+    source_selection_face_id: string | null;
+  }>).filter((row) => {
+    if (!input.keepSourceMaterializationId || !input.keepSelectionFaceId) {
+      return true;
+    }
+
+    return !(
+      row.source_materialization_id === input.keepSourceMaterializationId
+      && row.source_selection_face_id === input.keepSelectionFaceId
+    );
+  }).map((row) => row.id);
+
+  if (staleIds.length === 0) {
+    return 0;
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await supabase
+    .from("face_match_fanout_continuations")
+    .update({
+      status: "superseded",
+      locked_at: null,
+      locked_by: null,
+      lock_token: null,
+      lease_expires_at: null,
+      completed_at: nowIso,
+      updated_at: nowIso,
+    })
+    .in("id", staleIds);
+
+  if (updateError) {
+    throw new HttpError(
+      500,
+      "face_match_fanout_supersede_failed",
+      "Unable to supersede recurring fan-out continuations.",
+    );
+  }
+
+  return staleIds.length;
 }
 
 export async function processClaimedFanoutContinuation(
@@ -951,17 +1287,7 @@ export async function processClaimedFanoutContinuation(
       continuation.source_asset_id,
     );
     if (!sourceAsset || sourceAsset.assetType !== "photo") {
-      return {
-        skippedIneligible: true,
-        itemsExamined: 0,
-        compareJobsScheduled: 0,
-        materializeJobsScheduled: 0,
-        completed: false,
-        superseded: true,
-        nextCursorSortAt: continuation.cursor_sort_at,
-        nextCursorAssetId: continuation.cursor_asset_id,
-        nextCursorConsentId: continuation.cursor_consent_id,
-      };
+      return buildSupersededBatchResult(continuation);
     }
 
     const currentMaterialization = await loadCurrentAssetFaceMaterialization(
@@ -973,17 +1299,7 @@ export async function processClaimedFanoutContinuation(
       { includeFaces: false },
     );
     if (!currentMaterialization || currentMaterialization.materialization.id !== continuation.source_materialization_id) {
-      return {
-        skippedIneligible: true,
-        itemsExamined: 0,
-        compareJobsScheduled: 0,
-        materializeJobsScheduled: 0,
-        completed: false,
-        superseded: true,
-        nextCursorSortAt: continuation.cursor_sort_at,
-        nextCursorAssetId: continuation.cursor_asset_id,
-        nextCursorConsentId: continuation.cursor_consent_id,
-      };
+      return buildSupersededBatchResult(continuation);
     }
 
     if (!continuation.boundary_sort_at || !continuation.boundary_consent_id) {
@@ -997,6 +1313,7 @@ export async function processClaimedFanoutContinuation(
         nextCursorSortAt: continuation.cursor_sort_at,
         nextCursorAssetId: continuation.cursor_asset_id,
         nextCursorConsentId: continuation.cursor_consent_id,
+        nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
       };
     }
 
@@ -1079,63 +1396,261 @@ export async function processClaimedFanoutContinuation(
       nextCursorSortAt: page.at(-1)?.consentCreatedAt ?? continuation.cursor_sort_at,
       nextCursorAssetId: continuation.cursor_asset_id,
       nextCursorConsentId: page.at(-1)?.consentId ?? continuation.cursor_consent_id,
+      nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
+    };
+  }
+
+  if (continuation.direction === "photo_to_recurring_profiles") {
+    if (!continuation.source_asset_id) {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    const sourceAsset = await loadEligibleAssetForMaterialization(
+      supabase,
+      continuation.tenant_id,
+      continuation.project_id,
+      continuation.source_asset_id,
+    );
+    if (!sourceAsset || sourceAsset.assetType !== "photo") {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    const currentMaterialization = await loadCurrentAssetFaceMaterialization(
+      supabase,
+      continuation.tenant_id,
+      continuation.project_id,
+      continuation.source_asset_id,
+      continuation.source_materializer_version,
+      { includeFaces: false },
+    );
+    if (!currentMaterialization || currentMaterialization.materialization.id !== continuation.source_materialization_id) {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    if (!continuation.boundary_sort_at || !continuation.boundary_project_profile_participant_id) {
+      return {
+        skippedIneligible: false,
+        itemsExamined: 0,
+        compareJobsScheduled: 0,
+        materializeJobsScheduled: 0,
+        completed: true,
+        superseded: false,
+        nextCursorSortAt: continuation.cursor_sort_at,
+        nextCursorAssetId: continuation.cursor_asset_id,
+        nextCursorConsentId: continuation.cursor_consent_id,
+        nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
+      };
+    }
+
+    const page = await listReadyProjectRecurringSourcesPage(supabase, {
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      boundarySnapshotAt: continuation.boundary_snapshot_at,
+      limit: batchLimit,
+      cursorParticipantCreatedAt: continuation.cursor_sort_at,
+      cursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
+      boundaryParticipantCreatedAt: continuation.boundary_sort_at,
+      boundaryProjectProfileParticipantId: continuation.boundary_project_profile_participant_id,
+    });
+    const existingKeys = await loadExistingPhotoToRecurringCompareKeys(supabase, {
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      sourceAssetId: continuation.source_asset_id,
+      assetMaterializationId: continuation.source_materialization_id,
+      compareVersion: continuation.compare_version,
+      projectProfileParticipantIds: Array.from(new Set(page.map((row) => row.projectProfileParticipantId))),
+    });
+
+    for (const item of page) {
+      const compareKey = `${item.projectProfileParticipantId}:${item.selectionFaceId}`;
+      if (existingKeys.has(compareKey)) {
+        continue;
+      }
+
+      const compareResult = await scheduleCompareJobForContinuation(supabase, continuation, {
+        assetId: continuation.source_asset_id,
+        assetMaterializationId: continuation.source_materialization_id,
+        projectProfileParticipantId: item.projectProfileParticipantId,
+        profileId: item.profileId,
+        recurringHeadshotId: item.recurringHeadshotId,
+        recurringHeadshotMaterializationId: item.recurringHeadshotMaterializationId,
+        recurringSelectionFaceId: item.selectionFaceId,
+        scheduledCount: downstreamJobsScheduled,
+      });
+      if (compareResult.newlyScheduled) {
+        compareJobsScheduled += 1;
+        downstreamJobsScheduled += 1;
+      }
+    }
+
+    await fanoutContinuationTestHooks?.beforeBatchFinalize?.({
+      continuationId: continuation.continuation_id,
+      direction: continuation.direction,
+      compareJobsScheduled,
+      materializeJobsScheduled,
+      itemsExamined: page.length,
+    });
+
+    return {
+      skippedIneligible: false,
+      itemsExamined: page.length,
+      compareJobsScheduled,
+      materializeJobsScheduled,
+      completed: isBatchExhausted(continuation, page.at(-1) ?? null, page.length, batchLimit),
+      superseded: false,
+      nextCursorSortAt: page.at(-1)?.participantCreatedAt ?? continuation.cursor_sort_at,
+      nextCursorAssetId: continuation.cursor_asset_id,
+      nextCursorConsentId: continuation.cursor_consent_id,
+      nextCursorProjectProfileParticipantId:
+        page.at(-1)?.projectProfileParticipantId ?? continuation.cursor_project_profile_participant_id,
     };
   }
 
   if (!continuation.source_consent_id) {
+    if (continuation.direction !== "recurring_profile_to_photos") {
+      return buildSupersededBatchResult(continuation);
+    }
+  }
+
+  if (continuation.direction === "headshot_to_photos") {
+    if (!continuation.source_consent_id) {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    const consentEligible = await loadConsentEligibility(
+      supabase,
+      continuation.tenant_id,
+      continuation.project_id,
+      continuation.source_consent_id,
+    );
+    if (!consentEligible) {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    const currentHeadshot = await loadConsentHeadshotMaterialization(
+      supabase,
+      continuation.tenant_id,
+      continuation.project_id,
+      continuation.source_consent_id,
+      continuation.source_materializer_version,
+      { includeFaces: false },
+    );
+    if (!currentHeadshot || currentHeadshot.materialization.id !== continuation.source_materialization_id) {
+      return buildSupersededBatchResult(continuation);
+    }
+
+    if (!continuation.boundary_sort_at || !continuation.boundary_asset_id) {
+      return {
+        skippedIneligible: false,
+        itemsExamined: 0,
+        compareJobsScheduled: 0,
+        materializeJobsScheduled: 0,
+        completed: true,
+        superseded: false,
+        nextCursorSortAt: continuation.cursor_sort_at,
+        nextCursorAssetId: continuation.cursor_asset_id,
+        nextCursorConsentId: continuation.cursor_consent_id,
+        nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
+      };
+    }
+
+    const page = await listUploadedProjectPhotosPage(supabase, {
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      limit: batchLimit,
+      cursorUploadedAt: continuation.cursor_sort_at,
+      cursorAssetId: continuation.cursor_asset_id,
+      boundaryUploadedAt: continuation.boundary_sort_at,
+      boundaryAssetId: continuation.boundary_asset_id,
+    });
+    const photoMaterializations = await loadCurrentMaterializationHeadersByAssetId(
+      supabase,
+      continuation.tenant_id,
+      continuation.project_id,
+      Array.from(new Set(page.map((row) => row.assetId))),
+      continuation.source_materializer_version,
+    );
+    const existingKeys = await loadExistingHeadshotToPhotoCompareKeys(supabase, {
+      tenantId: continuation.tenant_id,
+      projectId: continuation.project_id,
+      sourceConsentId: continuation.source_consent_id,
+      headshotMaterializationId: continuation.source_materialization_id,
+      compareVersion: continuation.compare_version,
+      assetIds: Array.from(new Set(page.map((row) => row.assetId))),
+    });
+
+    for (const item of page) {
+      const photoMaterialization = photoMaterializations.get(item.assetId);
+      if (!photoMaterialization) {
+        const materializeResult = await scheduleMaterializeJobForContinuation(
+          supabase,
+          continuation,
+          item.assetId,
+          downstreamJobsScheduled,
+        );
+        if (materializeResult.newlyScheduled) {
+          materializeJobsScheduled += 1;
+          downstreamJobsScheduled += 1;
+        }
+        continue;
+      }
+
+      const compareKey = `${item.assetId}:${photoMaterialization.id}`;
+      if (existingKeys.has(compareKey)) {
+        continue;
+      }
+
+      const compareResult = await scheduleCompareJobForContinuation(supabase, continuation, {
+        consentId: continuation.source_consent_id,
+        assetId: item.assetId,
+        headshotMaterializationId: continuation.source_materialization_id,
+        assetMaterializationId: photoMaterialization.id,
+        scheduledCount: downstreamJobsScheduled,
+      });
+      if (compareResult.newlyScheduled) {
+        compareJobsScheduled += 1;
+        downstreamJobsScheduled += 1;
+      }
+    }
+
+    await fanoutContinuationTestHooks?.beforeBatchFinalize?.({
+      continuationId: continuation.continuation_id,
+      direction: continuation.direction,
+      compareJobsScheduled,
+      materializeJobsScheduled,
+      itemsExamined: page.length,
+    });
+
     return {
-      skippedIneligible: true,
-      itemsExamined: 0,
-      compareJobsScheduled: 0,
-      materializeJobsScheduled: 0,
-      completed: false,
-      superseded: true,
-      nextCursorSortAt: continuation.cursor_sort_at,
-      nextCursorAssetId: continuation.cursor_asset_id,
+      skippedIneligible: false,
+      itemsExamined: page.length,
+      compareJobsScheduled,
+      materializeJobsScheduled,
+      completed: isBatchExhausted(continuation, page.at(-1) ?? null, page.length, batchLimit),
+      superseded: false,
+      nextCursorSortAt: page.at(-1)?.uploadedAt ?? continuation.cursor_sort_at,
+      nextCursorAssetId: page.at(-1)?.assetId ?? continuation.cursor_asset_id,
       nextCursorConsentId: continuation.cursor_consent_id,
+      nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
     };
   }
 
-  const consentEligible = await loadConsentEligibility(
-    supabase,
-    continuation.tenant_id,
-    continuation.project_id,
-    continuation.source_consent_id,
-  );
-  if (!consentEligible) {
-    return {
-      skippedIneligible: true,
-      itemsExamined: 0,
-      compareJobsScheduled: 0,
-      materializeJobsScheduled: 0,
-      completed: false,
-      superseded: true,
-      nextCursorSortAt: continuation.cursor_sort_at,
-      nextCursorAssetId: continuation.cursor_asset_id,
-      nextCursorConsentId: continuation.cursor_consent_id,
-    };
+  if (!continuation.source_project_profile_participant_id || !continuation.source_selection_face_id) {
+    return buildSupersededBatchResult(continuation);
   }
 
-  const currentHeadshot = await loadConsentHeadshotMaterialization(
-    supabase,
-    continuation.tenant_id,
-    continuation.project_id,
-    continuation.source_consent_id,
-    continuation.source_materializer_version,
-    { includeFaces: false },
-  );
-  if (!currentHeadshot || currentHeadshot.materialization.id !== continuation.source_materialization_id) {
-    return {
-      skippedIneligible: true,
-      itemsExamined: 0,
-      compareJobsScheduled: 0,
-      materializeJobsScheduled: 0,
-      completed: false,
-      superseded: true,
-      nextCursorSortAt: continuation.cursor_sort_at,
-      nextCursorAssetId: continuation.cursor_asset_id,
-      nextCursorConsentId: continuation.cursor_consent_id,
-    };
+  const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+    tenantId: continuation.tenant_id,
+    projectId: continuation.project_id,
+    projectProfileParticipantId: continuation.source_project_profile_participant_id,
+  });
+  if (
+    !currentSource
+    || currentSource.recurringHeadshotMaterializationId !== continuation.source_materialization_id
+    || currentSource.selectionFaceId !== continuation.source_selection_face_id
+    || currentSource.recurringHeadshotId !== continuation.source_headshot_id
+  ) {
+    return buildSupersededBatchResult(continuation);
   }
 
   if (!continuation.boundary_sort_at || !continuation.boundary_asset_id) {
@@ -1149,6 +1664,7 @@ export async function processClaimedFanoutContinuation(
       nextCursorSortAt: continuation.cursor_sort_at,
       nextCursorAssetId: continuation.cursor_asset_id,
       nextCursorConsentId: continuation.cursor_consent_id,
+      nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
     };
   }
 
@@ -1168,11 +1684,11 @@ export async function processClaimedFanoutContinuation(
     Array.from(new Set(page.map((row) => row.assetId))),
     continuation.source_materializer_version,
   );
-  const existingKeys = await loadExistingHeadshotToPhotoCompareKeys(supabase, {
+  const existingKeys = await loadExistingRecurringToPhotoCompareKeys(supabase, {
     tenantId: continuation.tenant_id,
     projectId: continuation.project_id,
-    sourceConsentId: continuation.source_consent_id,
-    headshotMaterializationId: continuation.source_materialization_id,
+    projectProfileParticipantId: continuation.source_project_profile_participant_id,
+    recurringSelectionFaceId: continuation.source_selection_face_id,
     compareVersion: continuation.compare_version,
     assetIds: Array.from(new Set(page.map((row) => row.assetId))),
   });
@@ -1199,10 +1715,13 @@ export async function processClaimedFanoutContinuation(
     }
 
     const compareResult = await scheduleCompareJobForContinuation(supabase, continuation, {
-      consentId: continuation.source_consent_id,
       assetId: item.assetId,
-      headshotMaterializationId: continuation.source_materialization_id,
       assetMaterializationId: photoMaterialization.id,
+      projectProfileParticipantId: currentSource.projectProfileParticipantId,
+      profileId: currentSource.profileId,
+      recurringHeadshotId: currentSource.recurringHeadshotId,
+      recurringHeadshotMaterializationId: currentSource.recurringHeadshotMaterializationId,
+      recurringSelectionFaceId: currentSource.selectionFaceId,
       scheduledCount: downstreamJobsScheduled,
     });
     if (compareResult.newlyScheduled) {
@@ -1229,5 +1748,6 @@ export async function processClaimedFanoutContinuation(
     nextCursorSortAt: page.at(-1)?.uploadedAt ?? continuation.cursor_sort_at,
     nextCursorAssetId: page.at(-1)?.assetId ?? continuation.cursor_asset_id,
     nextCursorConsentId: continuation.cursor_consent_id,
+    nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
   };
 }

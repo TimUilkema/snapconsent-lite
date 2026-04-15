@@ -11,12 +11,14 @@ import { ConsentStructuredSnapshot } from "@/components/projects/consent-structu
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { PreviewableImage } from "@/components/projects/previewable-image";
 import { ProjectDefaultTemplateForm } from "@/components/projects/project-default-template-form";
+import { ProjectParticipantsPanel } from "@/components/projects/project-participants-panel";
 import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
 import { InviteActions } from "@/components/projects/invite-actions";
 import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { formatDateTime } from "@/lib/i18n/format";
 import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
 import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
+import { getProjectParticipantsPanelData } from "@/lib/projects/project-participants-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -160,6 +162,11 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     listVisibleTemplatesForTenant(supabase, tenantId),
     resolveTemplateManagementAccess(supabase, tenantId, user.id),
   ]);
+  const participantPanelData = await getProjectParticipantsPanelData({
+    supabase,
+    tenantId,
+    projectId: project.id,
+  });
 
   const templateOptions: ConsentTemplateOption[] = templates.map((template) => ({
     id: template.id,
@@ -323,11 +330,11 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                 {t("exportProject")}
               </a>
               <nav className="flex flex-wrap gap-2" aria-label={t("projectSectionsAria")}>
-                <a
-                  href="#project-invites"
+              <a
+                  href="#project-participants"
                   className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
                 >
-                  {t("sectionInvites")}
+                  {t("sectionParticipants")}
                 </a>
                 <a
                   href="#project-assets"
@@ -374,249 +381,263 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <section id="project-invites" className="section-anchor content-card space-y-4 rounded-2xl p-5">
+        <section id="project-participants" className="section-anchor content-card space-y-6 rounded-2xl p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-zinc-900">{t("invitesTitle")}</h2>
+              <h2 className="text-lg font-semibold text-zinc-900">{t("participantsTitle")}</h2>
               <p className="mt-1 text-sm text-zinc-600">
-                {t("invitesSubtitle")}
+                {t("participantsSubtitle")}
               </p>
             </div>
           </div>
-          {inviteRows.length ? (
-            <ul className="space-y-2 text-sm">
-              {inviteRows.map((invite) => (
-                <li key={invite.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        {invite.consents?.[0] ? (
-                          <>
-                            <p className="font-medium text-zinc-900">
-                              {invite.consents[0].subjects?.full_name ?? t("unknownSubject")}
+          <ProjectParticipantsPanel
+            projectId={project.id}
+            data={participantPanelData}
+            templates={templateOptions}
+            defaultTemplateId={defaultTemplateId}
+            defaultTemplateWarning={defaultTemplateWarning}
+          />
+
+          <div className="space-y-4 border-t border-zinc-200 pt-6">
+            <div>
+              <h3 className="text-base font-semibold text-zinc-900">{t("oneOffParticipantsTitle")}</h3>
+              <p className="mt-1 text-sm text-zinc-600">{t("oneOffParticipantsSubtitle")}</p>
+            </div>
+            {inviteRows.length ? (
+              <ul className="space-y-2 text-sm">
+                {inviteRows.map((invite) => (
+                  <li key={invite.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          {invite.consents?.[0] ? (
+                            <>
+                              <p className="font-medium text-zinc-900">
+                                {invite.consents[0].subjects?.full_name ?? t("unknownSubject")}
+                              </p>
+                              <p className="text-zinc-700">
+                                {invite.consents[0].subjects?.email ?? t("unknownEmail")}
+                              </p>
+                            </>
+                          ) : (
+                            <p>
+                              <span className="font-medium">{t("inviteIdLabel")}</span> {invite.id}
                             </p>
-                            <p className="text-zinc-700">
-                              {invite.consents[0].subjects?.email ?? t("unknownEmail")}
-                            </p>
-                          </>
-                        ) : (
-                          <p>
-                            <span className="font-medium">{t("inviteIdLabel")}</span> {invite.id}
+                          )}
+                          <p className="text-zinc-700">
+                            {t("templateLabel")}{" "}
+                            {invite.consent_template
+                              ? `${invite.consent_template.name} ${invite.consent_template.version}`
+                              : t("unknownValue")}
                           </p>
-                        )}
-                        <p className="text-zinc-700">
-                          {t("templateLabel")}{" "}
-                          {invite.consent_template
-                            ? `${invite.consent_template.name} ${invite.consent_template.version}`
-                            : t("unknownValue")}
-                        </p>
-                        <p className="text-zinc-700">
-                          {t("inviteUsageLine", {
-                            status: invite.status,
-                            usedCount: invite.used_count,
-                            maxUses: invite.max_uses,
-                          })}
-                        </p>
-                        <p className="text-zinc-700">
-                          {t("expiresLabel")}{" "}
-                          {invite.expires_at ? formatDateTime(invite.expires_at, locale) : t("noneValue")}
-                        </p>
-                      </div>
-                      {invite.consents?.[0] && consentHeadshotLinkMap.has(invite.consents[0].id) ? (
-                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
-                          <PreviewableImage
-                            src={consentHeadshotThumbnailMap.get(invite.consents[0].id) ?? null}
-                            previewSrc={consentHeadshotThumbnailMap.get(`${invite.consents[0].id}:preview`) ?? null}
-                            alt={t("headshotAlt", {
-                              fullName: invite.consents[0].subjects?.full_name ?? t("subjectFallback"),
+                          <p className="text-zinc-700">
+                            {t("inviteUsageLine", {
+                              status: invite.status,
+                              usedCount: invite.used_count,
+                              maxUses: invite.max_uses,
                             })}
-                            className="h-full w-full"
-                            imageClassName="h-full w-full object-cover"
-                            lightboxChrome="floating"
-                          />
+                          </p>
+                          <p className="text-zinc-700">
+                            {t("expiresLabel")}{" "}
+                            {invite.expires_at ? formatDateTime(invite.expires_at, locale) : t("noneValue")}
+                          </p>
                         </div>
-                      ) : null}
-                    </div>
-                    <InviteActions
-                      inviteId={invite.id}
-                      projectId={project.id}
-                      invitePath={
-                        inviteKeyMap.has(invite.id)
-                          ? buildInvitePath(
-                              deriveInviteToken({
-                                tenantId,
-                                projectId: project.id,
-                                idempotencyKey: inviteKeyMap.get(invite.id) ?? "",
-                              }),
-                            )
-                          : null
-                      }
-                      isShareable={invite.status === "active" && invite.used_count === 0}
-                      isRevokable={invite.status === "active" && invite.used_count === 0}
-                    />
-                    {invite.used_count > 0 && invite.consents?.[0] ? (
-                      <details
-                        id={`consent-${invite.consents[0].id}`}
-                        open={invite.consents[0].id === openConsentId}
-                        className="rounded-xl border border-zinc-200 bg-zinc-50 p-3"
-                      >
-                        <summary className="cursor-pointer text-sm font-medium text-zinc-900">
-                          {t("viewConsentDetails")}
-                        </summary>
-                        <div className="mt-3 space-y-4 text-sm text-zinc-700">
-                          {(() => {
-                            const consent = invite.consents?.[0];
-                            const hasLinkedHeadshot = consent
-                              ? consentHeadshotLinkMap.has(consent.id)
-                              : false;
-                            const headshotThumbnailUrl = consent
-                              ? consentHeadshotThumbnailMap.get(consent.id) ?? null
-                              : null;
-                            const headshotPreviewUrl = consent
-                              ? consentHeadshotThumbnailMap.get(`${consent.id}:preview`) ?? null
-                              : null;
-                            return (
-                              <>
-                                <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:items-stretch">
-                                  <section className="flex h-full flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("subjectNameLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.subjects?.full_name ?? t("unknownValue")}
-                                        </p>
-                                      </div>
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("subjectEmailLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.subjects?.email ?? t("unknownValue")}
-                                        </p>
-                                      </div>
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("signedAtLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.signed_at
-                                            ? formatDateTime(consent.signed_at, locale)
-                                            : t("unknownValue")}
-                                        </p>
-                                      </div>
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("consentVersionLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.consent_version ?? t("unknownValue")}
-                                        </p>
-                                      </div>
-                                    </div>
-
-                                    <div className="flex flex-1 flex-col rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                                      <p className="text-sm text-zinc-500">
-                                        {t("consentTextLabel")}
-                                      </p>
-                                      <p className="mt-2 flex-1 whitespace-pre-line leading-6 text-zinc-800">
-                                        {consent?.consent_text ?? t("unknownValue")}
-                                      </p>
-                                    </div>
-
-                                    {consent?.structured_fields_snapshot ? (
-                                      <ConsentStructuredSnapshot
-                                        snapshot={consent.structured_fields_snapshot}
-                                        strings={{
-                                          title: t("structuredValuesTitle"),
-                                          noneValue: t("noneValue"),
-                                        }}
-                                      />
-                                    ) : (
-                                      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("structuredValuesTitle")}
-                                        </p>
-                                        <p className="mt-2 text-sm text-zinc-800">
-                                          {t("structuredValuesLegacy")}
-                                        </p>
-                                      </div>
-                                    )}
-                                  </section>
-
-                                  <section className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
-                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("facialMatchingLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.face_match_opt_in ? t("enabledValue") : t("disabledValue")}
-                                        </p>
-                                      </div>
-                                      <div className="rounded-xl bg-zinc-50 p-3">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("headshotStatusLabel")}
-                                        </p>
-                                        <p className="mt-1 text-sm font-medium text-zinc-900">
-                                          {consent?.face_match_opt_in
-                                            ? hasLinkedHeadshot
-                                              ? t("headshotLinked")
-                                              : t("headshotMissing")
-                                            : t("notApplicableValue")}
-                                        </p>
-                                      </div>
-                                    </div>
-
-                                    {consent?.face_match_opt_in && hasLinkedHeadshot ? (
-                                      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                                        <p className="text-sm text-zinc-500">
-                                          {t("headshotPreviewLabel")}
-                                        </p>
-                                        <div className="mt-3 h-32 w-32 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
-                                          <PreviewableImage
-                                            src={headshotThumbnailUrl}
-                                            previewSrc={headshotPreviewUrl}
-                                            alt={t("headshotAlt", {
-                                              fullName: consent?.subjects?.full_name ?? t("subjectFallback"),
-                                            })}
-                                            className="h-full w-full"
-                                            imageClassName="h-full w-full object-cover"
-                                            lightboxChrome="floating"
-                                          />
+                        {invite.consents?.[0] && consentHeadshotLinkMap.has(invite.consents[0].id) ? (
+                          <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
+                            <PreviewableImage
+                              src={consentHeadshotThumbnailMap.get(invite.consents[0].id) ?? null}
+                              previewSrc={consentHeadshotThumbnailMap.get(`${invite.consents[0].id}:preview`) ?? null}
+                              alt={t("headshotAlt", {
+                                fullName: invite.consents[0].subjects?.full_name ?? t("subjectFallback"),
+                              })}
+                              className="h-full w-full"
+                              imageClassName="h-full w-full object-cover"
+                              lightboxChrome="floating"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                      <InviteActions
+                        inviteId={invite.id}
+                        projectId={project.id}
+                        invitePath={
+                          inviteKeyMap.has(invite.id)
+                            ? buildInvitePath(
+                                deriveInviteToken({
+                                  tenantId,
+                                  projectId: project.id,
+                                  idempotencyKey: inviteKeyMap.get(invite.id) ?? "",
+                                }),
+                              )
+                            : null
+                        }
+                        isShareable={invite.status === "active" && invite.used_count === 0}
+                        isRevokable={invite.status === "active" && invite.used_count === 0}
+                      />
+                      {invite.used_count > 0 && invite.consents?.[0] ? (
+                        <details
+                          id={`consent-${invite.consents[0].id}`}
+                          open={invite.consents[0].id === openConsentId}
+                          className="rounded-xl border border-zinc-200 bg-zinc-50 p-3"
+                        >
+                          <summary className="cursor-pointer text-sm font-medium text-zinc-900">
+                            {t("viewConsentDetails")}
+                          </summary>
+                          <div className="mt-3 space-y-4 text-sm text-zinc-700">
+                            {(() => {
+                              const consent = invite.consents?.[0];
+                              const hasLinkedHeadshot = consent
+                                ? consentHeadshotLinkMap.has(consent.id)
+                                : false;
+                              const headshotThumbnailUrl = consent
+                                ? consentHeadshotThumbnailMap.get(consent.id) ?? null
+                                : null;
+                              const headshotPreviewUrl = consent
+                                ? consentHeadshotThumbnailMap.get(`${consent.id}:preview`) ?? null
+                                : null;
+                              return (
+                                <>
+                                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:items-stretch">
+                                    <section className="flex h-full flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4">
+                                      <div className="grid gap-3 sm:grid-cols-2">
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("subjectNameLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.subjects?.full_name ?? t("unknownValue")}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("subjectEmailLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.subjects?.email ?? t("unknownValue")}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("signedAtLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.signed_at
+                                              ? formatDateTime(consent.signed_at, locale)
+                                              : t("unknownValue")}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("consentVersionLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.consent_version ?? t("unknownValue")}
+                                          </p>
                                         </div>
                                       </div>
-                                    ) : null}
 
-                                    {consent?.face_match_opt_in && hasLinkedHeadshot ? (
-                                      <ConsentHeadshotReplaceControl
-                                        projectId={project.id}
-                                        consentId={consent.id}
-                                      />
-                                    ) : null}
-                                  </section>
-                                </div>
+                                      <div className="flex flex-1 flex-col rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                        <p className="text-sm text-zinc-500">
+                                          {t("consentTextLabel")}
+                                        </p>
+                                        <p className="mt-2 flex-1 whitespace-pre-line leading-6 text-zinc-800">
+                                          {consent?.consent_text ?? t("unknownValue")}
+                                        </p>
+                                      </div>
 
-                                {consent ? (
-                                  <ConsentAssetMatchingPanel
-                                    projectId={project.id}
-                                    consentId={consent.id}
-                                  />
-                                ) : null}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </details>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-zinc-600">{t("noInvitesYet")}</p>
-          )}
+                                      {consent?.structured_fields_snapshot ? (
+                                        <ConsentStructuredSnapshot
+                                          snapshot={consent.structured_fields_snapshot}
+                                          strings={{
+                                            title: t("structuredValuesTitle"),
+                                            noneValue: t("noneValue"),
+                                          }}
+                                        />
+                                      ) : (
+                                        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("structuredValuesTitle")}
+                                          </p>
+                                          <p className="mt-2 text-sm text-zinc-800">
+                                            {t("structuredValuesLegacy")}
+                                          </p>
+                                        </div>
+                                      )}
+                                    </section>
+
+                                    <section className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
+                                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("facialMatchingLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.face_match_opt_in ? t("enabledValue") : t("disabledValue")}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-xl bg-zinc-50 p-3">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("headshotStatusLabel")}
+                                          </p>
+                                          <p className="mt-1 text-sm font-medium text-zinc-900">
+                                            {consent?.face_match_opt_in
+                                              ? hasLinkedHeadshot
+                                                ? t("headshotLinked")
+                                                : t("headshotMissing")
+                                              : t("notApplicableValue")}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {consent?.face_match_opt_in && hasLinkedHeadshot ? (
+                                        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                                          <p className="text-sm text-zinc-500">
+                                            {t("headshotPreviewLabel")}
+                                          </p>
+                                          <div className="mt-3 h-32 w-32 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
+                                            <PreviewableImage
+                                              src={headshotThumbnailUrl}
+                                              previewSrc={headshotPreviewUrl}
+                                              alt={t("headshotAlt", {
+                                                fullName: consent?.subjects?.full_name ?? t("subjectFallback"),
+                                              })}
+                                              className="h-full w-full"
+                                              imageClassName="h-full w-full object-cover"
+                                              lightboxChrome="floating"
+                                            />
+                                          </div>
+                                        </div>
+                                      ) : null}
+
+                                      {consent?.face_match_opt_in && hasLinkedHeadshot ? (
+                                        <ConsentHeadshotReplaceControl
+                                          projectId={project.id}
+                                          consentId={consent.id}
+                                        />
+                                      ) : null}
+                                    </section>
+                                  </div>
+
+                                  {consent ? (
+                                    <ConsentAssetMatchingPanel
+                                      projectId={project.id}
+                                      consentId={consent.id}
+                                    />
+                                  ) : null}
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </details>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-zinc-600">{t("noInvitesYet")}</p>
+            )}
+          </div>
         </section>
 
         <aside>

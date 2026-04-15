@@ -9,6 +9,7 @@ export const FACE_MATCH_JOB_TYPES = [
   "reconcile_project",
   "materialize_asset_faces",
   "compare_materialized_pair",
+  "compare_recurring_profile_materialized_pair",
 ] as const;
 
 export type FaceMatchJobType = (typeof FACE_MATCH_JOB_TYPES)[number];
@@ -232,6 +233,16 @@ export function buildCompareMaterializedPairDedupeKey(
   compareVersion: string,
 ) {
   return `compare_materialized_pair:${normalizeDedupeSegment(consentId)}:${normalizeDedupeSegment(assetId)}:${normalizeDedupeSegment(headshotMaterializationId)}:${normalizeDedupeSegment(assetMaterializationId)}:${normalizeDedupeSegment(compareVersion)}`;
+}
+
+export function buildCompareRecurringProfileMaterializedPairDedupeKey(
+  projectProfileParticipantId: string,
+  assetId: string,
+  recurringSelectionFaceId: string,
+  assetMaterializationId: string,
+  compareVersion: string,
+) {
+  return `compare_recurring_profile_materialized_pair:${normalizeDedupeSegment(projectProfileParticipantId)}:${normalizeDedupeSegment(assetId)}:${normalizeDedupeSegment(recurringSelectionFaceId)}:${normalizeDedupeSegment(assetMaterializationId)}:${normalizeDedupeSegment(compareVersion)}`;
 }
 
 export async function enqueueFaceMatchJob(
@@ -502,6 +513,65 @@ export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMat
     return requeueFaceMatchJob({
       ...request,
       requeueReason: String(input.requeueReason ?? "repair:compare_materialized_pair"),
+    });
+  }
+
+  return enqueueFaceMatchJob(request);
+}
+
+type EnqueueCompareRecurringProfileMaterializedPairInput = {
+  tenantId: string;
+  projectId: string;
+  projectProfileParticipantId: string;
+  profileId: string;
+  recurringHeadshotId: string;
+  recurringHeadshotMaterializationId: string;
+  recurringSelectionFaceId: string;
+  assetId: string;
+  assetMaterializationId: string;
+  compareVersion: string;
+  payload?: Record<string, unknown> | null;
+  mode?: FaceMatchJobDispatchMode;
+  requeueReason?: string | null;
+  supabase?: SupabaseClient;
+};
+
+export async function enqueueCompareRecurringProfileMaterializedPairJob(
+  input: EnqueueCompareRecurringProfileMaterializedPairInput,
+) {
+  const dedupeKey = buildCompareRecurringProfileMaterializedPairDedupeKey(
+    input.projectProfileParticipantId,
+    input.assetId,
+    input.recurringSelectionFaceId,
+    input.assetMaterializationId,
+    input.compareVersion,
+  );
+
+  const request = {
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    jobType: "compare_recurring_profile_materialized_pair" as const,
+    dedupeKey,
+    scopeAssetId: input.assetId,
+    payload: {
+      projectProfileParticipantId: input.projectProfileParticipantId,
+      profileId: input.profileId,
+      recurringHeadshotId: input.recurringHeadshotId,
+      recurringHeadshotMaterializationId: input.recurringHeadshotMaterializationId,
+      recurringSelectionFaceId: input.recurringSelectionFaceId,
+      assetMaterializationId: input.assetMaterializationId,
+      compareVersion: input.compareVersion,
+      ...(input.payload ?? {}),
+    },
+    supabase: input.supabase,
+  };
+
+  if (input.mode === "repair_requeue") {
+    return requeueFaceMatchJob({
+      ...request,
+      requeueReason: String(
+        input.requeueReason ?? "repair:compare_recurring_profile_materialized_pair",
+      ),
     });
   }
 

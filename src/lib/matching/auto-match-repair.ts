@@ -10,6 +10,11 @@ import {
 } from "@/lib/matching/auto-match-fanout-continuations";
 import { getAutoMatchMaterializerVersion } from "@/lib/matching/auto-match-config";
 import { enqueueMaterializeAssetFacesJob, type RepairFaceMatchJobResult } from "@/lib/matching/auto-match-jobs";
+import {
+  enqueueRecurringProjectParticipantReplay,
+  getCurrentProjectRecurringSourceBoundary,
+  listReadyProjectRecurringSourcesPage,
+} from "@/lib/matching/project-recurring-sources";
 
 type RunProjectMatchingRepairInput = {
   projectId: string;
@@ -19,6 +24,8 @@ type RunProjectMatchingRepairInput = {
   photoCursorAssetId?: string | null;
   headshotCursorCreatedAt?: string | null;
   headshotCursorConsentId?: string | null;
+  recurringCursorParticipantCreatedAt?: string | null;
+  recurringCursorProjectProfileParticipantId?: string | null;
   supabase?: SupabaseClient;
 };
 
@@ -27,6 +34,7 @@ export type RunProjectMatchingRepairResult = {
   tenantId: string;
   scannedPhotos: number;
   scannedHeadshots: number;
+  scannedRecurringParticipants: number;
   enqueued: number;
   requeued: number;
   alreadyProcessing: number;
@@ -36,6 +44,8 @@ export type RunProjectMatchingRepairResult = {
   nextPhotoCursorAssetId: string | null;
   nextHeadshotCursorCreatedAt: string | null;
   nextHeadshotCursorConsentId: string | null;
+  nextRecurringCursorParticipantCreatedAt: string | null;
+  nextRecurringCursorProjectProfileParticipantId: string | null;
 };
 
 const DEFAULT_BATCH_SIZE = 500;
@@ -131,6 +141,7 @@ export async function runProjectMatchingRepair(
     tenantId: project.tenant_id,
     scannedPhotos: 0,
     scannedHeadshots: 0,
+    scannedRecurringParticipants: 0,
     enqueued: 0,
     requeued: 0,
     alreadyProcessing: 0,
@@ -140,6 +151,8 @@ export async function runProjectMatchingRepair(
     nextPhotoCursorAssetId: null,
     nextHeadshotCursorCreatedAt: null,
     nextHeadshotCursorConsentId: null,
+    nextRecurringCursorParticipantCreatedAt: null,
+    nextRecurringCursorProjectProfileParticipantId: null,
   };
 
   const photoBoundary = await getPhotoFanoutBoundary(supabase, project.tenant_id, project.id);
@@ -171,6 +184,23 @@ export async function runProjectMatchingRepair(
         })
       : [];
   const uniqueHeadshotAssetIds = Array.from(new Set(consentHeadshots.map((row) => row.headshotAssetId)));
+  const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(supabase, {
+    tenantId: project.tenant_id,
+    projectId: project.id,
+  });
+  const recurringParticipants =
+    recurringBoundary.boundaryParticipantCreatedAt && recurringBoundary.boundaryProjectProfileParticipantId
+      ? await listReadyProjectRecurringSourcesPage(supabase, {
+          tenantId: project.tenant_id,
+          projectId: project.id,
+          boundarySnapshotAt: recurringBoundary.boundarySnapshotAt,
+          limit: batchSize,
+          cursorParticipantCreatedAt: input.recurringCursorParticipantCreatedAt ?? null,
+          cursorProjectProfileParticipantId: input.recurringCursorProjectProfileParticipantId ?? null,
+          boundaryParticipantCreatedAt: recurringBoundary.boundaryParticipantCreatedAt,
+          boundaryProjectProfileParticipantId: recurringBoundary.boundaryProjectProfileParticipantId,
+        })
+      : [];
 
   for (const photo of photos) {
     counters.scannedPhotos += 1;
@@ -221,12 +251,30 @@ export async function runProjectMatchingRepair(
     );
   }
 
+  for (const participant of recurringParticipants) {
+    counters.scannedRecurringParticipants += 1;
+    consumeRepairResult(
+      counters,
+      await enqueueRecurringProjectParticipantReplay(supabase, {
+        tenantId: project.tenant_id,
+        projectId: project.id,
+        projectProfileParticipantId: participant.projectProfileParticipantId,
+        profileId: participant.profileId,
+        reason: `${reason}:recurring_profile_participant`,
+      }),
+    );
+  }
+
   const lastPhoto = photos.at(-1) ?? null;
   const lastHeadshot = consentHeadshots.at(-1) ?? null;
+  const lastRecurringParticipant = recurringParticipants.at(-1) ?? null;
   counters.nextPhotoCursorUploadedAt = lastPhoto?.uploadedAt ?? null;
   counters.nextPhotoCursorAssetId = lastPhoto?.assetId ?? null;
   counters.nextHeadshotCursorCreatedAt = lastHeadshot?.consentCreatedAt ?? null;
   counters.nextHeadshotCursorConsentId = lastHeadshot?.consentId ?? null;
+  counters.nextRecurringCursorParticipantCreatedAt = lastRecurringParticipant?.participantCreatedAt ?? null;
+  counters.nextRecurringCursorProjectProfileParticipantId =
+    lastRecurringParticipant?.projectProfileParticipantId ?? null;
   counters.hasMore =
     (photos.length === batchSize &&
       !(
@@ -237,6 +285,11 @@ export async function runProjectMatchingRepair(
       !(
         lastHeadshot?.consentCreatedAt === headshotBoundary.boundaryConsentCreatedAt &&
         lastHeadshot?.consentId === headshotBoundary.boundaryConsentId
+      )) ||
+    (recurringParticipants.length === batchSize &&
+      !(
+        lastRecurringParticipant?.participantCreatedAt === recurringBoundary.boundaryParticipantCreatedAt &&
+        lastRecurringParticipant?.projectProfileParticipantId === recurringBoundary.boundaryProjectProfileParticipantId
       ));
 
   console.info("[matching][repair] summary", {
@@ -246,6 +299,7 @@ export async function runProjectMatchingRepair(
     reason,
     scannedPhotos: counters.scannedPhotos,
     scannedHeadshots: counters.scannedHeadshots,
+    scannedRecurringParticipants: counters.scannedRecurringParticipants,
     enqueued: counters.enqueued,
     requeued: counters.requeued,
     alreadyProcessing: counters.alreadyProcessing,

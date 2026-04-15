@@ -5,10 +5,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { HttpError } from "@/lib/http/errors";
 import {
   enqueueMaterializeAssetFacesJob,
+  type EnqueueFaceMatchJobResult,
   type RepairFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
 import { getAutoMatchMaterializerVersion } from "@/lib/matching/auto-match-config";
 import { getAutoMatcher, type AutoMatcher } from "@/lib/matching/auto-matcher";
+import { loadProjectFaceAssigneeRowsByIds } from "@/lib/matching/project-face-assignees";
 import {
   assertConsentInProject,
   deriveManualPhotoLinkFaceStatus,
@@ -79,7 +81,8 @@ type FaceLinkRow = {
   asset_face_id: string;
   asset_materialization_id: string;
   asset_id: string;
-  consent_id: string;
+  project_face_assignee_id: string;
+  consent_id: string | null;
   tenant_id: string;
   project_id: string;
   link_source: "manual" | "auto";
@@ -96,7 +99,7 @@ type FaceSuppressionRow = {
   asset_face_id: string;
   asset_materialization_id: string;
   asset_id: string;
-  consent_id: string;
+  project_face_assignee_id: string;
   tenant_id: string;
   project_id: string;
   reason: "manual_unlink" | "manual_replace";
@@ -162,7 +165,7 @@ type FaceReviewFaceReadModel = {
   cropDerivative: AssetFaceImageDerivativeRow | null;
   status: "current" | "occupied_manual" | "occupied_auto" | "suppressed" | "available";
   currentAssignee: {
-    consentId: string;
+    consentId: string | null;
     fullName: string | null;
     email: string | null;
     linkSource: "manual" | "auto";
@@ -416,7 +419,7 @@ async function loadCurrentFaceLinksForAssets(
     const { data, error } = await supabase
       .from("asset_face_consent_links")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -444,9 +447,9 @@ async function loadCurrentFaceSuppressionsForAssets(
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
     const { data, error } = await supabase
-      .from("asset_face_consent_link_suppressions")
+      .from("asset_face_assignee_link_suppressions")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, consent_id, tenant_id, project_id, reason, created_at, created_by",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, tenant_id, project_id, reason, created_at, created_by",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -609,8 +612,10 @@ async function loadSessionItems(
   return ((data ?? []) as FaceReviewSessionItemRow[]) ?? [];
 }
 
-function getPendingMaterializationStatus(result: RepairFaceMatchJobResult): "queued" | "processing" {
-  if (result.alreadyProcessing || result.status === "processing") {
+function getPendingMaterializationStatus(
+  result: RepairFaceMatchJobResult | EnqueueFaceMatchJobResult,
+): "queued" | "processing" {
+  if (("alreadyProcessing" in result && result.alreadyProcessing) || result.status === "processing") {
     return "processing";
   }
 
@@ -1121,8 +1126,16 @@ async function buildSessionReadModel(
     input.supabase,
     input.tenantId,
     input.projectId,
-    Array.from(new Set(faceLinks.map((row) => row.consent_id))),
+    Array.from(
+      new Set(faceLinks.map((row) => row.consent_id).filter((value): value is string => Boolean(value))),
+    ),
   );
+  const assigneeRowsById = await loadProjectFaceAssigneeRowsByIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assigneeIds: Array.from(new Set(faceSuppressions.map((row) => row.project_face_assignee_id))),
+  });
   const currentMaterializationIdByAssetId = new Map(
     Array.from(materializations.entries()).map(([assetId, materialization]) => [assetId, materialization.id]),
   );
@@ -1143,7 +1156,11 @@ async function buildSessionReadModel(
   const fallbackAssetIds = new Set(
     fallbacks.filter((row) => row.consent_id === input.consentId).map((row) => row.asset_id),
   );
-  const suppressionKeySet = new Set(faceSuppressions.map((row) => `${row.asset_face_id}:${row.consent_id}`));
+  const suppressionKeySet = new Set(
+    faceSuppressions
+      .filter((row) => (assigneeRowsById.get(row.project_face_assignee_id)?.consent_id ?? null) === input.consentId)
+      .map((row) => `${row.asset_face_id}:${input.consentId}`),
+  );
 
   const items = input.items.map((item) => {
     const asset = assets.get(item.asset_id) ?? null;
@@ -1171,7 +1188,7 @@ async function buildSessionReadModel(
       },
       faces: faces.map((face) => {
         const assignee = faceLinksByFaceId.get(face.id) ?? null;
-        const summary = assignee ? consentSummaries.get(assignee.consent_id) : undefined;
+        const summary = assignee?.consent_id ? consentSummaries.get(assignee.consent_id) : undefined;
         const isSuppressedForConsent = suppressionKeySet.has(`${face.id}:${input.consentId}`);
         const isCurrentConsentFace = currentConsentFaceId === face.id;
         return {

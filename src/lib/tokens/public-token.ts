@@ -26,3 +26,17 @@ export function deriveInviteToken(input: {
 
   return createHmac("sha256", secret).update(payload, "utf8").digest("hex");
 }
+
+export function deriveRecurringProfileConsentToken(input: { requestId: string }) {
+  const secret = requireTokenSecret();
+  const payload = `recurring-profile-consent:${input.requestId}`;
+
+  return createHmac("sha256", secret).update(payload, "utf8").digest("hex");
+}
+
+export function deriveRecurringProfileRevokeToken(input: { consentId: string }) {
+  const secret = requireTokenSecret();
+  const payload = `recurring-profile-revoke:${input.consentId}`;
+
+  return createHmac("sha256", secret).update(payload, "utf8").digest("hex");
+}

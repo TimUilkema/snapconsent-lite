@@ -23,11 +23,15 @@ import {
   claimFaceMatchFanoutContinuations,
   completeFaceMatchFanoutContinuationBatch,
   createOrResetFanoutContinuationsForMaterializedAsset,
+  enqueueFaceMatchFanoutContinuation,
   failFaceMatchFanoutContinuation,
+  getPhotoFanoutBoundary,
   loadConsentEligibility,
   processClaimedFanoutContinuation,
+  supersedeRecurringProfileFanoutContinuations,
   type ClaimedFanoutContinuationRow,
 } from "@/lib/matching/auto-match-fanout-continuations";
+import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
 import {
   ensureAssetFaceMaterialization,
   loadConsentHeadshotMaterialization,
@@ -38,6 +42,7 @@ import {
   type AssetFaceMaterializationRow,
 } from "@/lib/matching/face-materialization";
 import { ensureMaterializedFaceCompare } from "@/lib/matching/materialized-face-compare";
+import { ensureRecurringProfileMaterializedFaceCompare } from "@/lib/matching/recurring-materialized-face-compare";
 import { reconcilePhotoFaceCanonicalStateForAsset } from "@/lib/matching/consent-photo-matching";
 import {
   getAutoMatcher,
@@ -156,6 +161,23 @@ type CompareMaterializedPairPayload = {
   headshotMaterializationId: string;
   assetMaterializationId: string;
   compareVersion: string;
+};
+
+type CompareRecurringProfileMaterializedPairPayload = {
+  projectProfileParticipantId: string;
+  profileId: string;
+  recurringHeadshotId: string;
+  recurringHeadshotMaterializationId: string;
+  recurringSelectionFaceId: string;
+  assetMaterializationId: string;
+  compareVersion: string;
+};
+
+type ReconcileProjectPayload = {
+  replayKind: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  reason: string | null;
 };
 
 const MAX_BATCH_SIZE = 200;
@@ -386,6 +408,57 @@ function parseCompareMaterializedPairPayload(payload: Record<string, unknown> | 
     headshotMaterializationId,
     assetMaterializationId,
     compareVersion,
+  };
+}
+
+function parseCompareRecurringProfileMaterializedPairPayload(
+  payload: Record<string, unknown> | null | undefined,
+): CompareRecurringProfileMaterializedPairPayload {
+  const projectProfileParticipantId = String(payload?.projectProfileParticipantId ?? "").trim();
+  const profileId = String(payload?.profileId ?? "").trim();
+  const recurringHeadshotId = String(payload?.recurringHeadshotId ?? "").trim();
+  const recurringHeadshotMaterializationId = String(payload?.recurringHeadshotMaterializationId ?? "").trim();
+  const recurringSelectionFaceId = String(payload?.recurringSelectionFaceId ?? "").trim();
+  const assetMaterializationId = String(payload?.assetMaterializationId ?? "").trim();
+  const compareVersion = normalizeVersionToken(payload?.compareVersion, getAutoMatchCompareVersion());
+
+  if (
+    !projectProfileParticipantId
+    || !profileId
+    || !recurringHeadshotId
+    || !recurringHeadshotMaterializationId
+    || !recurringSelectionFaceId
+    || !assetMaterializationId
+  ) {
+    throw new HttpError(
+      400,
+      "face_match_invalid_payload",
+      "Recurring compare jobs require participant, source, selection, and asset materialization ids.",
+    );
+  }
+
+  return {
+    projectProfileParticipantId,
+    profileId,
+    recurringHeadshotId,
+    recurringHeadshotMaterializationId,
+    recurringSelectionFaceId,
+    assetMaterializationId,
+    compareVersion,
+  };
+}
+
+function parseReconcileProjectPayload(payload: Record<string, unknown> | null | undefined): ReconcileProjectPayload {
+  const replayKind = String(payload?.replayKind ?? "").trim();
+  const projectProfileParticipantId = String(payload?.projectProfileParticipantId ?? "").trim();
+  const profileId = String(payload?.profileId ?? "").trim();
+  const reason = String(payload?.reason ?? "").trim();
+
+  return {
+    replayKind: replayKind.length > 0 ? replayKind : null,
+    projectProfileParticipantId: projectProfileParticipantId.length > 0 ? projectProfileParticipantId : null,
+    profileId: profileId.length > 0 ? profileId : null,
+    reason: reason.length > 0 ? reason : null,
   };
 }
 
@@ -1251,6 +1324,7 @@ async function processClaimedFaceMatchFanoutContinuation(
     cursorSortAt: batchResult.nextCursorSortAt,
     cursorAssetId: batchResult.nextCursorAssetId,
     cursorConsentId: batchResult.nextCursorConsentId,
+    cursorProjectProfileParticipantId: batchResult.nextCursorProjectProfileParticipantId,
   });
 
   if (completion.outcome !== "completed") {
@@ -1307,6 +1381,7 @@ async function executeClaimedFaceMatchFanoutContinuation(
         nextCursorSortAt: continuation.cursor_sort_at,
         nextCursorAssetId: continuation.cursor_asset_id,
         nextCursorConsentId: continuation.cursor_consent_id,
+        nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
       };
     }
 
@@ -1333,6 +1408,7 @@ async function executeClaimedFaceMatchFanoutContinuation(
       nextCursorSortAt: continuation.cursor_sort_at,
       nextCursorAssetId: continuation.cursor_asset_id,
       nextCursorConsentId: continuation.cursor_consent_id,
+      nextCursorProjectProfileParticipantId: continuation.cursor_project_profile_participant_id,
     };
   }
 }
@@ -1449,6 +1525,91 @@ async function enqueueMaterializeJobForIntake(
   }
 
   if (job.job_type === "reconcile_project") {
+    const payload = parseReconcileProjectPayload(job.payload);
+    if (payload.replayKind === "recurring_profile_source" && payload.projectProfileParticipantId) {
+      const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+        tenantId: job.tenant_id,
+        projectId: job.project_id,
+        projectProfileParticipantId: payload.projectProfileParticipantId,
+      });
+
+      if (!currentSource) {
+        const supersededCount = await supersedeRecurringProfileFanoutContinuations(supabase, {
+          tenantId: job.tenant_id,
+          projectId: job.project_id,
+          projectProfileParticipantId: payload.projectProfileParticipantId,
+        });
+
+        return completeJobWithMetrics(
+          supabase,
+          job,
+          startedAt,
+          {
+            candidateCount: 0,
+            scoredPairs: 0,
+            skippedIneligible: false,
+            pipelineMode: "materialized",
+            replayKind: payload.replayKind,
+            recurringSourceReady: false,
+            replayReason: payload.reason,
+            supersededContinuations: supersededCount,
+          },
+          { skippedIneligible: false, scoredPairs: 0, candidatePairs: 0 },
+        );
+      }
+
+      const boundary = await getPhotoFanoutBoundary(supabase, job.tenant_id, job.project_id);
+      let replayScheduled = false;
+
+      if (boundary.boundaryPhotoUploadedAt && boundary.boundaryPhotoAssetId) {
+        const enqueueResult = await enqueueFaceMatchFanoutContinuation(supabase, {
+          tenantId: job.tenant_id,
+          projectId: job.project_id,
+          direction: "recurring_profile_to_photos",
+          sourceProjectProfileParticipantId: currentSource.projectProfileParticipantId,
+          sourceProfileId: currentSource.profileId,
+          sourceHeadshotId: currentSource.recurringHeadshotId,
+          sourceSelectionFaceId: currentSource.selectionFaceId,
+          sourceMaterializationId: currentSource.recurringHeadshotMaterializationId,
+          sourceMaterializerVersion: getAutoMatchMaterializerVersion(),
+          compareVersion: getAutoMatchCompareVersion(),
+          boundarySnapshotAt: boundary.boundarySnapshotAt,
+          boundarySortAt: boundary.boundaryPhotoUploadedAt,
+          boundaryAssetId: boundary.boundaryPhotoAssetId,
+          dispatchMode: "backfill_repair",
+          resetTerminal: true,
+        });
+        replayScheduled =
+          enqueueResult.enqueued || enqueueResult.requeued || enqueueResult.alreadyProcessing || enqueueResult.alreadyQueued;
+      }
+
+      const supersededCount = await supersedeRecurringProfileFanoutContinuations(supabase, {
+        tenantId: job.tenant_id,
+        projectId: job.project_id,
+        projectProfileParticipantId: currentSource.projectProfileParticipantId,
+        keepSourceMaterializationId: currentSource.recurringHeadshotMaterializationId,
+        keepSelectionFaceId: currentSource.selectionFaceId,
+      });
+
+      return completeJobWithMetrics(
+        supabase,
+        job,
+        startedAt,
+        {
+          candidateCount: replayScheduled ? 1 : 0,
+          scoredPairs: 0,
+          skippedIneligible: false,
+          pipelineMode: "materialized",
+          replayKind: payload.replayKind,
+          recurringSourceReady: true,
+          replayReason: payload.reason,
+          replayScheduled,
+          supersededContinuations: supersededCount,
+        },
+        { skippedIneligible: false, scoredPairs: 0, candidatePairs: replayScheduled ? 1 : 0 },
+      );
+    }
+
     return completeJobWithMetrics(
       supabase,
       job,
@@ -1724,6 +1885,116 @@ async function processCompareMaterializedPairJob(
   );
 }
 
+async function isCurrentRecurringMaterializedPair(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  payload: CompareRecurringProfileMaterializedPairPayload,
+  assetMaterialization: AssetFaceMaterializationRow,
+) {
+  if (!job.scope_asset_id) {
+    return false;
+  }
+
+  const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+    tenantId: job.tenant_id,
+    projectId: job.project_id,
+    projectProfileParticipantId: payload.projectProfileParticipantId,
+  });
+  if (!currentSource) {
+    return false;
+  }
+
+  if (
+    currentSource.profileId !== payload.profileId
+    || currentSource.recurringHeadshotId !== payload.recurringHeadshotId
+    || currentSource.recurringHeadshotMaterializationId !== payload.recurringHeadshotMaterializationId
+    || currentSource.selectionFaceId !== payload.recurringSelectionFaceId
+  ) {
+    return false;
+  }
+
+  const currentAsset = await loadCurrentAssetFaceMaterialization(
+    supabase,
+    job.tenant_id,
+    job.project_id,
+    job.scope_asset_id,
+    assetMaterialization.materializer_version,
+    { includeFaces: false },
+  );
+  if (!currentAsset || currentAsset.materialization.id !== assetMaterialization.id) {
+    return false;
+  }
+
+  return true;
+}
+
+async function processCompareRecurringProfileMaterializedPairJob(
+  supabase: SupabaseClient,
+  job: ClaimedFaceMatchJobRow,
+  matcher: AutoMatcher,
+): Promise<ProcessClaimedFaceMatchJobResult> {
+  const startedAt = performance.now();
+  if (!job.scope_asset_id) {
+    return completeJobWithMetrics(
+      supabase,
+      job,
+      startedAt,
+      { candidateCount: 0, scoredPairs: 0, skippedIneligible: true, pipelineMode: "materialized" },
+      { skippedIneligible: true, scoredPairs: 0, candidatePairs: 0 },
+    );
+  }
+
+  const payload = parseCompareRecurringProfileMaterializedPairPayload(job.payload);
+  const compare = await ensureRecurringProfileMaterializedFaceCompare({
+    supabase,
+    matcher,
+    tenantId: job.tenant_id,
+    projectId: job.project_id,
+    projectProfileParticipantId: payload.projectProfileParticipantId,
+    profileId: payload.profileId,
+    assetId: job.scope_asset_id,
+    recurringHeadshotId: payload.recurringHeadshotId,
+    recurringHeadshotMaterializationId: payload.recurringHeadshotMaterializationId,
+    recurringSelectionFaceId: payload.recurringSelectionFaceId,
+    assetMaterializationId: payload.assetMaterializationId,
+    compareVersion: payload.compareVersion,
+  });
+  const isCurrent = await isCurrentRecurringMaterializedPair(
+    supabase,
+    job,
+    payload,
+    compare.assetMaterialization,
+  );
+
+  if (isCurrent) {
+    await reconcilePhotoFaceCanonicalStateForAsset({
+      supabase,
+      tenantId: job.tenant_id,
+      projectId: job.project_id,
+      assetId: job.scope_asset_id,
+    });
+  }
+
+  return completeJobWithMetrics(
+    supabase,
+    job,
+    startedAt,
+    {
+      candidateCount: 1,
+      scoredPairs: 1,
+      skippedIneligible: false,
+      pipelineMode: "materialized",
+      compareStatus: compare.compare.compare_status,
+      currentVersionedPair: isCurrent,
+      recurringProfileId: payload.profileId,
+      projectProfileParticipantId: payload.projectProfileParticipantId,
+      winningSimilarity: compare.compare.winning_similarity,
+      winningAssetFaceRank: compare.compare.winning_asset_face_rank,
+    },
+    { skippedIneligible: false, scoredPairs: 1, candidatePairs: 1 },
+  );
+}
+
 async function processClaimedFaceMatchJobRaw(
   supabase: SupabaseClient,
   job: ClaimedFaceMatchJobRow,
@@ -1840,6 +2111,27 @@ async function processClaimedFaceMatchJob(
   maxComparisonsPerJob: number,
 ): Promise<ProcessClaimedFaceMatchJobResult> {
   const pipelineMode = getAutoMatchPipelineMode();
+  if (job.job_type === "compare_materialized_pair") {
+    return processCompareMaterializedPairJob(
+      supabase,
+      job,
+      matcher,
+      confidenceThreshold,
+      reviewMinConfidence,
+      persistResults,
+      persistFaceEvidence,
+      resultsMaxPerJob,
+    );
+  }
+
+  if (job.job_type === "compare_recurring_profile_materialized_pair") {
+    return processCompareRecurringProfileMaterializedPairJob(
+      supabase,
+      job,
+      matcher,
+    );
+  }
+
   if (pipelineMode === "raw") {
     return processClaimedFaceMatchJobRaw(
       supabase,
@@ -1860,19 +2152,6 @@ async function processClaimedFaceMatchJob(
 
   if (job.job_type === "materialize_asset_faces") {
     return processMaterializeAssetFacesJob(supabase, job, matcher);
-  }
-
-  if (job.job_type === "compare_materialized_pair") {
-    return processCompareMaterializedPairJob(
-      supabase,
-      job,
-      matcher,
-      confidenceThreshold,
-      reviewMinConfidence,
-      persistResults,
-      persistFaceEvidence,
-      resultsMaxPerJob,
-    );
   }
 
   throw new HttpError(400, "face_match_invalid_job_type", "Unsupported face-match job type.");
@@ -2047,7 +2326,9 @@ export async function runAutoMatchWorker(
     counters.candidatePairs += result.candidatePairs;
   });
   const shouldClaimContinuationsThisRun = claimedJobs.every(
-    (job) => job.job_type === "compare_materialized_pair",
+    (job) =>
+      job.job_type === "compare_materialized_pair"
+      || job.job_type === "compare_recurring_profile_materialized_pair",
   );
 
   let claimedContinuations: ClaimedFanoutContinuationRow[] = [];

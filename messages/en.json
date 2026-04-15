@@ -174,9 +174,12 @@
       "previewConsentSummaryLabel": "Consent summary",
       "previewHeadshotLabel": "Headshot",
       "previewNoEmail": "No email",
+      "previewUnknownPerson": "Profile match",
       "previewUnknownValue": "Unknown",
       "previewStatusActive": "Active",
       "previewStatusRevoked": "Revoked",
+      "previewIdentityProjectConsent": "Project consent",
+      "previewIdentityRecurringProfile": "Recurring profile",
       "previewEnabled": "Enabled",
       "previewDisabled": "Disabled",
       "previewRemoveLink": "Remove link",
@@ -203,8 +206,13 @@
       "previewSavingFaceLink": "Saving link...",
       "previewCurrentPerson": "Current",
       "previewLinkedToFace": "Already linked",
+      "previewLinkedPeopleLoading": "Loading linked people...",
       "previewPickerLoading": "Loading people...",
       "previewPickerEmpty": "No eligible people are available for this image.",
+      "previewRecurringBlockedMissing": "Project-specific recurring consent is required before this profile match can be assigned.",
+      "previewRecurringBlockedPending": "A project-specific recurring consent request is still pending for this profile match.",
+      "previewRecurringBlockedRevoked": "This project-specific recurring consent was revoked, so this profile match cannot be assigned.",
+      "previewOpenCandidateImage": "Open {name}",
       "previewShowHiddenFaces": "Show hidden faces ({count})",
       "previewBlockFace": "Block face",
       "previewBlockingFace": "Blocking face...",
@@ -251,14 +259,16 @@
       "breadcrumbProjects": "Projects",
       "projectSectionsAria": "Project sections",
       "exportProject": "Export project",
-      "sectionInvites": "Invites",
+      "sectionParticipants": "Participants",
       "sectionAssets": "Assets",
-      "subtitle": "Manage consent invites, review subject details, and match project photos to signed consents.",
+      "subtitle": "Manage known profiles, one-off consent intake, subject details, and project photo matching in one place.",
       "statsStatus": "Status",
       "statsInvites": "Invites",
       "statsSignedConsents": "Signed consents",
-      "invitesTitle": "Invites",
-      "invitesSubtitle": "Sent invites, signed consent details, headshots, and manual matching live here.",
+      "participantsTitle": "Participants",
+      "participantsSubtitle": "Known recurring profiles and one-off project signers live together here without changing the one-off invite flow.",
+      "oneOffParticipantsTitle": "One-off signers and invite links",
+      "oneOffParticipantsSubtitle": "Existing QR and public invite links stay project-local and unchanged in this section.",
       "unknownSubject": "Unknown subject",
       "unknownEmail": "Unknown email",
       "inviteIdLabel": "Invite ID:",
@@ -288,6 +298,77 @@
       "noInvitesYet": "No invites yet.",
       "assetsTitle": "Assets",
       "assetsSubtitle": "Upload project photos, filter large collections, and inspect linked subjects."
+    },
+    "participants": {
+      "knownProfilesTitle": "Known profiles",
+      "knownProfilesSubtitle": "Add existing recurring profiles to this project and track project-specific consent separately from baseline consent.",
+      "knownProfilesEmpty": "No recurring profiles have been added to this project yet.",
+      "baselineLabel": "Baseline",
+      "matchSourceLabel": "Match source",
+      "archivedProfile": "Archived profile",
+      "archivedProfileHelper": "Archived profiles remain visible for project history, but new project-specific requests are blocked.",
+      "participantAddedLabel": "Added to project",
+      "latestProjectStatusLabel": "Project consent status",
+      "noRequestYet": "No project request yet",
+      "templateLine": "Template: {name} {version}",
+      "missing": "No project consent request yet.",
+      "pendingUntil": "Pending until {date}",
+      "signedAt": "Signed {date}",
+      "revokedAt": "Revoked {date}",
+      "projectState": {
+        "missing": "Missing",
+        "pending": "Pending",
+        "signed": "Signed",
+        "revoked": "Revoked"
+      },
+      "baselineState": {
+        "missing": "Missing",
+        "pending": "Pending",
+        "signed": "Signed",
+        "revoked": "Revoked"
+      },
+      "matchSourceState": {
+        "blocked_no_opt_in": "Not authorized",
+        "missing_headshot": "No headshot",
+        "materializing": "Materializing",
+        "no_face_detected": "No face",
+        "needs_face_selection": "Select face",
+        "unusable_headshot": "Unusable",
+        "ready": "Ready"
+      },
+      "matchSourceDescription": {
+        "blocked_no_opt_in": "Baseline matching opt-in is required before this participant can have a reusable match source.",
+        "missing_headshot": "Upload one recurring profile headshot before this participant can become a future match source.",
+        "materializing": "The current recurring profile headshot is still being analyzed.",
+        "no_face_detected": "The current recurring profile headshot does not contain a detectable face.",
+        "needs_face_selection": "The recurring profile headshot needs one face to be chosen before it is usable.",
+        "unusable_headshot": "A face was detected, but this recurring profile headshot is not usable for matching.",
+        "ready": "This participant has a ready recurring profile match source."
+      },
+      "addExistingProfile": {
+        "title": "Add existing profile",
+        "subtitle": "Choose a recurring profile from the directory. Adding it to the project does not create signed consent.",
+        "label": "Profile",
+        "empty": "No more active profiles are available to add.",
+        "submit": "Add to project",
+        "submitting": "Adding..."
+      },
+      "request": {
+        "templateLabel": "Consent template",
+        "selectTemplatePlaceholder": "Select a template",
+        "scopeStandard": "Standard",
+        "scopeOrganization": "Organization",
+        "emptyTemplates": "No published consent templates are available for project requests.",
+        "submit": "Create project request",
+        "submitting": "Creating request...",
+        "expiresLabel": "Expires",
+        "emailLabel": "Request email",
+        "linkLabel": "Project consent link",
+        "copy": "Copy link",
+        "open": "Open link",
+        "copied": "Project consent link copied.",
+        "copyError": "Unable to copy the project consent link."
+      }
     }
   },
   "publicInvite": {
@@ -355,6 +436,61 @@
       "already": "Consent was already revoked.",
       "invalid": "This revoke link is invalid.",
       "expired": "This revoke link has expired."
+    }
+  },
+  "publicRecurringConsent": {
+    "title": "Recurring consent form",
+    "profileLabel": "{name} ({email})",
+    "success": "Recurring consent submitted successfully.",
+    "duplicate": "This recurring consent request was already submitted.",
+    "receiptQueued": "Recurring consent saved. Receipt email will be retried.",
+    "cannotSubmit": "This recurring consent request cannot accept a new submission.",
+    "backToHome": "Return to home",
+    "messages": {
+      "signed": "This recurring consent request has already been signed.",
+      "expired": "This recurring consent request has expired.",
+      "unavailable": "This recurring consent request is no longer available."
+    },
+    "errors": {
+      "invalid": "This recurring consent link is invalid.",
+      "expired": "This recurring consent link has expired.",
+      "unavailable": "This recurring consent request is no longer available.",
+      "server": "Unable to submit recurring consent right now. Please try again.",
+      "fallback": "Unable to process this recurring consent request."
+    },
+    "form": {
+      "fullNameLabel": "Full name",
+      "emailLabel": "Email",
+      "scopeLabel": "Scope",
+      "durationLabel": "Duration",
+      "requiredField": "Required",
+      "selectPlaceholder": "Select an option",
+      "emptySelectionOption": "No selection",
+      "emptyCheckboxOptionLabel": "Empty",
+      "faceMatchOptIn": "I consent to facial matching to help link photos where I appear.",
+      "headshotLaterTitle": "Headshot after consent",
+      "headshotLaterBody": "If you opt in to facial matching, a team member may ask you to add a private headshot later so your recurring profile can be matched in projects.",
+      "consentTextTitle": "Consent text",
+      "consentTextUnavailable": "Consent template unavailable.",
+      "submit": "Submit consent",
+      "errors": {
+        "consentAcknowledgementRequired": "Confirm that you have read the consent statement and agree before submitting."
+      },
+      "consentAcknowledgementLabel": "I have read the consent statement and agree to its contents."
+    }
+  },
+  "publicRecurringRevoke": {
+    "title": "Revoke recurring consent",
+    "subtitle": "Use this page to revoke future processing for your recurring consent.",
+    "profileLabel": "{name} ({email})",
+    "reasonLabel": "Reason (optional)",
+    "submit": "Revoke consent",
+    "backToHome": "Return to home",
+    "messages": {
+      "revoked": "Recurring consent revoked successfully.",
+      "already": "Recurring consent was already revoked.",
+      "invalid": "This recurring revoke link is invalid.",
+      "expired": "This recurring revoke link has expired."
     }
   },
   "templates": {
@@ -508,15 +644,17 @@
       "apply": "Apply filters",
       "clear": "Clear filters"
     },
-    "table": {
-      "columnName": "Name",
-      "columnType": "Type",
-      "columnEmail": "Email",
-      "columnStatus": "Status",
-      "columnUpdated": "Updated",
-      "columnActions": "Actions",
-      "noType": "No type",
-      "noActions": "No actions",
+      "table": {
+        "columnName": "Name",
+        "columnType": "Type",
+        "columnEmail": "Email",
+        "columnBaselineConsent": "Baseline consent",
+        "columnMatching": "Matching",
+        "columnStatus": "Status",
+        "columnUpdated": "Updated",
+        "columnActions": "Actions",
+        "noType": "No type",
+        "noActions": "No actions",
       "archivedTypeBadge": "Type archived"
     },
     "empty": {
@@ -529,12 +667,177 @@
     },
     "deferred": {
       "title": "Deferred follow-up work",
-      "body": "Consent requests, reminders, bulk import, and external directory sync are intentionally deferred. This slice only establishes the recurring profile directory foundation."
+      "body": "Extra consent requests, bulk import, and external directory sync are still deferred. Baseline follow-up now records placeholder delivery only and does not send real email yet."
     },
-    "status": {
-      "active": "Active",
-      "archived": "Archived"
+    "detail": {
+      "viewDetails": "View details",
+      "hideDetails": "Hide details",
+      "loading": "Loading profile details...",
+      "currentTitle": "Current baseline",
+      "pendingTitle": "Current pending request",
+      "activeConsentTitle": "Active baseline consent",
+      "latestRevokedTitle": "Latest revoked baseline consent",
+      "actionsTitle": "Current actions",
+      "requestHint": "Send a new baseline request for this profile. Placeholder delivery will be recorded, but no email will be sent yet.",
+      "revokedHint": "This baseline consent was revoked. Send a new request to ask again. Placeholder delivery will be recorded, but no email will be sent yet.",
+      "noHistory": "No baseline request or signed baseline consent yet.",
+      "requestHistoryTitle": "Request history",
+      "consentHistoryTitle": "Baseline consent history",
+      "requestHistoryEmpty": "No baseline requests yet.",
+      "consentHistoryEmpty": "No signed baseline consent history yet.",
+      "nameLabel": "Name",
+      "emailLabel": "Email",
+      "typeLabel": "Type",
+      "updatedLabel": "Updated",
+      "templateLabel": "Template",
+      "createdAtLabel": "Created",
+      "changedAtLabel": "Latest change",
+      "expiresAtLabel": "Expires",
+      "signedAtLabel": "Signed",
+      "revokedAtLabel": "Revoked",
+      "scopeLabel": "Scope",
+      "durationLabel": "Duration",
+      "receiptSentAtLabel": "Receipt sent",
+      "unknownValue": "Unknown",
+      "noType": "No type",
+      "notSent": "Not sent",
+      "notRevoked": "Not revoked",
+      "signedBadge": "Signed",
+      "revokedBadge": "Revoked",
+      "readOnly": "You can inspect this profile, but only workspace owners and admins can manage baseline consent.",
+      "archivedReadOnly": "Archived profiles remain visible here, but baseline actions are disabled.",
+      "requestHistory": {
+        "status": {
+          "pending": "Pending",
+          "signed": "Signed",
+          "expired": "Expired",
+          "cancelled": "Cancelled",
+          "superseded": "Superseded"
+        }
+      }
     },
+      "baseline": {
+      "state": {
+        "missing": "Missing",
+        "pending": "Pending",
+        "signed": "Signed",
+        "revoked": "Revoked"
+      },
+      "activity": {
+        "missing": "No baseline consent request yet.",
+        "unknown": "Latest activity unavailable.",
+        "pendingUntil": "Pending until {date}",
+        "signedAt": "Signed {date}",
+        "revokedAt": "Revoked {date}",
+        "latestCancelledAt": "Latest request cancelled {date}",
+        "latestReplacedAt": "Latest request replaced {date}",
+        "latestExpiredAt": "Latest request expired {date}"
+      },
+      "request": {
+        "templateLabel": "Published template",
+        "scopeStandard": "Standard",
+        "scopeOrganization": "Organization",
+        "submit": "Create baseline request",
+        "submitting": "Creating baseline request...",
+        "emptyTemplates": "No published consent templates are available for baseline requests."
+      },
+      "pending": {
+        "emailLabel": "Request email",
+        "expiresLabel": "Expires",
+        "linkLabel": "Baseline consent link",
+        "copy": "Copy link",
+        "open": "Open link",
+        "cancel": "Cancel request",
+        "cancelling": "Cancelling...",
+        "replace": "Replace request",
+        "replacing": "Replacing...",
+        "copied": "Baseline link copied.",
+        "copyError": "Unable to copy the baseline link."
+      },
+      "followUp": {
+        "sendReminder": "Send reminder",
+        "sendingReminder": "Recording reminder...",
+        "sendNewRequest": "Send new request",
+        "sendingNewRequest": "Preparing new request...",
+        "latestTitle": "Latest follow-up",
+        "actionLabel": "Action",
+        "statusLabel": "Status",
+        "targetEmailLabel": "Target email",
+        "attemptedAtLabel": "Recorded",
+        "placeholderHelper": "Latest follow-up recorded in placeholder mode. Email delivery is not configured yet.",
+        "actionLabels": {
+          "reminder": "Reminder",
+          "new_request": "New request"
+        },
+        "statusLabels": {
+          "recorded": "Recorded",
+          "failed": "Failed"
+        },
+        "success": {
+          "reminder": "Reminder recorded for the current request. Email delivery is not configured yet. Copy or open the link to share it manually.",
+          "newRequest": "New request created and placeholder delivery recorded. Email delivery is not configured yet. Copy or open the new link to share it manually."
+        }
+        }
+      },
+      "matching": {
+        "state": {
+          "blocked_no_opt_in": "Not authorized",
+          "missing_headshot": "No headshot",
+          "materializing": "Materializing",
+          "no_face_detected": "No face",
+          "needs_face_selection": "Select face",
+          "unusable_headshot": "Unusable",
+          "ready": "Ready"
+        },
+        "description": {
+          "blocked_no_opt_in": "An active baseline consent with matching opt-in is required.",
+          "missing_headshot": "Upload one recurring profile headshot to create a future match source.",
+          "materializing": "The current recurring profile headshot is still being analyzed.",
+          "no_face_detected": "No face was detected in the current recurring profile headshot.",
+          "needs_face_selection": "Choose one face from the current recurring profile headshot.",
+          "unusable_headshot": "A face was detected, but the current recurring profile headshot is not usable for matching.",
+          "ready": "This recurring profile has one selected face and is ready as a future match source."
+        }
+      },
+      "headshot": {
+        "title": "Matching headshot",
+        "upload": "Upload headshot",
+        "replace": "Replace headshot",
+        "uploading": "Uploading headshot...",
+        "authorizationRequired": "Enable matching in the active baseline consent before uploading or replacing a recurring profile headshot.",
+        "previewAlt": "Recurring profile headshot preview",
+        "previewHelp": "All detected faces are stored for review. Only one selected face becomes the future matching source.",
+        "selection": {
+          "auto": "Auto selected",
+          "manual": "Manual selection"
+        },
+        "meta": {
+          "fileName": "Current file",
+          "uploadedAt": "Uploaded",
+          "faceCount": "Detected faces",
+          "materializedAt": "Materialized",
+          "notAvailable": "Not available"
+        },
+        "faceSelection": {
+          "title": "Face selection required",
+          "help": "More than one plausible face was detected. Choose the correct face for this recurring profile.",
+          "faceLabel": "Face {index}",
+          "metrics": "Area {area}% · Confidence {confidence}%",
+          "select": "Use this face",
+          "selecting": "Saving...",
+          "selected": "Selected"
+        },
+        "success": {
+          "uploaded": "Headshot uploaded and analyzed.",
+          "replaced": "Headshot replaced and analyzed.",
+          "repairQueued": "Headshot uploaded. Direct analysis did not finish, so repair has been queued.",
+          "faceSelected": "Face selection saved."
+        }
+      },
+      "status": {
+        "active": "Active",
+        "archived": "Archived"
+      },
     "actions": {
       "createProfile": "Create profile",
       "creatingProfile": "Creating profile...",
@@ -543,6 +846,7 @@
       "archiveType": "Archive type",
       "archivingType": "Archiving type...",
       "requestBaselineConsent": "Request baseline consent",
+      "copyBaselineLink": "Copy baseline link",
       "sendReminder": "Send reminder",
       "requestExtraConsent": "Request extra consent",
       "archiveProfile": "Archive profile",
@@ -575,7 +879,15 @@
       "invalid_file_size": "Invalid file size.",
       "invalid_profile_name": "Profile name must be between 2 and 160 characters.",
       "invalid_profile_email": "Enter a valid email address.",
+      "invalid_content_hash": "Invalid file hash.",
+      "baseline_follow_up_template_required": "Select a published template before sending a new request.",
+      "baseline_follow_up_delivery_record_failed": "Follow-up could not be recorded. No email was sent.",
       "invalid_profile_type_label": "Profile type labels must be between 2 and 80 characters.",
+      "recurring_profile_archived": "Archived profiles cannot receive recurring headshots.",
+      "recurring_profile_face_match_not_opted_in": "Active baseline matching opt-in is required for recurring profile headshots.",
+      "recurring_profile_headshot_not_found": "Recurring profile headshot not found.",
+      "recurring_profile_headshot_face_not_found": "Selected recurring profile face not found.",
+      "recurring_profile_headshot_not_materialized": "Recurring profile headshot is not ready for face selection.",
       "recurring_profile_management_forbidden": "Only workspace owners and admins can manage profiles.",
       "recurring_profile_not_found": "Profile not found.",
       "recurring_profile_type_not_found": "Profile type not found.",
@@ -598,6 +910,19 @@
       "duplicate_structured_option_key": "Each option key must be unique within its field.",
       "invalid_structured_text_limits": "Structured text settings are invalid.",
       "template_publish_conflict": "Another version was published first. Refresh and try again."
+      ,
+      "baseline_template_unavailable": "The selected published template is not available.",
+      "baseline_consent_already_signed": "This profile already has an active baseline consent.",
+      "recurring_profile_archived": "Archived profiles cannot receive baseline consent requests.",
+      "baseline_consent_request_not_found": "Baseline consent request not found.",
+      "baseline_consent_request_not_pending": "This baseline consent request is no longer pending.",
+      "baseline_consent_request_cancel_failed": "Unable to cancel this baseline consent request.",
+      "baseline_consent_request_replace_failed": "Unable to replace this baseline consent request.",
+      "project_profile_participant_not_found": "Project participant not found.",
+      "project_profile_participant_forbidden": "You do not have access to this project participant.",
+      "project_consent_already_signed": "This profile already has an active project consent.",
+      "project_template_unavailable": "The selected published template is not available for this project request.",
+      "default_template_unavailable": "The project default template is not available. Choose another published template."
     }
   }
 }

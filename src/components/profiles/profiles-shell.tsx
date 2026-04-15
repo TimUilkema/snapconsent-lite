@@ -1,14 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { Fragment, FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 
+import { ProfileHeadshotPanel } from "@/components/profiles/profile-headshot-panel";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 import { formatDateTime } from "@/lib/i18n/format";
-import type { RecurringProfilesPageData } from "@/lib/profiles/profile-directory-service";
+import type {
+  RecurringProfileDetailData,
+  RecurringProfilesPageData,
+} from "@/lib/profiles/profile-directory-service";
 
 type ProfilesShellProps = {
   data: RecurringProfilesPageData;
@@ -24,6 +28,25 @@ type ApiErrorPayload = {
   error?: string;
   message?: string;
 } | null;
+
+type BaselineFollowUpApiPayload =
+  | {
+      followUp?: {
+        action?: "reminder" | "new_request";
+      };
+      error?: string;
+      message?: string;
+    }
+  | null;
+
+type ProfileDetailApiPayload = {
+  detail?: RecurringProfileDetailData;
+} | ApiErrorPayload;
+
+type DetailMutationNotice = {
+  tone: "success";
+  message: string;
+};
 
 type ProfileArchiveButtonProps = {
   profileId: string;
@@ -45,6 +68,61 @@ type ProfileTypeManagerProps = {
   router: ProfilesRouter;
 };
 
+type CreateBaselineConsentRequestPanelProps = {
+  profileId: string;
+  baselineTemplates: RecurringProfilesPageData["baselineTemplates"];
+  router: ProfilesRouter;
+  onSuccess?: (notice?: DetailMutationNotice) => void;
+};
+
+type PendingBaselineRequestPanelProps = {
+  profileId: string;
+  request:
+    | NonNullable<RecurringProfilesPageData["profiles"][number]["baselineConsent"]["pendingRequest"]>
+    | NonNullable<RecurringProfileDetailData["baselineConsent"]["pendingRequest"]>;
+  router: ProfilesRouter;
+  onSuccess?: (notice?: DetailMutationNotice) => void;
+  allowCopyOpen?: boolean;
+  allowManageRequest?: boolean;
+  allowFollowUp?: boolean;
+};
+
+type ProfileRowActionsProps = {
+  profile: RecurringProfilesPageData["profiles"][number];
+  canManageProfiles: boolean;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+  router: ProfilesRouter;
+};
+
+type ExpandedProfileDetailState =
+  | {
+      profileId: string;
+      status: "loading";
+      data: null;
+      error: null;
+    }
+  | {
+      profileId: string;
+      status: "ready";
+      data: RecurringProfileDetailData;
+      error: null;
+    }
+  | {
+      profileId: string;
+      status: "error";
+      data: null;
+      error: string;
+    };
+
+type ProfileDetailPanelContentProps = {
+  detail: RecurringProfileDetailData;
+  baselineTemplates: RecurringProfilesPageData["baselineTemplates"];
+  router: ProfilesRouter;
+  notice: DetailMutationNotice | null;
+  onMutated: (notice?: DetailMutationNotice) => void;
+};
+
 function DisabledButton({
   children,
   className = "",
@@ -64,7 +142,7 @@ function DisabledButton({
   );
 }
 
-function StatusBadge({ archived }: { archived: boolean }) {
+function ProfileStatusBadge({ archived }: { archived: boolean }) {
   const t = useTranslations("profiles.status");
 
   return (
@@ -78,6 +156,56 @@ function StatusBadge({ archived }: { archived: boolean }) {
       {archived ? t("archived") : t("active")}
     </span>
   );
+}
+
+function BaselineStatusBadge({
+  state,
+}: {
+  state: RecurringProfilesPageData["profiles"][number]["baselineConsent"]["state"];
+}) {
+  const t = useTranslations("profiles.baseline.state");
+
+  const className =
+    state === "signed"
+      ? "inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
+      : state === "pending"
+        ? "inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"
+        : state === "revoked"
+          ? "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700"
+          : "inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700";
+
+  return <span className={className}>{t(state)}</span>;
+}
+
+function MatchingReadinessBadge({
+  state,
+}: {
+  state: RecurringProfilesPageData["profiles"][number]["matchingReadiness"]["state"];
+}) {
+  const t = useTranslations("profiles.matching.state");
+
+  const className =
+    state === "ready"
+      ? "inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
+      : state === "materializing" || state === "needs_face_selection"
+        ? "inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"
+        : state === "blocked_no_opt_in" || state === "missing_headshot"
+          ? "inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700"
+          : "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700";
+
+  return <span className={className}>{t(state)}</span>;
+}
+
+function resolveBrowserShareUrl(path: string) {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  if (typeof window === "undefined") {
+    return path;
+  }
+
+  return new URL(path, window.location.origin).toString();
 }
 
 function ProfileArchiveButton({ profileId, router }: ProfileArchiveButtonProps) {
@@ -164,6 +292,716 @@ function ProfileTypeArchiveButton({ profileTypeId, router }: ProfileTypeArchiveB
         {isSubmitting ? t("actions.archivingType") : t("actions.archiveType")}
       </button>
       {error ? <p className="text-xs text-red-700">{error}</p> : null}
+    </div>
+  );
+}
+
+function PendingBaselineRequestPanel({
+  profileId,
+  request,
+  router,
+  onSuccess,
+  allowCopyOpen = true,
+  allowManageRequest = true,
+  allowFollowUp = false,
+}: PendingBaselineRequestPanelProps) {
+  const t = useTranslations("profiles.baseline.pending");
+  const tFollowUp = useTranslations("profiles.baseline.followUp");
+  const tErrors = useTranslations("errors");
+  const locale = useLocale();
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [activeMutation, setActiveMutation] = useState<"cancel" | "replace" | "followUp" | null>(null);
+  const shareUrl = resolveBrowserShareUrl(request.consentPath);
+
+  async function handleCopy() {
+    setCopied(false);
+    setCopyError(null);
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+    } catch {
+      setCopyError(t("copyError"));
+    }
+  }
+
+  async function handleCancel() {
+    setActionError(null);
+    setActiveMutation("cancel");
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${profileId}/baseline-consent-request/${request.id}/cancel`,
+        {
+          method: "POST",
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as ApiErrorPayload;
+
+      if (!response.ok) {
+        setActionError(resolveLocalizedApiError(tErrors, payload, "generic"));
+        return;
+      }
+
+      router.refresh();
+      onSuccess?.();
+    } catch {
+      setActionError(tErrors("generic"));
+    } finally {
+      setActiveMutation(null);
+    }
+  }
+
+  async function handleReplace() {
+    setActionError(null);
+    setActiveMutation("replace");
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${profileId}/baseline-consent-request/${request.id}/replace`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": createIdempotencyKey(),
+          },
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as ApiErrorPayload;
+
+      if (!response.ok) {
+        setActionError(resolveLocalizedApiError(tErrors, payload, "generic"));
+        return;
+      }
+
+      router.refresh();
+      onSuccess?.();
+    } catch {
+      setActionError(tErrors("generic"));
+    } finally {
+      setActiveMutation(null);
+    }
+  }
+
+  async function handleFollowUp() {
+    setActionError(null);
+    setActiveMutation("followUp");
+
+    try {
+      const response = await fetch(`/api/profiles/${profileId}/baseline-follow-up`, {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": createIdempotencyKey(),
+        },
+      });
+      const payload = (await response.json().catch(() => null)) as BaselineFollowUpApiPayload;
+
+      if (!response.ok) {
+        setActionError(resolveLocalizedApiError(tErrors, payload, "generic"));
+        return;
+      }
+
+      router.refresh();
+      onSuccess?.({
+        tone: "success",
+        message:
+          payload?.followUp?.action === "new_request"
+            ? tFollowUp("success.newRequest")
+            : tFollowUp("success.reminder"),
+      });
+    } catch {
+      setActionError(tErrors("generic"));
+    } finally {
+      setActiveMutation(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <div className="grid gap-2 text-sm text-zinc-700 sm:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{t("emailLabel")}</p>
+          <p className="mt-1 break-all">{request.emailSnapshot}</p>
+        </div>
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{t("expiresLabel")}</p>
+          <p className="mt-1">{formatDateTime(request.expiresAt, locale)}</p>
+        </div>
+      </div>
+      {allowCopyOpen ? (
+        <label className="block text-xs font-medium text-zinc-700">
+          <span className="mb-1 block">{t("linkLabel")}</span>
+          <input readOnly value={shareUrl} className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2" />
+        </label>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        {allowCopyOpen ? (
+          <>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+            >
+              {t("copy")}
+            </button>
+            <a
+              href={shareUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+            >
+              {t("open")}
+            </a>
+          </>
+        ) : null}
+        {allowFollowUp ? (
+          <button
+            type="button"
+            onClick={handleFollowUp}
+            disabled={activeMutation !== null}
+            className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+          >
+            {activeMutation === "followUp" ? tFollowUp("sendingReminder") : tFollowUp("sendReminder")}
+          </button>
+        ) : null}
+        {allowManageRequest ? (
+          <>
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={activeMutation !== null}
+              className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+            >
+              {activeMutation === "cancel" ? t("cancelling") : t("cancel")}
+            </button>
+            <button
+              type="button"
+              onClick={handleReplace}
+              disabled={activeMutation !== null}
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60"
+            >
+              {activeMutation === "replace" ? t("replacing") : t("replace")}
+            </button>
+          </>
+        ) : null}
+      </div>
+      {copied ? <p className="text-xs text-emerald-700">{t("copied")}</p> : null}
+      {copyError ? <p className="text-xs text-red-700">{copyError}</p> : null}
+      {actionError ? <p className="text-xs text-red-700">{actionError}</p> : null}
+    </div>
+  );
+}
+
+function CreateBaselineConsentRequestPanel({
+  profileId,
+  baselineTemplates,
+  router,
+  onSuccess,
+}: CreateBaselineConsentRequestPanelProps) {
+  const t = useTranslations("profiles.baseline.request");
+  const tFollowUp = useTranslations("profiles.baseline.followUp");
+  const tErrors = useTranslations("errors");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(baselineTemplates[0]?.id ?? "");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`/api/profiles/${profileId}/baseline-follow-up`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createIdempotencyKey(),
+        },
+        body: JSON.stringify({
+          consentTemplateId: selectedTemplateId,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as BaselineFollowUpApiPayload;
+      if (!response.ok) {
+        setError(resolveLocalizedApiError(tErrors, payload, "generic"));
+        return;
+      }
+
+      router.refresh();
+      onSuccess?.({
+        tone: "success",
+        message:
+          payload?.followUp?.action === "reminder"
+            ? tFollowUp("success.reminder")
+            : tFollowUp("success.newRequest"),
+      });
+    } catch {
+      setError(tErrors("generic"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  if (baselineTemplates.length === 0) {
+    return (
+      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+        <p className="text-sm text-zinc-700">{t("emptyTemplates")}</p>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <label className="block text-sm text-zinc-800">
+        <span className="mb-1 block font-medium">{t("templateLabel")}</span>
+        <select
+          value={selectedTemplateId}
+          onChange={(event) => setSelectedTemplateId(event.target.value)}
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2"
+        >
+          {baselineTemplates.map((template) => (
+            <option key={template.id} value={template.id}>
+              {template.name} {template.version} - {t(template.scope === "app" ? "scopeStandard" : "scopeOrganization")}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+
+      <button
+        type="submit"
+        disabled={isSubmitting || !selectedTemplateId}
+        className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+      >
+        {isSubmitting ? tFollowUp("sendingNewRequest") : tFollowUp("sendNewRequest")}
+      </button>
+    </form>
+  );
+}
+
+function RequestStatusBadge({
+  status,
+}: {
+  status: RecurringProfileDetailData["requestHistory"][number]["status"];
+}) {
+  const t = useTranslations("profiles.detail.requestHistory.status");
+
+  const className =
+    status === "signed"
+      ? "inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
+      : status === "pending"
+        ? "inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"
+        : status === "expired"
+          ? "inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700"
+          : "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700";
+
+  return <span className={className}>{t(status)}</span>;
+}
+
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-zinc-500">{label}</p>
+      <div className="mt-1 text-sm text-zinc-800">{value}</div>
+    </div>
+  );
+}
+
+function StructuredSummaryFields({
+  summary,
+}: {
+  summary: RecurringProfileDetailData["consentHistory"][number]["structuredSummary"];
+}) {
+  const t = useTranslations("profiles.detail");
+
+  if (!summary || (summary.scopeLabels.length === 0 && !summary.durationLabel)) {
+    return null;
+  }
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {summary.scopeLabels.length > 0 ? (
+        <DetailField label={t("scopeLabel")} value={summary.scopeLabels.join(", ")} />
+      ) : null}
+      {summary.durationLabel ? (
+        <DetailField label={t("durationLabel")} value={summary.durationLabel} />
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileRowActions({
+  profile,
+  canManageProfiles,
+  isExpanded,
+  onToggleExpanded,
+  router,
+}: ProfileRowActionsProps) {
+  const t = useTranslations("profiles");
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      <button
+        type="button"
+        onClick={onToggleExpanded}
+        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+        aria-expanded={isExpanded}
+      >
+        {isExpanded ? t("detail.hideDetails") : t("detail.viewDetails")}
+      </button>
+      {canManageProfiles && profile.status === "active" ? (
+        <ProfileArchiveButton profileId={profile.id} router={router} />
+      ) : null}
+    </div>
+  );
+}
+
+export function ProfileDetailPanelContent({
+  detail,
+  baselineTemplates,
+  router,
+  notice,
+  onMutated,
+}: ProfileDetailPanelContentProps) {
+  const t = useTranslations("profiles.detail");
+  const tBaselineActivity = useTranslations("profiles.baseline.activity");
+  const tFollowUp = useTranslations("profiles.baseline.followUp");
+  const locale = useLocale();
+
+  function renderBaselineActivity() {
+    const activityAt = detail.baselineConsent.latestActivityAt;
+
+    if (detail.baselineConsent.state === "missing") {
+      const latestRequestOutcome = detail.baselineConsent.latestRequestOutcome;
+      if (latestRequestOutcome) {
+        const formatted = formatDateTime(latestRequestOutcome.changedAt, locale);
+
+        if (latestRequestOutcome.status === "cancelled") {
+          return tBaselineActivity("latestCancelledAt", { date: formatted });
+        }
+
+        if (latestRequestOutcome.status === "superseded") {
+          return tBaselineActivity("latestReplacedAt", { date: formatted });
+        }
+
+        return tBaselineActivity("latestExpiredAt", { date: formatted });
+      }
+
+      return tBaselineActivity("missing");
+    }
+
+    if (!activityAt) {
+      return tBaselineActivity("unknown");
+    }
+
+    const formatted = formatDateTime(activityAt, locale);
+
+    if (detail.baselineConsent.state === "pending") {
+      return tBaselineActivity("pendingUntil", { date: formatted });
+    }
+
+    if (detail.baselineConsent.state === "signed") {
+      return tBaselineActivity("signedAt", { date: formatted });
+    }
+
+    return tBaselineActivity("revokedAt", { date: formatted });
+  }
+
+  return (
+    <div className="space-y-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <h3 className="text-base font-semibold text-zinc-900">{t("currentTitle")}</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <BaselineStatusBadge state={detail.baselineConsent.state} />
+              <ProfileStatusBadge archived={detail.profile.status === "archived"} />
+            </div>
+            <p className="text-sm text-zinc-700">{renderBaselineActivity()}</p>
+          </div>
+          <div className="grid gap-3 text-sm text-zinc-700 sm:grid-cols-2">
+            <DetailField label={t("nameLabel")} value={detail.profile.fullName} />
+            <DetailField label={t("emailLabel")} value={detail.profile.email} />
+            <DetailField
+              label={t("typeLabel")}
+              value={detail.profile.profileType?.label ?? t("noType")}
+            />
+            <DetailField
+              label={t("updatedLabel")}
+              value={formatDateTime(detail.profile.updatedAt, locale)}
+            />
+          </div>
+        </div>
+        {notice ? (
+          <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {notice.message}
+          </p>
+        ) : null}
+        {detail.baselineConsent.latestFollowUpAttempt ? (
+          <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+            <h4 className="text-sm font-medium text-zinc-900">{tFollowUp("latestTitle")}</h4>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <DetailField
+                label={tFollowUp("actionLabel")}
+                value={tFollowUp(`actionLabels.${detail.baselineConsent.latestFollowUpAttempt.actionKind}`)}
+              />
+              <DetailField
+                label={tFollowUp("statusLabel")}
+                value={tFollowUp(`statusLabels.${detail.baselineConsent.latestFollowUpAttempt.status}`)}
+              />
+              <DetailField
+                label={tFollowUp("targetEmailLabel")}
+                value={detail.baselineConsent.latestFollowUpAttempt.targetEmail}
+              />
+              <DetailField
+                label={tFollowUp("attemptedAtLabel")}
+                value={formatDateTime(detail.baselineConsent.latestFollowUpAttempt.attemptedAt, locale)}
+              />
+            </div>
+            <p className="mt-3 text-sm text-zinc-700">{tFollowUp("placeholderHelper")}</p>
+          </div>
+        ) : null}
+      </section>
+
+      <ProfileHeadshotPanel
+        profileId={detail.profile.id}
+        headshotMatching={detail.headshotMatching}
+        router={router}
+        onMutated={onMutated}
+      />
+
+      {detail.baselineConsent.pendingRequest ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <div className="mb-3">
+            <h3 className="text-base font-semibold text-zinc-900">{t("pendingTitle")}</h3>
+          </div>
+          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DetailField
+              label={t("templateLabel")}
+              value={
+                detail.baselineConsent.pendingRequest.templateName
+                  ? `${detail.baselineConsent.pendingRequest.templateName} ${detail.baselineConsent.pendingRequest.templateVersion ?? ""}`.trim()
+                  : t("unknownValue")
+              }
+            />
+            <DetailField
+              label={t("createdAtLabel")}
+              value={formatDateTime(detail.baselineConsent.pendingRequest.createdAt, locale)}
+            />
+            <DetailField
+              label={t("expiresAtLabel")}
+              value={formatDateTime(detail.baselineConsent.pendingRequest.expiresAt, locale)}
+            />
+            <DetailField
+              label={t("emailLabel")}
+              value={detail.baselineConsent.pendingRequest.emailSnapshot}
+            />
+          </div>
+          <PendingBaselineRequestPanel
+            profileId={detail.profile.id}
+            request={detail.baselineConsent.pendingRequest}
+            router={router}
+            onSuccess={onMutated}
+            allowCopyOpen={detail.actions.canCopyBaselineLink || detail.actions.canOpenBaselineLink}
+            allowManageRequest={detail.actions.canCancelPendingRequest || detail.actions.canReplacePendingRequest}
+            allowFollowUp={detail.actions.availableBaselineFollowUpAction === "reminder"}
+          />
+        </section>
+      ) : null}
+
+      {!detail.baselineConsent.pendingRequest && detail.baselineConsent.activeConsent ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <div className="mb-4">
+            <h3 className="text-base font-semibold text-zinc-900">{t("activeConsentTitle")}</h3>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DetailField
+              label={t("templateLabel")}
+              value={
+                detail.baselineConsent.activeConsent.templateName
+                  ? `${detail.baselineConsent.activeConsent.templateName} ${detail.baselineConsent.activeConsent.templateVersion ?? ""}`.trim()
+                  : t("unknownValue")
+              }
+            />
+            <DetailField
+              label={t("signedAtLabel")}
+              value={formatDateTime(detail.baselineConsent.activeConsent.signedAt, locale)}
+            />
+            <DetailField
+              label={t("emailLabel")}
+              value={detail.baselineConsent.activeConsent.emailSnapshot}
+            />
+            <DetailField
+              label={t("receiptSentAtLabel")}
+              value={
+                detail.baselineConsent.activeConsent.receiptEmailSentAt
+                  ? formatDateTime(detail.baselineConsent.activeConsent.receiptEmailSentAt, locale)
+                  : t("notSent")
+              }
+            />
+          </div>
+          <div className="mt-4">
+            <StructuredSummaryFields summary={detail.baselineConsent.activeConsent.structuredSummary} />
+          </div>
+        </section>
+      ) : null}
+
+      {!detail.baselineConsent.pendingRequest
+      && !detail.baselineConsent.activeConsent
+      && detail.baselineConsent.latestRevokedConsent ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <div className="mb-4">
+            <h3 className="text-base font-semibold text-zinc-900">{t("latestRevokedTitle")}</h3>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DetailField
+              label={t("templateLabel")}
+              value={
+                detail.baselineConsent.latestRevokedConsent.templateName
+                  ? `${detail.baselineConsent.latestRevokedConsent.templateName} ${detail.baselineConsent.latestRevokedConsent.templateVersion ?? ""}`.trim()
+                  : t("unknownValue")
+              }
+            />
+            <DetailField
+              label={t("signedAtLabel")}
+              value={formatDateTime(detail.baselineConsent.latestRevokedConsent.signedAt, locale)}
+            />
+            <DetailField
+              label={t("revokedAtLabel")}
+              value={formatDateTime(detail.baselineConsent.latestRevokedConsent.revokedAt, locale)}
+            />
+            <DetailField
+              label={t("emailLabel")}
+              value={detail.baselineConsent.latestRevokedConsent.emailSnapshot}
+            />
+          </div>
+          <div className="mt-4">
+            <StructuredSummaryFields summary={detail.baselineConsent.latestRevokedConsent.structuredSummary} />
+          </div>
+        </section>
+      ) : null}
+
+      {detail.actions.availableBaselineFollowUpAction === "new_request"
+      && detail.baselineConsent.state === "missing" ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <h3 className="text-base font-semibold text-zinc-900">{t("actionsTitle")}</h3>
+          <p className="mt-2 text-sm text-zinc-700">{t("requestHint")}</p>
+          <div className="mt-4">
+            <CreateBaselineConsentRequestPanel
+              profileId={detail.profile.id}
+              baselineTemplates={baselineTemplates}
+              router={router}
+              onSuccess={onMutated}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {detail.actions.availableBaselineFollowUpAction === "new_request"
+      && detail.baselineConsent.state === "revoked" ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <h3 className="text-base font-semibold text-zinc-900">{t("actionsTitle")}</h3>
+          <p className="mt-2 text-sm text-zinc-700">{t("revokedHint")}</p>
+          <div className="mt-4">
+            <CreateBaselineConsentRequestPanel
+              profileId={detail.profile.id}
+              baselineTemplates={baselineTemplates}
+              router={router}
+              onSuccess={onMutated}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {!detail.actions.canManageBaseline ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-4">
+          <p className="text-sm text-zinc-700">
+            {detail.profile.status === "archived" ? t("archivedReadOnly") : t("readOnly")}
+          </p>
+        </section>
+      ) : null}
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+        <h3 className="text-base font-semibold text-zinc-900">{t("requestHistoryTitle")}</h3>
+        {detail.requestHistory.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-600">{t("requestHistoryEmpty")}</p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {detail.requestHistory.map((request) => (
+              <div key={request.id} className="rounded-lg border border-zinc-200 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <RequestStatusBadge status={request.status} />
+                    <p className="text-sm font-medium text-zinc-900">
+                      {request.templateName
+                        ? `${request.templateName} ${request.templateVersion ?? ""}`.trim()
+                        : t("unknownValue")}
+                    </p>
+                  </div>
+                  <p className="text-xs text-zinc-500">{request.id}</p>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <DetailField label={t("createdAtLabel")} value={formatDateTime(request.createdAt, locale)} />
+                  <DetailField label={t("changedAtLabel")} value={formatDateTime(request.changedAt, locale)} />
+                  <DetailField label={t("expiresAtLabel")} value={formatDateTime(request.expiresAt, locale)} />
+                  <DetailField label={t("emailLabel")} value={request.emailSnapshot} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+        <h3 className="text-base font-semibold text-zinc-900">{t("consentHistoryTitle")}</h3>
+        {detail.consentHistory.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-600">{t("consentHistoryEmpty")}</p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {detail.consentHistory.map((consent) => (
+              <div key={consent.id} className="rounded-lg border border-zinc-200 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-900">
+                      {consent.templateName
+                        ? `${consent.templateName} ${consent.templateVersion ?? ""}`.trim()
+                        : t("unknownValue")}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {consent.revokedAt ? t("revokedBadge") : t("signedBadge")}
+                    </p>
+                  </div>
+                  <p className="text-xs text-zinc-500">{consent.id}</p>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <DetailField label={t("signedAtLabel")} value={formatDateTime(consent.signedAt, locale)} />
+                  <DetailField
+                    label={t("revokedAtLabel")}
+                    value={consent.revokedAt ? formatDateTime(consent.revokedAt, locale) : t("notRevoked")}
+                  />
+                  <DetailField label={t("emailLabel")} value={consent.emailSnapshot} />
+                  <DetailField
+                    label={t("receiptSentAtLabel")}
+                    value={consent.receiptEmailSentAt ? formatDateTime(consent.receiptEmailSentAt, locale) : t("notSent")}
+                  />
+                </div>
+                <div className="mt-4">
+                  <StructuredSummaryFields summary={consent.structuredSummary} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -374,11 +1212,145 @@ function ProfileTypeManager({ profileTypes, router }: ProfileTypeManagerProps) {
 
 export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
   const t = useTranslations("profiles");
+  const tErrors = useTranslations("errors");
   const locale = useLocale();
+  const [expandedProfileId, setExpandedProfileId] = useState<string | null>(null);
+  const [detailReloadKey, setDetailReloadKey] = useState(0);
+  const [expandedDetail, setExpandedDetail] = useState<ExpandedProfileDetailState | null>(null);
+  const [detailMutationNotice, setDetailMutationNotice] = useState<DetailMutationNotice | null>(null);
 
   const hasAnyProfiles = data.summary.activeProfiles + data.summary.archivedProfiles > 0;
   const hasFilters =
     data.filters.q.length > 0 || data.filters.profileTypeId !== null || data.filters.includeArchived;
+
+  useEffect(() => {
+    if (!expandedProfileId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDetail() {
+      try {
+        const response = await fetch(`/api/profiles/${expandedProfileId}/detail`, {
+          method: "GET",
+        });
+        const payload = (await response.json().catch(() => null)) as ProfileDetailApiPayload;
+
+        if (!response.ok || !payload || !("detail" in payload) || !payload.detail) {
+          const error = resolveLocalizedApiError(
+            tErrors,
+            response.ok ? null : (payload as ApiErrorPayload),
+            "generic",
+          );
+          if (!cancelled) {
+            setExpandedDetail({
+              profileId: expandedProfileId,
+              status: "error",
+              data: null,
+              error,
+            });
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          setExpandedDetail({
+            profileId: expandedProfileId,
+            status: "ready",
+            data: payload.detail,
+            error: null,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setExpandedDetail({
+            profileId: expandedProfileId,
+            status: "error",
+            data: null,
+            error: tErrors("generic"),
+          });
+        }
+      }
+    }
+
+    void loadDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedProfileId, detailReloadKey, data, tErrors]);
+
+  function handleToggleExpanded(profileId: string) {
+    if (expandedProfileId === profileId) {
+      setExpandedProfileId(null);
+      setExpandedDetail(null);
+      setDetailMutationNotice(null);
+      return;
+    }
+
+    setExpandedProfileId(profileId);
+    setDetailMutationNotice(null);
+    setExpandedDetail({
+      profileId,
+      status: "loading",
+      data: null,
+      error: null,
+    });
+  }
+
+  function handleExpandedDetailMutation(notice?: DetailMutationNotice) {
+    setDetailMutationNotice(notice ?? null);
+
+    if (expandedProfileId) {
+      setExpandedDetail({
+        profileId: expandedProfileId,
+        status: "loading",
+        data: null,
+        error: null,
+      });
+    }
+    setDetailReloadKey((current) => current + 1);
+  }
+
+  function renderBaselineActivity(profile: RecurringProfilesPageData["profiles"][number]) {
+    const activityAt = profile.baselineConsent.latestActivityAt;
+
+    if (profile.baselineConsent.state === "missing") {
+      const latestRequestOutcome = profile.baselineConsent.latestRequestOutcome;
+      if (latestRequestOutcome) {
+        const formatted = formatDateTime(latestRequestOutcome.changedAt, locale);
+
+        if (latestRequestOutcome.status === "cancelled") {
+          return t("baseline.activity.latestCancelledAt", { date: formatted });
+        }
+
+        if (latestRequestOutcome.status === "superseded") {
+          return t("baseline.activity.latestReplacedAt", { date: formatted });
+        }
+
+        return t("baseline.activity.latestExpiredAt", { date: formatted });
+      }
+
+      return t("baseline.activity.missing");
+    }
+
+    if (!activityAt) {
+      return t("baseline.activity.unknown");
+    }
+
+    const formatted = formatDateTime(activityAt, locale);
+
+    if (profile.baselineConsent.state === "pending") {
+      return t("baseline.activity.pendingUntil", { date: formatted });
+    }
+
+    if (profile.baselineConsent.state === "signed") {
+      return t("baseline.activity.signedAt", { date: formatted });
+    }
+
+    return t("baseline.activity.revokedAt", { date: formatted });
+  }
 
   return (
     <div className="space-y-6">
@@ -509,6 +1481,12 @@ export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
                   {t("table.columnEmail")}
                 </th>
                 <th scope="col" className="border-b border-zinc-200 px-4 py-3 font-medium text-zinc-700">
+                  {t("table.columnBaselineConsent")}
+                </th>
+                <th scope="col" className="border-b border-zinc-200 px-4 py-3 font-medium text-zinc-700">
+                  {t("table.columnMatching")}
+                </th>
+                <th scope="col" className="border-b border-zinc-200 px-4 py-3 font-medium text-zinc-700">
                   {t("table.columnStatus")}
                 </th>
                 <th scope="col" className="border-b border-zinc-200 px-4 py-3 font-medium text-zinc-700">
@@ -521,42 +1499,91 @@ export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
             </thead>
             <tbody>
               {data.profiles.length > 0 ? (
-                data.profiles.map((profile) => (
-                  <tr key={profile.id} className="align-top">
-                    <td className="border-b border-zinc-100 px-4 py-4 text-zinc-900">{profile.fullName}</td>
-                    <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">
-                      {profile.profileType ? (
-                        <div className="space-y-1">
-                          <p>{profile.profileType.label}</p>
-                          {profile.profileType.status === "archived" ? (
-                            <span className="inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
-                              {t("table.archivedTypeBadge")}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="text-zinc-500">{t("table.noType")}</span>
-                      )}
-                    </td>
-                    <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">{profile.email}</td>
-                    <td className="border-b border-zinc-100 px-4 py-4">
-                      <StatusBadge archived={profile.status === "archived"} />
-                    </td>
-                    <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">
-                      {formatDateTime(profile.updatedAt, locale)}
-                    </td>
-                    <td className="border-b border-zinc-100 px-4 py-4">
-                      {data.access.canManageProfiles && profile.status === "active" ? (
-                        <ProfileArchiveButton profileId={profile.id} router={router} />
-                      ) : (
-                        <span className="text-zinc-400">{t("table.noActions")}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                data.profiles.map((profile) => {
+                  const isExpanded = expandedProfileId === profile.id;
+                  const detailState =
+                    expandedDetail && expandedDetail.profileId === profile.id ? expandedDetail : null;
+
+                  return (
+                    <Fragment key={profile.id}>
+                      <tr className="align-top">
+                        <td className="border-b border-zinc-100 px-4 py-4 text-zinc-900">{profile.fullName}</td>
+                        <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">
+                          {profile.profileType ? (
+                            <div className="space-y-1">
+                              <p>{profile.profileType.label}</p>
+                              {profile.profileType.status === "archived" ? (
+                                <span className="inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
+                                  {t("table.archivedTypeBadge")}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-zinc-500">{t("table.noType")}</span>
+                          )}
+                        </td>
+                        <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">{profile.email}</td>
+                        <td className="border-b border-zinc-100 px-4 py-4">
+                          <div className="space-y-1">
+                            <BaselineStatusBadge state={profile.baselineConsent.state} />
+                            <p className="text-xs text-zinc-600">{renderBaselineActivity(profile)}</p>
+                          </div>
+                        </td>
+                        <td className="border-b border-zinc-100 px-4 py-4">
+                          <div className="space-y-1">
+                            <MatchingReadinessBadge state={profile.matchingReadiness.state} />
+                            <p className="text-xs text-zinc-600">
+                              {t(`matching.description.${profile.matchingReadiness.state}`)}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="border-b border-zinc-100 px-4 py-4">
+                          <ProfileStatusBadge archived={profile.status === "archived"} />
+                        </td>
+                        <td className="border-b border-zinc-100 px-4 py-4 text-zinc-700">
+                          {formatDateTime(profile.updatedAt, locale)}
+                        </td>
+                        <td className="border-b border-zinc-100 px-4 py-4">
+                          <ProfileRowActions
+                            profile={profile}
+                            canManageProfiles={data.access.canManageProfiles}
+                            isExpanded={isExpanded}
+                            onToggleExpanded={() => handleToggleExpanded(profile.id)}
+                            router={router}
+                          />
+                        </td>
+                      </tr>
+                      {isExpanded ? (
+                        <tr>
+                          <td colSpan={8} className="border-b border-zinc-100 px-4 py-4">
+                            {detailState?.status === "loading" || !detailState ? (
+                              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
+                                {t("detail.loading")}
+                              </div>
+                            ) : null}
+                            {detailState?.status === "error" ? (
+                              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                                {detailState.error}
+                              </div>
+                            ) : null}
+                            {detailState?.status === "ready" ? (
+                              <ProfileDetailPanelContent
+                                detail={detailState.data}
+                                baselineTemplates={data.baselineTemplates}
+                                router={router}
+                                notice={detailMutationNotice}
+                                onMutated={handleExpandedDetailMutation}
+                              />
+                            ) : null}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8">
+                  <td colSpan={8} className="px-4 py-8">
                     <div className="space-y-3">
                       {hasAnyProfiles ? (
                         <>
@@ -591,8 +1618,6 @@ export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
         <h2 className="text-lg font-semibold text-zinc-900">{t("deferred.title")}</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">{t("deferred.body")}</p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <DisabledButton>{t("actions.requestBaselineConsent")}</DisabledButton>
-          <DisabledButton>{t("actions.sendReminder")}</DisabledButton>
           <DisabledButton>{t("actions.requestExtraConsent")}</DisabledButton>
           <DisabledButton>{t("actions.importProfiles")}</DisabledButton>
           <DisabledButton>{t("actions.syncDirectory")}</DisabledButton>

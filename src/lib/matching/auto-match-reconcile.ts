@@ -10,6 +10,7 @@ import {
   enqueuePhotoUploadedJob,
   type RepairFaceMatchJobResult,
 } from "@/lib/matching/auto-match-jobs";
+import { getCurrentProjectRecurringSourceBoundary } from "@/lib/matching/project-recurring-sources";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type RunAutoMatchReconcileInput = {
@@ -182,6 +183,10 @@ export async function runAutoMatchReconcile(
   for (const photo of photos ?? []) {
     counters.scanned += 1;
     const boundary = await getCurrentConsentHeadshotFanoutBoundary(supabase, photo.tenant_id, photo.project_id);
+    const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(supabase, {
+      tenantId: photo.tenant_id,
+      projectId: photo.project_id,
+    });
     const enqueueResult = await enqueuePhotoUploadedJob({
       tenantId: photo.tenant_id,
       projectId: photo.project_id,
@@ -194,6 +199,9 @@ export async function runAutoMatchReconcile(
         boundarySnapshotAt: boundary.boundarySnapshotAt,
         boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
         boundaryConsentId: boundary.boundaryConsentId,
+        recurringBoundarySnapshotAt: recurringBoundary.boundarySnapshotAt,
+        recurringBoundaryParticipantCreatedAt: recurringBoundary.boundaryParticipantCreatedAt,
+        recurringBoundaryParticipantId: recurringBoundary.boundaryProjectProfileParticipantId,
       },
       supabase,
     });

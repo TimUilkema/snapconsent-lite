@@ -11,9 +11,14 @@ type LinkedFacePreview = {
   faceRank: number;
   faceBoxNormalized: Record<string, number | null> | null;
   faceThumbnailUrl: string | null;
+  projectFaceAssigneeId: string;
+  identityKind: "project_consent" | "project_recurring_consent";
   linkSource: "manual" | "auto";
   matchConfidence: number | null;
-  consent: {
+  displayName: string | null;
+  email: string | null;
+  ownerState: "active" | "revoked";
+  consent: null | {
     consentId: string;
     fullName: string | null;
     email: string | null;
@@ -26,9 +31,18 @@ type LinkedFacePreview = {
     headshotPreviewUrl: string | null;
     goToConsentHref: string;
   };
+  recurring: null | {
+    projectProfileParticipantId: string;
+    profileId: string | null;
+    recurringProfileConsentId: string | null;
+    projectConsentState: "signed" | "revoked";
+    signedAt: string | null;
+    consentVersion: string | null;
+    faceMatchOptIn: boolean | null;
+    headshotThumbnailUrl: string | null;
+    headshotPreviewUrl: string | null;
+  };
 };
-
-type PreviewConsentSummary = LinkedFacePreview["consent"];
 
 type AssetPreviewFace = {
   assetFaceId: string;
@@ -42,10 +56,19 @@ type AssetPreviewFace = {
   blockedAt: string | null;
   blockedReason: "no_consent" | null;
   currentLink: null | {
-    consentId: string;
+    projectFaceAssigneeId: string;
+    identityKind: "project_consent" | "project_recurring_consent";
+    consentId: string | null;
+    projectProfileParticipantId: string | null;
+    profileId: string | null;
+    recurringProfileConsentId: string | null;
     linkSource: "manual" | "auto";
     matchConfidence: number | null;
-    consent: PreviewConsentSummary;
+    displayName: string | null;
+    email: string | null;
+    ownerState: "active" | "revoked";
+    consent: LinkedFacePreview["consent"];
+    recurring: LinkedFacePreview["recurring"];
   };
 };
 
@@ -59,7 +82,14 @@ type AssetPreviewFacesResponse = {
 };
 
 type AssetPreviewCandidate = {
-  consentId: string;
+  candidateKey: string;
+  identityKind: "project_consent" | "recurring_profile_match";
+  assignable: boolean;
+  assignmentBlockedReason:
+    | null
+    | "project_consent_missing"
+    | "project_consent_pending"
+    | "project_consent_revoked";
   fullName: string | null;
   email: string | null;
   headshotThumbnailUrl: string | null;
@@ -70,6 +100,10 @@ type AssetPreviewCandidate = {
     assetFaceId: string;
     faceRank: number | null;
   } | null;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  projectConsentState: "missing" | "pending" | "signed" | "revoked" | null;
 };
 
 type AssetPreviewFaceCandidatesResponse = {
@@ -122,8 +156,8 @@ type ProjectAssetPreviewLightboxProps = {
   onRefreshAssetData?: () => Promise<void> | void;
 };
 
-function buildOverlayId(assetFaceId: string, consentId?: string | null) {
-  return consentId ? `${assetFaceId}:${consentId}` : assetFaceId;
+function buildOverlayId(assetFaceId: string, projectFaceAssigneeId?: string | null) {
+  return projectFaceAssigneeId ? `${assetFaceId}:${projectFaceAssigneeId}` : assetFaceId;
 }
 
 function extractAssetFaceId(overlayId: string | null | undefined) {
@@ -150,12 +184,21 @@ function toLinkedFacePreview(face: AssetPreviewFace | null): LinkedFacePreview |
     faceRank: face.faceRank,
     faceBoxNormalized: face.faceBoxNormalized,
     faceThumbnailUrl: face.faceThumbnailUrl,
+    projectFaceAssigneeId: face.currentLink.projectFaceAssigneeId,
+    identityKind: face.currentLink.identityKind,
     linkSource: face.currentLink.linkSource,
     matchConfidence: face.currentLink.matchConfidence,
-    consent: {
-      consentId: face.currentLink.consentId,
-      ...face.currentLink.consent,
-    },
+    displayName: face.currentLink.displayName,
+    email: face.currentLink.email,
+    ownerState: face.currentLink.ownerState,
+    consent:
+      face.currentLink.consent && face.currentLink.consentId
+        ? {
+            ...face.currentLink.consent,
+            consentId: face.currentLink.consentId,
+          }
+        : null,
+    recurring: face.currentLink.recurring,
   };
 }
 
@@ -173,6 +216,38 @@ function getPersonInitials(label: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
+}
+
+function getCandidateDisplayName(candidate: AssetPreviewCandidate, unknownPersonLabel: string) {
+  return candidate.fullName || candidate.email || unknownPersonLabel;
+}
+
+function getCandidateIdentityLabel(
+  candidate: AssetPreviewCandidate,
+  consentIdentityLabel: string,
+  recurringIdentityLabel: string,
+) {
+  return candidate.identityKind === "project_consent" ? consentIdentityLabel : recurringIdentityLabel;
+}
+
+function getCandidateBlockedReasonLabel(
+  candidate: AssetPreviewCandidate,
+  labels: {
+    missing: string;
+    pending: string;
+    revoked: string;
+  },
+) {
+  switch (candidate.assignmentBlockedReason) {
+    case "project_consent_missing":
+      return labels.missing;
+    case "project_consent_pending":
+      return labels.pending;
+    case "project_consent_revoked":
+      return labels.revoked;
+    default:
+      return null;
+  }
 }
 
 function describeLinkMeta(linkedFace: LinkedFacePreview) {
@@ -347,9 +422,12 @@ export function AssetPreviewConsentPanel({
   consentSummaryLabel,
   headshotLabel,
   noEmailLabel,
+  unknownPersonLabel,
   unknownValueLabel,
   activeLabel,
   revokedLabel,
+  consentIdentityLabel,
+  recurringIdentityLabel,
   autoLinkLabel,
   manualLinkLabel,
   removeLinkLabel,
@@ -372,7 +450,7 @@ export function AssetPreviewConsentPanel({
   isChangePersonOpen,
   isLoadingCandidates,
   candidates,
-  selectedReplacementConsentId,
+  selectedReplacementCandidateKey,
   onRemoveLink,
   onHideFace,
   onBlockFace,
@@ -388,9 +466,12 @@ export function AssetPreviewConsentPanel({
   consentSummaryLabel: string;
   headshotLabel: string;
   noEmailLabel: string;
+  unknownPersonLabel: string;
   unknownValueLabel: string;
   activeLabel: string;
   revokedLabel: string;
+  consentIdentityLabel: string;
+  recurringIdentityLabel: string;
   autoLinkLabel: string;
   manualLinkLabel: string;
   removeLinkLabel: string;
@@ -413,12 +494,12 @@ export function AssetPreviewConsentPanel({
   isChangePersonOpen: boolean;
   isLoadingCandidates: boolean;
   candidates: AssetPreviewCandidate[];
-  selectedReplacementConsentId: string | null;
+  selectedReplacementCandidateKey: string | null;
   onRemoveLink: () => void;
   onHideFace?: (() => void) | null;
   onBlockFace?: (() => void) | null;
   onToggleChangePerson: () => void;
-  onSelectReplacement: (consentId: string) => void;
+  onSelectReplacement: (candidateKey: string) => void;
   onSaveChange: () => void;
 }) {
   if (!linkedFace) {
@@ -429,17 +510,24 @@ export function AssetPreviewConsentPanel({
     );
   }
 
-  const displayName =
-    linkedFace.consent.fullName ||
-    linkedFace.consent.email ||
-    `Consent ${linkedFace.consent.consentId}`;
+  const displayName = linkedFace.displayName || linkedFace.email || unknownPersonLabel;
+  const currentLinkedCandidateKey =
+    linkedFace.identityKind === "project_consent" && linkedFace.consent?.consentId
+      ? `consent:${linkedFace.consent.consentId}`
+      : linkedFace.recurring?.projectProfileParticipantId
+        ? `participant:${linkedFace.recurring.projectProfileParticipantId}`
+        : null;
   const selectedReplacement =
-    candidates.find((candidate) => candidate.consentId === selectedReplacementConsentId) ?? null;
+    candidates.find((candidate) => candidate.candidateKey === selectedReplacementCandidateKey) ?? null;
   const movingExistingLink =
     selectedReplacement?.currentAssetLink &&
     selectedReplacement.currentAssetLink.assetFaceId !== linkedFace.assetFaceId
       ? selectedReplacement.currentAssetLink
       : null;
+  const linkedFaceHeadshotThumbnailUrl =
+    linkedFace.consent?.headshotThumbnailUrl ?? linkedFace.recurring?.headshotThumbnailUrl ?? null;
+  const linkedFaceHeadshotPreviewUrl =
+    linkedFace.consent?.headshotPreviewUrl ?? linkedFace.recurring?.headshotPreviewUrl ?? null;
 
   return (
     <div className="h-full rounded-xl border border-zinc-200 bg-white p-4">
@@ -458,10 +546,13 @@ export function AssetPreviewConsentPanel({
           </span>
             <div className="min-w-0 flex-1">
               <p className="text-base font-semibold text-zinc-900">{displayName}</p>
-              <p className="mt-1 truncate text-sm text-zinc-600">{linkedFace.consent.email ?? noEmailLabel}</p>
+              <p className="mt-1 truncate text-sm text-zinc-600">{linkedFace.email ?? noEmailLabel}</p>
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                 <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-700">
-                  {linkedFace.consent.status === "revoked" ? revokedLabel : activeLabel}
+                  {linkedFace.ownerState === "revoked" ? revokedLabel : activeLabel}
+                </span>
+                <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-700">
+                  {linkedFace.identityKind === "project_consent" ? consentIdentityLabel : recurringIdentityLabel}
                 </span>
                 <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-700">
                   {linkedFace.linkSource === "auto" && typeof linkedFace.matchConfidence === "number"
@@ -478,12 +569,14 @@ export function AssetPreviewConsentPanel({
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
               <p className="text-xs text-zinc-500">{signedLabel}</p>
               <p className="mt-1 text-sm font-medium text-zinc-900">
-                {linkedFace.consent.signedAt ? formatDate(linkedFace.consent.signedAt, locale) : unknownValueLabel}
+                {(linkedFace.consent?.signedAt ?? linkedFace.recurring?.signedAt)
+                  ? formatDate(linkedFace.consent?.signedAt ?? linkedFace.recurring?.signedAt ?? "", locale)
+                  : unknownValueLabel}
               </p>
             </div>
           </div>
 
-          {linkedFace.consent.structuredSnapshotSummary?.length ? (
+          {linkedFace.consent?.structuredSnapshotSummary?.length ? (
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
               <p className="text-xs text-zinc-500">{consentSummaryLabel}</p>
               <ul className="mt-2 space-y-1 text-sm text-zinc-800">
@@ -494,13 +587,13 @@ export function AssetPreviewConsentPanel({
           </div>
         ) : null}
 
-          {linkedFace.consent.headshotThumbnailUrl ? (
+          {linkedFaceHeadshotThumbnailUrl ? (
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
               <p className="text-xs text-zinc-500">{headshotLabel}</p>
               <div className="mt-2 h-20 w-20 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100">
                 <PreviewableImage
-                  src={linkedFace.consent.headshotThumbnailUrl}
-                  previewSrc={linkedFace.consent.headshotPreviewUrl}
+                  src={linkedFaceHeadshotThumbnailUrl}
+                  previewSrc={linkedFaceHeadshotPreviewUrl}
                   alt={headshotLabel}
                   className="h-full w-full"
                   imageClassName="h-full w-full object-cover"
@@ -518,12 +611,14 @@ export function AssetPreviewConsentPanel({
           ) : null}
 
           <div className="flex flex-wrap gap-2 pt-1">
-            <a
-              href={linkedFace.consent.goToConsentHref}
-              className="inline-flex rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-            >
-              {goToConsentLabel}
-            </a>
+            {linkedFace.consent?.goToConsentHref ? (
+              <a
+                href={linkedFace.consent.goToConsentHref}
+                className="inline-flex rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+              >
+                {goToConsentLabel}
+              </a>
+            ) : null}
             <button
               type="button"
               disabled={isSaving}
@@ -570,17 +665,18 @@ export function AssetPreviewConsentPanel({
                 ) : candidates.length === 0 ? (
                   <p className="text-sm text-zinc-600">{pickerEmptyLabel}</p>
                 ) : (
-                  <div className="max-h-72 space-y-2 overflow-y-auto">
+                    <div className="max-h-72 space-y-2 overflow-y-auto">
                     {candidates.map((candidate) => {
-                      const candidateName = candidate.fullName || `Consent ${candidate.consentId}`;
-                      const isCurrent = candidate.consentId === linkedFace.consent.consentId;
-                      const isSelectedCandidate = candidate.consentId === selectedReplacementConsentId;
+                      const candidateName = candidate.fullName || candidate.email || unknownPersonLabel;
+                      const isCurrent = candidate.candidateKey === currentLinkedCandidateKey;
+                      const isSelectedCandidate = candidate.candidateKey === selectedReplacementCandidateKey;
 
                       return (
                         <button
-                          key={candidate.consentId}
+                          key={candidate.candidateKey}
                           type="button"
-                          onClick={() => onSelectReplacement(candidate.consentId)}
+                          disabled={!candidate.assignable}
+                          onClick={() => onSelectReplacement(candidate.candidateKey)}
                           className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left ${
                             isSelectedCandidate
                               ? "border-zinc-900 bg-white"
@@ -634,7 +730,8 @@ export function AssetPreviewConsentPanel({
                   disabled={
                     isSaving ||
                     !selectedReplacement ||
-                    selectedReplacement.consentId === linkedFace.consent.consentId
+                    selectedReplacement.candidateKey === currentLinkedCandidateKey ||
+                    !selectedReplacement.assignable
                   }
                   onClick={onSaveChange}
                   className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
@@ -658,6 +755,8 @@ export function AssetPreviewLinkedPeopleStrip({
   onHoverChange,
   onSelect,
   emptyLabel,
+  loadingLabel,
+  unknownPersonLabel,
   autoLinkLabel,
   manualLinkLabel,
 }: {
@@ -669,13 +768,15 @@ export function AssetPreviewLinkedPeopleStrip({
   onHoverChange: (assetFaceId: string | null) => void;
   onSelect: (assetFaceId: string) => void;
   emptyLabel: string;
+  loadingLabel: string;
+  unknownPersonLabel: string;
   autoLinkLabel: string;
   manualLinkLabel: string;
 }) {
   if (isLoading && linkedFaces.length === 0) {
     return (
       <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-600">
-        Loading linked people...
+        {loadingLabel}
       </div>
     );
   }
@@ -700,10 +801,14 @@ export function AssetPreviewLinkedPeopleStrip({
     <div className="rounded-xl border border-zinc-200 bg-white p-3">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {linkedFaces.map((linkedFace) => {
-          const displayName = linkedFace.consent.fullName || `Consent ${linkedFace.consent.consentId}`;
+          const displayName = linkedFace.displayName || linkedFace.email || unknownPersonLabel;
           const isHovered = hoveredLinkedFaceId === linkedFace.assetFaceId;
           const isSelected = selectedLinkedFaceId === linkedFace.assetFaceId;
-          const thumbnailUrl = linkedFace.consent.headshotThumbnailUrl ?? linkedFace.faceThumbnailUrl ?? null;
+          const thumbnailUrl =
+            linkedFace.consent?.headshotThumbnailUrl
+            ?? linkedFace.recurring?.headshotThumbnailUrl
+            ?? linkedFace.faceThumbnailUrl
+            ?? null;
 
           return (
             <button
@@ -890,7 +995,7 @@ function AssetPreviewSceneActions({
 function AssetPreviewUnlinkedFaceTray({
   candidates,
   isLoadingCandidates,
-  selectedCandidateConsentId,
+  selectedCandidateKey,
   onSelectCandidate,
   onSave,
   onHide,
@@ -917,11 +1022,18 @@ function AssetPreviewUnlinkedFaceTray({
   confirmMoveLabel,
   cancelLabel,
   autoLabel,
+  consentIdentityLabel,
+  recurringIdentityLabel,
+  unknownPersonLabel,
+  blockedReasonMissingLabel,
+  blockedReasonPendingLabel,
+  blockedReasonRevokedLabel,
+  openPreviewLabel,
 }: {
   candidates: AssetPreviewCandidate[];
   isLoadingCandidates: boolean;
-  selectedCandidateConsentId: string | null;
-  onSelectCandidate: (consentId: string) => void;
+  selectedCandidateKey: string | null;
+  onSelectCandidate: (candidateKey: string) => void;
   onSave: () => void;
   onHide: () => void;
   onBlock: () => void;
@@ -947,9 +1059,16 @@ function AssetPreviewUnlinkedFaceTray({
   confirmMoveLabel: string;
   cancelLabel: string;
   autoLabel: string;
+  consentIdentityLabel: string;
+  recurringIdentityLabel: string;
+  unknownPersonLabel: string;
+  blockedReasonMissingLabel: string;
+  blockedReasonPendingLabel: string;
+  blockedReasonRevokedLabel: string;
+  openPreviewLabel: (name: string) => string;
 }) {
   const [previewCandidate, setPreviewCandidate] = useState<AssetPreviewCandidate | null>(null);
-  const [confirmMoveConsentId, setConfirmMoveConsentId] = useState<string | null>(null);
+  const [confirmMoveCandidateKey, setConfirmMoveCandidateKey] = useState<string | null>(null);
 
   return (
     <div className="flex h-[20rem] max-h-full select-none flex-col overflow-hidden rounded-xl border border-zinc-300 bg-white p-3 shadow-sm">
@@ -983,43 +1102,56 @@ function AssetPreviewUnlinkedFaceTray({
             onPointerDown={(event) => event.stopPropagation()}
           >
             {candidates.map((candidate) => {
-              const candidateName = candidate.fullName || `Consent ${candidate.consentId}`;
-              const isSelected = candidate.consentId === selectedCandidateConsentId;
+              const candidateName = getCandidateDisplayName(candidate, unknownPersonLabel);
+              const isSelected = candidate.candidateKey === selectedCandidateKey;
               const isLinkedElsewhere =
                 Boolean(candidate.currentAssetLink) &&
                 candidate.currentAssetLink?.assetFaceId !== null;
-              const isAwaitingMoveConfirm = confirmMoveConsentId === candidate.consentId;
+              const isAwaitingMoveConfirm = confirmMoveCandidateKey === candidate.candidateKey;
+              const blockedReasonLabel = getCandidateBlockedReasonLabel(candidate, {
+                missing: blockedReasonMissingLabel,
+                pending: blockedReasonPendingLabel,
+                revoked: blockedReasonRevokedLabel,
+              });
 
               return (
                 <div
-                  key={candidate.consentId}
+                  key={candidate.candidateKey}
                   onClick={() => {
+                    if (!candidate.assignable) {
+                      return;
+                    }
                     if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
-                      setConfirmMoveConsentId(candidate.consentId);
+                      setConfirmMoveCandidateKey(candidate.candidateKey);
                       return;
                     }
 
-                    setConfirmMoveConsentId(null);
-                    onSelectCandidate(candidate.consentId);
+                    setConfirmMoveCandidateKey(null);
+                    onSelectCandidate(candidate.candidateKey);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
+                      if (!candidate.assignable) {
+                        return;
+                      }
                       if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
-                        setConfirmMoveConsentId(candidate.consentId);
+                        setConfirmMoveCandidateKey(candidate.candidateKey);
                         return;
                       }
 
-                      setConfirmMoveConsentId(null);
-                      onSelectCandidate(candidate.consentId);
+                      setConfirmMoveCandidateKey(null);
+                      onSelectCandidate(candidate.candidateKey);
                     }
                   }}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={candidate.assignable ? 0 : -1}
                   aria-pressed={isSelected}
                   className={`w-full rounded-lg border px-2 py-2 text-left ${
                     isSelected
                       ? "border-zinc-900 bg-zinc-50"
+                      : !candidate.assignable
+                        ? "border-zinc-200 bg-zinc-50 text-zinc-500 opacity-70"
                       : isLinkedElsewhere
                         ? "border-zinc-300 bg-zinc-100 text-zinc-600 opacity-80 ring-1 ring-zinc-200 hover:border-zinc-400"
                         : "border-zinc-200 bg-white hover:border-zinc-300"
@@ -1041,8 +1173,8 @@ function AssetPreviewUnlinkedFaceTray({
                             setPreviewCandidate(candidate);
                           }}
                           className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/95 text-zinc-700 hover:bg-white"
-                          aria-label={`Open ${candidateName}`}
-                          title={`Open ${candidateName}`}
+                          aria-label={openPreviewLabel(candidateName)}
+                          title={openPreviewLabel(candidateName)}
                         >
                           <EnlargeImageIcon className="h-3.5 w-3.5" />
                         </button>
@@ -1052,10 +1184,13 @@ function AssetPreviewUnlinkedFaceTray({
                         {getPersonInitials(candidateName)}
                       </span>
                     )}
-                    <span className="block min-w-0 flex-1">
-                      <span className={`block truncate text-sm font-medium ${isLinkedElsewhere ? "text-zinc-600" : "text-zinc-900"}`}>
-                        {candidateName}
-                      </span>
+                      <span className="block min-w-0 flex-1">
+                        <span className={`block truncate text-sm font-medium ${isLinkedElsewhere ? "text-zinc-600" : "text-zinc-900"}`}>
+                          {candidateName}
+                        </span>
+                        <span className="mt-1 inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-700">
+                          {getCandidateIdentityLabel(candidate, consentIdentityLabel, recurringIdentityLabel)}
+                        </span>
                       <span className="mt-1 flex items-center gap-1 text-xs text-zinc-500">
                         <AutoCandidateIcon className="h-3.5 w-3.5 text-zinc-700" />
                         <span>{autoLabel}</span>
@@ -1063,6 +1198,11 @@ function AssetPreviewUnlinkedFaceTray({
                           <span>{Math.round(candidate.similarityScore * 100)}%</span>
                         ) : null}
                       </span>
+                      {blockedReasonLabel ? (
+                        <span className="mt-2 block rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                          {blockedReasonLabel}
+                        </span>
+                      ) : null}
                       {candidate.currentAssetLink ? (
                         <span className="mt-2 inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
                           {linkedToFaceLabel((candidate.currentAssetLink.faceRank ?? 0) + 1)}
@@ -1079,8 +1219,8 @@ function AssetPreviewUnlinkedFaceTray({
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                setConfirmMoveConsentId(null);
-                                onSelectCandidate(candidate.consentId);
+                                setConfirmMoveCandidateKey(null);
+                                onSelectCandidate(candidate.candidateKey);
                               }}
                               className="rounded-md border border-zinc-900 bg-zinc-900 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800"
                             >
@@ -1091,7 +1231,7 @@ function AssetPreviewUnlinkedFaceTray({
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                setConfirmMoveConsentId(null);
+                                setConfirmMoveCandidateKey(null);
                               }}
                               className="text-xs font-medium text-zinc-600 hover:text-zinc-900"
                             >
@@ -1119,7 +1259,7 @@ function AssetPreviewUnlinkedFaceTray({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={isSavingLink || isSavingHide || isSavingBlock || !selectedCandidateConsentId}
+            disabled={isSavingLink || isSavingHide || isSavingBlock || !selectedCandidateKey}
             onClick={onSave}
             className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
           >
@@ -1171,7 +1311,7 @@ function AssetPreviewUnlinkedFaceTray({
         <ImagePreviewLightbox
           open
           src={previewCandidate.headshotThumbnailUrl}
-          alt={previewCandidate.fullName || `Consent ${previewCandidate.consentId}`}
+          alt={getCandidateDisplayName(previewCandidate, unknownPersonLabel)}
           previewImageClassName="object-contain"
           chrome="floating"
           onClose={() => setPreviewCandidate(null)}
@@ -1186,7 +1326,7 @@ function AssetPreviewBlockedFaceTray({
   candidates,
   isAssignPersonOpen,
   isLoadingCandidates,
-  selectedCandidateConsentId,
+  selectedCandidateKey,
   onToggleAssignPerson,
   onSelectCandidate,
   onSave,
@@ -1209,14 +1349,21 @@ function AssetPreviewBlockedFaceTray({
   confirmMoveLabel,
   cancelLabel,
   autoLabel,
+  consentIdentityLabel,
+  recurringIdentityLabel,
+  unknownPersonLabel,
+  blockedReasonMissingLabel,
+  blockedReasonPendingLabel,
+  blockedReasonRevokedLabel,
+  openPreviewLabel,
 }: {
   selectedFace: AssetPreviewFace;
   candidates: AssetPreviewCandidate[];
   isAssignPersonOpen: boolean;
   isLoadingCandidates: boolean;
-  selectedCandidateConsentId: string | null;
+  selectedCandidateKey: string | null;
   onToggleAssignPerson: () => void;
-  onSelectCandidate: (consentId: string) => void;
+  onSelectCandidate: (candidateKey: string) => void;
   onSave: () => void;
   onClearBlock: () => void;
   isSavingLink: boolean;
@@ -1237,9 +1384,16 @@ function AssetPreviewBlockedFaceTray({
   confirmMoveLabel: string;
   cancelLabel: string;
   autoLabel: string;
+  consentIdentityLabel: string;
+  recurringIdentityLabel: string;
+  unknownPersonLabel: string;
+  blockedReasonMissingLabel: string;
+  blockedReasonPendingLabel: string;
+  blockedReasonRevokedLabel: string;
+  openPreviewLabel: (name: string) => string;
 }) {
   const [previewCandidate, setPreviewCandidate] = useState<AssetPreviewCandidate | null>(null);
-  const [confirmMoveConsentId, setConfirmMoveConsentId] = useState<string | null>(null);
+  const [confirmMoveCandidateKey, setConfirmMoveCandidateKey] = useState<string | null>(null);
   const isSaving = isSavingLink || isClearingBlock;
 
   return (
@@ -1297,43 +1451,56 @@ function AssetPreviewBlockedFaceTray({
             ) : (
               <div className="max-h-72 space-y-2 overflow-y-auto">
                 {candidates.map((candidate) => {
-                  const candidateName = candidate.fullName || `Consent ${candidate.consentId}`;
-                  const isSelected = candidate.consentId === selectedCandidateConsentId;
+                  const candidateName = getCandidateDisplayName(candidate, unknownPersonLabel);
+                  const isSelected = candidate.candidateKey === selectedCandidateKey;
                   const isLinkedElsewhere =
                     Boolean(candidate.currentAssetLink) &&
                     candidate.currentAssetLink?.assetFaceId !== selectedFace.assetFaceId;
-                  const isAwaitingMoveConfirm = confirmMoveConsentId === candidate.consentId;
+                  const isAwaitingMoveConfirm = confirmMoveCandidateKey === candidate.candidateKey;
+                  const blockedReasonLabel = getCandidateBlockedReasonLabel(candidate, {
+                    missing: blockedReasonMissingLabel,
+                    pending: blockedReasonPendingLabel,
+                    revoked: blockedReasonRevokedLabel,
+                  });
 
                   return (
                     <div
-                      key={candidate.consentId}
+                      key={candidate.candidateKey}
                       onClick={() => {
+                        if (!candidate.assignable) {
+                          return;
+                        }
                         if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
-                          setConfirmMoveConsentId(candidate.consentId);
+                          setConfirmMoveCandidateKey(candidate.candidateKey);
                           return;
                         }
 
-                        setConfirmMoveConsentId(null);
-                        onSelectCandidate(candidate.consentId);
+                        setConfirmMoveCandidateKey(null);
+                        onSelectCandidate(candidate.candidateKey);
                       }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
+                          if (!candidate.assignable) {
+                            return;
+                          }
                           if (isLinkedElsewhere && !isAwaitingMoveConfirm) {
-                            setConfirmMoveConsentId(candidate.consentId);
+                            setConfirmMoveCandidateKey(candidate.candidateKey);
                             return;
                           }
 
-                          setConfirmMoveConsentId(null);
-                          onSelectCandidate(candidate.consentId);
+                          setConfirmMoveCandidateKey(null);
+                          onSelectCandidate(candidate.candidateKey);
                         }
                       }}
                       role="button"
-                      tabIndex={0}
+                      tabIndex={candidate.assignable ? 0 : -1}
                       aria-pressed={isSelected}
                       className={`w-full rounded-lg border px-2 py-2 text-left ${
                         isSelected
                           ? "border-zinc-900 bg-white"
+                          : !candidate.assignable
+                            ? "border-zinc-200 bg-zinc-50 text-zinc-500 opacity-70"
                           : isLinkedElsewhere
                             ? "border-zinc-300 bg-zinc-100 text-zinc-600 opacity-80 ring-1 ring-zinc-200 hover:border-zinc-400"
                             : "border-zinc-200 bg-white hover:border-zinc-300"
@@ -1355,8 +1522,8 @@ function AssetPreviewBlockedFaceTray({
                                 setPreviewCandidate(candidate);
                               }}
                               className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/95 text-zinc-700 hover:bg-white"
-                              aria-label={`Open ${candidateName}`}
-                              title={`Open ${candidateName}`}
+                              aria-label={openPreviewLabel(candidateName)}
+                              title={openPreviewLabel(candidateName)}
                             >
                               <EnlargeImageIcon className="h-3.5 w-3.5" />
                             </button>
@@ -1370,6 +1537,9 @@ function AssetPreviewBlockedFaceTray({
                           <span className={`block truncate text-sm font-medium ${isLinkedElsewhere ? "text-zinc-600" : "text-zinc-900"}`}>
                             {candidateName}
                           </span>
+                          <span className="mt-1 inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-700">
+                            {getCandidateIdentityLabel(candidate, consentIdentityLabel, recurringIdentityLabel)}
+                          </span>
                           <span className="mt-1 flex items-center gap-1 text-xs text-zinc-500">
                             <AutoCandidateIcon className="h-3.5 w-3.5 text-zinc-700" />
                             <span>{autoLabel}</span>
@@ -1377,6 +1547,11 @@ function AssetPreviewBlockedFaceTray({
                               <span>{Math.round(candidate.similarityScore * 100)}%</span>
                             ) : null}
                           </span>
+                          {blockedReasonLabel ? (
+                            <span className="mt-2 block rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                              {blockedReasonLabel}
+                            </span>
+                          ) : null}
                           {candidate.currentAssetLink ? (
                             <span className="mt-2 inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
                               {linkedToFaceLabel((candidate.currentAssetLink.faceRank ?? 0) + 1)}
@@ -1393,8 +1568,8 @@ function AssetPreviewBlockedFaceTray({
                                   onClick={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    setConfirmMoveConsentId(null);
-                                    onSelectCandidate(candidate.consentId);
+                                    setConfirmMoveCandidateKey(null);
+                                    onSelectCandidate(candidate.candidateKey);
                                   }}
                                   className="rounded-md border border-zinc-900 bg-zinc-900 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800"
                                 >
@@ -1405,7 +1580,7 @@ function AssetPreviewBlockedFaceTray({
                                   onClick={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    setConfirmMoveConsentId(null);
+                                    setConfirmMoveCandidateKey(null);
                                   }}
                                   className="text-xs font-medium text-zinc-600 hover:text-zinc-900"
                                 >
@@ -1424,7 +1599,7 @@ function AssetPreviewBlockedFaceTray({
 
             <button
               type="button"
-              disabled={isSaving || !selectedCandidateConsentId}
+              disabled={isSaving || !selectedCandidateKey}
               onClick={onSave}
               className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
             >
@@ -1438,7 +1613,7 @@ function AssetPreviewBlockedFaceTray({
         <ImagePreviewLightbox
           open
           src={previewCandidate.headshotThumbnailUrl}
-          alt={previewCandidate.fullName || `Consent ${previewCandidate.consentId}`}
+          alt={getCandidateDisplayName(previewCandidate, unknownPersonLabel)}
           previewImageClassName="object-contain"
           chrome="floating"
           onClose={() => setPreviewCandidate(null)}
@@ -1543,13 +1718,14 @@ export function ProjectAssetPreviewLightbox({
   const [hoveredFaceId, setHoveredFaceId] = useState<string | null>(null);
   const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null);
   const [isChangePersonOpen, setIsChangePersonOpen] = useState(false);
-  const [selectedReplacementConsentId, setSelectedReplacementConsentId] = useState<string | null>(null);
+  const [selectedReplacementCandidateKey, setSelectedReplacementCandidateKey] = useState<string | null>(null);
   const [showHiddenFaces, setShowHiddenFaces] = useState(false);
   const [isConfirmingHideFace, setIsConfirmingHideFace] = useState(false);
   const [isAddPersonMenuOpen, setIsAddPersonMenuOpen] = useState(false);
   const [isDrawFaceMode, setIsDrawFaceMode] = useState(false);
   const [draftManualFaceBox, setDraftManualFaceBox] = useState<Record<string, number | null> | null>(null);
   const [isSavingManualFace, setIsSavingManualFace] = useState(false);
+  const unknownPersonLabel = t("previewUnknownPerson");
 
   const loadPreviewData = useCallback(async (signal?: AbortSignal) => {
     setIsLoadingPreviewData(true);
@@ -1634,7 +1810,7 @@ export function ProjectAssetPreviewLightbox({
     setHoveredFaceId(null);
     setSelectedFaceId(null);
     setIsChangePersonOpen(false);
-    setSelectedReplacementConsentId(null);
+    setSelectedReplacementCandidateKey(null);
     setShowHiddenFaces(false);
     setIsConfirmingHideFace(false);
     setIsAddPersonMenuOpen(false);
@@ -1670,9 +1846,9 @@ export function ProjectAssetPreviewLightbox({
     selectedLinkedFace && candidateData?.assetFaceId === selectedLinkedFace.assetFaceId ? candidateData.candidates : [];
   const selectedFacePreviewCandidate =
     (selectedFace?.faceState === "unlinked" || selectedFace?.faceState === "blocked") &&
-    selectedReplacementConsentId &&
+    selectedReplacementCandidateKey &&
     candidateData?.assetFaceId === selectedFace.assetFaceId
-      ? candidateData.candidates.find((candidate) => candidate.consentId === selectedReplacementConsentId) ?? null
+      ? candidateData.candidates.find((candidate) => candidate.candidateKey === selectedReplacementCandidateKey) ?? null
       : null;
   const isDraftManualFaceSaveable = isManualFaceDraftSaveable(draftManualFaceBox);
 
@@ -1688,20 +1864,20 @@ export function ProjectAssetPreviewLightbox({
             id: buildOverlayId(
               face.assetFaceId,
               isSelectedUnlinkedPreview
-                ? selectedFacePreviewCandidate.consentId
-                : face.currentLink?.consentId,
+                ? selectedFacePreviewCandidate.candidateKey
+                : face.currentLink?.projectFaceAssigneeId,
             ),
             href:
-              !isSelectedUnlinkedPreview && face.currentLink?.consent.goToConsentHref
+              !isSelectedUnlinkedPreview && face.currentLink?.consent?.goToConsentHref
                 ? face.currentLink.consent.goToConsentHref
                 : "#",
             label:
               isSelectedUnlinkedPreview
                 ? selectedFacePreviewCandidate.fullName ||
                   selectedFacePreviewCandidate.email ||
-                  `Consent ${selectedFacePreviewCandidate.consentId}`
-                : face.currentLink?.consent.fullName ||
-                  face.currentLink?.consent.email ||
+                  unknownPersonLabel
+                : face.currentLink?.displayName ||
+                  face.currentLink?.email ||
                   (face.faceState === "blocked"
                     ? t("previewBlockedFaceLabel", { face: face.faceRank + 1 })
                     : t("previewDetectedFaceLabel", { face: face.faceRank + 1 })),
@@ -1709,7 +1885,9 @@ export function ProjectAssetPreviewLightbox({
             headshotThumbnailUrl:
               isSelectedUnlinkedPreview
                 ? selectedFacePreviewCandidate.headshotThumbnailUrl ?? null
-                : face.currentLink?.consent.headshotThumbnailUrl ?? null,
+                : face.currentLink?.consent?.headshotThumbnailUrl
+                  ?? face.currentLink?.recurring?.headshotThumbnailUrl
+                  ?? null,
             matchConfidence:
               isSelectedUnlinkedPreview
                 ? selectedFacePreviewCandidate.similarityScore ?? null
@@ -1752,7 +1930,15 @@ export function ProjectAssetPreviewLightbox({
     }
 
     return asset.initialPreviewFaceOverlays;
-  }, [asset.initialPreviewFaceOverlays, previewData, selectedFace?.assetFaceId, selectedFacePreviewCandidate, t, visibleFaces]);
+  }, [
+    asset.initialPreviewFaceOverlays,
+    previewData,
+    selectedFace?.assetFaceId,
+    selectedFacePreviewCandidate,
+    t,
+    unknownPersonLabel,
+    visibleFaces,
+  ]);
 
   const selectedOverlayId = useMemo(() => {
     if (isDrawFaceMode || !selectedFaceId) {
@@ -1770,7 +1956,7 @@ export function ProjectAssetPreviewLightbox({
     if (!allFaces.some((face) => face.assetFaceId === selectedFaceId)) {
       setSelectedFaceId(null);
       setIsChangePersonOpen(false);
-      setSelectedReplacementConsentId(null);
+      setSelectedReplacementCandidateKey(null);
       setCandidateData(null);
       setIsConfirmingHideFace(false);
       setIsSavingBlock(false);
@@ -1782,7 +1968,7 @@ export function ProjectAssetPreviewLightbox({
     if (!showHiddenFaces && selectedFace?.faceState === "hidden") {
       setSelectedFaceId(null);
       setCandidateData(null);
-      setSelectedReplacementConsentId(null);
+      setSelectedReplacementCandidateKey(null);
       setIsConfirmingHideFace(false);
       setIsSavingBlock(false);
       setIsClearingBlock(false);
@@ -1792,14 +1978,14 @@ export function ProjectAssetPreviewLightbox({
   useEffect(() => {
     if (isDrawFaceMode) {
       setCandidateData(null);
-      setSelectedReplacementConsentId(null);
+      setSelectedReplacementCandidateKey(null);
       setIsConfirmingHideFace(false);
       return;
     }
 
     if (!selectedFace) {
       setCandidateData(null);
-      setSelectedReplacementConsentId(null);
+      setSelectedReplacementCandidateKey(null);
       setIsConfirmingHideFace(false);
       return;
     }
@@ -1811,7 +1997,7 @@ export function ProjectAssetPreviewLightbox({
 
     if (!shouldLoadCandidates) {
       setCandidateData(null);
-      setSelectedReplacementConsentId(null);
+      setSelectedReplacementCandidateKey(null);
       setIsConfirmingHideFace(false);
       return;
     }
@@ -1821,7 +2007,7 @@ export function ProjectAssetPreviewLightbox({
     }
 
     setCandidateData(null);
-    setSelectedReplacementConsentId(null);
+    setSelectedReplacementCandidateKey(null);
     setIsConfirmingHideFace(false);
     void loadCandidateData(selectedFace.assetFaceId);
   }, [candidateData?.assetFaceId, isChangePersonOpen, isDrawFaceMode, loadCandidateData, selectedFace]);
@@ -1834,7 +2020,7 @@ export function ProjectAssetPreviewLightbox({
     setSelectedFaceId(null);
     setCandidateData(null);
     setIsChangePersonOpen(false);
-    setSelectedReplacementConsentId(null);
+    setSelectedReplacementCandidateKey(null);
     setIsConfirmingHideFace(false);
     setActionError(null);
     setIsSavingBlock(false);
@@ -1854,7 +2040,7 @@ export function ProjectAssetPreviewLightbox({
     setSelectedFaceId(nextSelectedFaceId);
     setCandidateData(null);
     setIsChangePersonOpen(false);
-    setSelectedReplacementConsentId(null);
+    setSelectedReplacementCandidateKey(null);
     setIsConfirmingHideFace(false);
     setIsAddPersonMenuOpen(false);
     setIsDrawFaceMode(false);
@@ -1907,17 +2093,9 @@ export function ProjectAssetPreviewLightbox({
     setActionError(null);
     try {
       const response = await fetch(
-        `/api/projects/${projectId}/consents/${selectedLinkedFace.consent.consentId}/assets/links`,
+        `/api/projects/${projectId}/assets/${asset.id}/faces/${selectedLinkedFace.assetFaceId}/assignment`,
         {
           method: "DELETE",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            assetId: asset.id,
-            mode: "face",
-            assetFaceId: selectedLinkedFace.assetFaceId,
-          }),
         },
       );
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -1936,7 +2114,15 @@ export function ProjectAssetPreviewLightbox({
   }
 
   async function submitSelectedFaceLink() {
-    if (!selectedFace || !selectedReplacementConsentId) {
+    if (!selectedFace || !selectedReplacementCandidateKey) {
+      return;
+    }
+
+    const selectedCandidate =
+      candidateData?.assetFaceId === selectedFace.assetFaceId
+        ? candidateData.candidates.find((candidate) => candidate.candidateKey === selectedReplacementCandidateKey) ?? null
+        : null;
+    if (!selectedCandidate || !selectedCandidate.assignable) {
       return;
     }
 
@@ -1954,16 +2140,16 @@ export function ProjectAssetPreviewLightbox({
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         response = await fetch(
-          `/api/projects/${projectId}/consents/${selectedReplacementConsentId}/assets/links`,
+          `/api/projects/${projectId}/assets/${asset.id}/faces/${selectedFace.assetFaceId}/assignment`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              assetId: asset.id,
-              mode: "face",
-              assetFaceId: selectedFace.assetFaceId,
+              identityKind: selectedCandidate.identityKind,
+              consentId: selectedCandidate.consentId,
+              projectProfileParticipantId: selectedCandidate.projectProfileParticipantId,
               forceReplace: shouldForceReplace,
             }),
           },
@@ -2141,7 +2327,7 @@ export function ProjectAssetPreviewLightbox({
         const nextFaceId = extractAssetFaceId(overlay.id);
         setSelectedFaceId(nextFaceId);
         setIsChangePersonOpen(false);
-        setSelectedReplacementConsentId(null);
+        setSelectedReplacementCandidateKey(null);
         setCandidateData(null);
         setIsConfirmingHideFace(false);
         setActionError(null);
@@ -2151,9 +2337,9 @@ export function ProjectAssetPreviewLightbox({
           <AssetPreviewUnlinkedFaceTray
             candidates={selectedFaceCandidates}
             isLoadingCandidates={isLoadingCandidates}
-            selectedCandidateConsentId={selectedReplacementConsentId}
+            selectedCandidateKey={selectedReplacementCandidateKey}
             onSelectCandidate={(consentId) => {
-              setSelectedReplacementConsentId(consentId);
+              setSelectedReplacementCandidateKey(consentId);
               setActionError(null);
             }}
             onSave={() => {
@@ -2167,7 +2353,7 @@ export function ProjectAssetPreviewLightbox({
             }}
             onClose={() => {
               setSelectedFaceId(null);
-              setSelectedReplacementConsentId(null);
+              setSelectedReplacementCandidateKey(null);
               setCandidateData(null);
               setIsConfirmingHideFace(false);
               setActionError(null);
@@ -2195,6 +2381,13 @@ export function ProjectAssetPreviewLightbox({
             confirmMoveLabel={t("previewSelectPerson")}
             cancelLabel={t("previewCancel")}
             autoLabel={t("previewLinkSourceAuto")}
+            consentIdentityLabel={t("previewIdentityProjectConsent")}
+            recurringIdentityLabel={t("previewIdentityRecurringProfile")}
+            unknownPersonLabel={unknownPersonLabel}
+            blockedReasonMissingLabel={t("previewRecurringBlockedMissing")}
+            blockedReasonPendingLabel={t("previewRecurringBlockedPending")}
+            blockedReasonRevokedLabel={t("previewRecurringBlockedRevoked")}
+            openPreviewLabel={(name) => t("previewOpenCandidateImage", { name })}
           />
         ) : null
       }
@@ -2230,6 +2423,8 @@ export function ProjectAssetPreviewLightbox({
             isLoading={isLoadingPreviewData}
             errorMessage={previewError}
             emptyLabel={t("previewLinkedPeopleEmpty")}
+            loadingLabel={t("previewLinkedPeopleLoading")}
+            unknownPersonLabel={unknownPersonLabel}
             autoLinkLabel={t("previewLinkSourceAuto")}
             manualLinkLabel={t("previewLinkSourceManual")}
             onHoverChange={setHoveredFaceId}
@@ -2241,15 +2436,15 @@ export function ProjectAssetPreviewLightbox({
               candidates={selectedFaceCandidates}
               isAssignPersonOpen={isChangePersonOpen}
               isLoadingCandidates={isLoadingCandidates}
-              selectedCandidateConsentId={selectedReplacementConsentId}
+              selectedCandidateKey={selectedReplacementCandidateKey}
               onToggleAssignPerson={() => {
                 setActionError(null);
                 setCandidateData(null);
-                setSelectedReplacementConsentId(null);
+                setSelectedReplacementCandidateKey(null);
                 setIsChangePersonOpen((current) => !current);
               }}
               onSelectCandidate={(consentId) => {
-                setSelectedReplacementConsentId(consentId);
+                setSelectedReplacementCandidateKey(consentId);
                 setActionError(null);
               }}
               onSave={() => {
@@ -2276,6 +2471,13 @@ export function ProjectAssetPreviewLightbox({
               confirmMoveLabel={t("previewSelectPerson")}
               cancelLabel={t("previewCancel")}
               autoLabel={t("previewLinkSourceAuto")}
+              consentIdentityLabel={t("previewIdentityProjectConsent")}
+              recurringIdentityLabel={t("previewIdentityRecurringProfile")}
+              unknownPersonLabel={unknownPersonLabel}
+              blockedReasonMissingLabel={t("previewRecurringBlockedMissing")}
+              blockedReasonPendingLabel={t("previewRecurringBlockedPending")}
+              blockedReasonRevokedLabel={t("previewRecurringBlockedRevoked")}
+              openPreviewLabel={(name) => t("previewOpenCandidateImage", { name })}
             />
           ) : null}
           {selectedFace?.faceState === "hidden" && showHiddenFaces ? (
@@ -2304,9 +2506,12 @@ export function ProjectAssetPreviewLightbox({
           consentSummaryLabel={t("previewConsentSummaryLabel")}
           headshotLabel={t("previewHeadshotLabel")}
           noEmailLabel={t("previewNoEmail")}
+          unknownPersonLabel={unknownPersonLabel}
           unknownValueLabel={t("previewUnknownValue")}
           activeLabel={t("previewStatusActive")}
           revokedLabel={t("previewStatusRevoked")}
+          consentIdentityLabel={t("previewIdentityProjectConsent")}
+          recurringIdentityLabel={t("previewIdentityRecurringProfile")}
           autoLinkLabel={t("previewLinkSourceAuto")}
           manualLinkLabel={t("previewLinkSourceManual")}
           removeLinkLabel={t("previewRemoveLink")}
@@ -2329,7 +2534,7 @@ export function ProjectAssetPreviewLightbox({
           isChangePersonOpen={isChangePersonOpen}
           isLoadingCandidates={isLoadingCandidates}
           candidates={selectedLinkedFaceCandidates}
-          selectedReplacementConsentId={selectedReplacementConsentId}
+          selectedReplacementCandidateKey={selectedReplacementCandidateKey}
           onRemoveLink={() => {
             void handleRemoveLink();
           }}
@@ -2350,11 +2555,11 @@ export function ProjectAssetPreviewLightbox({
           onToggleChangePerson={() => {
             setActionError(null);
             setCandidateData(null);
-            setSelectedReplacementConsentId(null);
+            setSelectedReplacementCandidateKey(null);
             setIsChangePersonOpen((current) => !current);
           }}
           onSelectReplacement={(consentId) => {
-            setSelectedReplacementConsentId(consentId);
+            setSelectedReplacementCandidateKey(consentId);
             setActionError(null);
           }}
           onSaveChange={() => {

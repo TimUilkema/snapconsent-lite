@@ -5,3 +5,11 @@ export function buildInvitePath(token: string) {
 export function buildRevokePath(token: string) {
   return `/r/${token}`;
 }
+
+export function buildRecurringProfileConsentPath(token: string) {
+  return `/rp/${token}`;
+}
+
+export function buildRecurringProfileRevokePath(token: string) {
+  return `/rr/${token}`;
+}

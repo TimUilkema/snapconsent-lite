@@ -500,16 +500,19 @@ test("asset preview linked faces expose exact linked face crops and bounded cons
   assert.equal(preview.linkedFaces.length, 1);
   assert.equal(preview.linkedFaces[0]?.assetFaceId, targetFaceId);
   assert.equal(preview.linkedFaces[0]?.faceRank, 0);
-  assert.equal(preview.linkedFaces[0]?.linkSource, "manual");
-  assert.equal(preview.linkedFaces[0]?.matchConfidence, null);
+  assert.equal(preview.linkedFaces[0]?.currentLink?.linkSource, "manual");
+  assert.equal(preview.linkedFaces[0]?.currentLink?.matchConfidence, null);
   assert.match(String(preview.linkedFaces[0]?.faceThumbnailUrl), /asset-face-derivatives/);
-  assert.equal("headshotThumbnailUrl" in (preview.linkedFaces[0]?.consent ?? {}), true);
-  assert.equal("headshotPreviewUrl" in (preview.linkedFaces[0]?.consent ?? {}), true);
-  assert.equal(preview.linkedFaces[0]?.consent.status, "revoked");
-  assert.equal(preview.linkedFaces[0]?.consent.consentVersion, "v2");
-  assert.equal(preview.linkedFaces[0]?.consent.faceMatchOptIn, true);
-  assert.match(String(preview.linkedFaces[0]?.consent.goToConsentHref), new RegExp(`openConsentId=${consent.consentId}`));
-  assert.deepEqual(preview.linkedFaces[0]?.consent.structuredSnapshotSummary, [
+  assert.equal("headshotThumbnailUrl" in (preview.linkedFaces[0]?.currentLink?.consent ?? {}), true);
+  assert.equal("headshotPreviewUrl" in (preview.linkedFaces[0]?.currentLink?.consent ?? {}), true);
+  assert.equal(preview.linkedFaces[0]?.currentLink?.consent?.status, "revoked");
+  assert.equal(preview.linkedFaces[0]?.currentLink?.consent?.consentVersion, "v2");
+  assert.equal(preview.linkedFaces[0]?.currentLink?.consent?.faceMatchOptIn, true);
+  assert.match(
+    String(preview.linkedFaces[0]?.currentLink?.consent?.goToConsentHref),
+    new RegExp(`openConsentId=${consent.consentId}`),
+  );
+  assert.deepEqual(preview.linkedFaces[0]?.currentLink?.consent?.structuredSnapshotSummary, [
     "Scope: Website, Social",
     "Duration: 2 years",
     "Territory: EU and UK",
@@ -594,8 +597,13 @@ test("linked people strip renders linked cards and selection state without alter
             y_max: 0.4,
           },
           faceThumbnailUrl: "https://example.com/face-1.webp",
+          projectFaceAssigneeId: "assignee-1",
+          identityKind: "project_consent",
           linkSource: "manual",
           matchConfidence: null,
+          displayName: "Jane Doe",
+          email: "jane@example.com",
+          ownerState: "active",
           consent: {
             consentId: "consent-1",
             fullName: "Jane Doe",
@@ -609,6 +617,7 @@ test("linked people strip renders linked cards and selection state without alter
             headshotPreviewUrl: null,
             goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
           },
+          recurring: null,
         },
       ],
       hoveredLinkedFaceId: null,
@@ -616,6 +625,8 @@ test("linked people strip renders linked cards and selection state without alter
       isLoading: false,
       errorMessage: null,
       emptyLabel: "No linked people",
+      loadingLabel: "Loading linked people",
+      unknownPersonLabel: "Unknown person",
       autoLinkLabel: "Auto",
       manualLinkLabel: "Handmatig",
       onHoverChange: () => {},
@@ -662,7 +673,10 @@ test("consent panel renders placeholder and selected linked-face summary states"
       isChangePersonOpen: false,
       isLoadingCandidates: false,
       candidates: [],
-      selectedReplacementConsentId: null,
+      selectedReplacementCandidateKey: null,
+      unknownPersonLabel: "Unknown person",
+      consentIdentityLabel: "Consent",
+      recurringIdentityLabel: "Recurring",
       onRemoveLink: () => {},
       onToggleChangePerson: () => {},
       onSelectReplacement: () => {},
@@ -684,8 +698,13 @@ test("consent panel renders placeholder and selected linked-face summary states"
           y_max: 0.4,
         },
         faceThumbnailUrl: "https://example.com/face-1.webp",
+        projectFaceAssigneeId: "assignee-1",
+        identityKind: "project_consent",
         linkSource: "manual",
         matchConfidence: null,
+        displayName: "Jane Doe",
+        email: "jane@example.com",
+        ownerState: "revoked",
         consent: {
           consentId: "consent-1",
           fullName: "Jane Doe",
@@ -699,6 +718,7 @@ test("consent panel renders placeholder and selected linked-face summary states"
           headshotPreviewUrl: "https://example.com/headshot-preview.webp",
           goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
         },
+        recurring: null,
       },
       locale: "en",
       placeholderLabel: "Select a linked face",
@@ -728,7 +748,10 @@ test("consent panel renders placeholder and selected linked-face summary states"
       isChangePersonOpen: false,
       isLoadingCandidates: false,
       candidates: [],
-      selectedReplacementConsentId: null,
+      selectedReplacementCandidateKey: null,
+      unknownPersonLabel: "Unknown person",
+      consentIdentityLabel: "Consent",
+      recurringIdentityLabel: "Recurring",
       onRemoveLink: () => {},
       onToggleChangePerson: () => {},
       onSelectReplacement: () => {},
@@ -758,8 +781,13 @@ test("change person picker rows show names without email lines", () => {
           y_max: 0.4,
         },
         faceThumbnailUrl: "https://example.com/face-1.webp",
+        projectFaceAssigneeId: "assignee-1",
+        identityKind: "project_consent",
         linkSource: "manual",
         matchConfidence: null,
+        displayName: "Jane Doe",
+        email: "jane@example.com",
+        ownerState: "active",
         consent: {
           consentId: "consent-1",
           fullName: "Jane Doe",
@@ -773,6 +801,7 @@ test("change person picker rows show names without email lines", () => {
           headshotPreviewUrl: null,
           goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
         },
+        recurring: null,
       },
       locale: "en",
       placeholderLabel: "Select a linked face",
@@ -803,14 +832,26 @@ test("change person picker rows show names without email lines", () => {
       isLoadingCandidates: false,
       candidates: [
         {
+          candidateKey: "consent:consent-2",
+          identityKind: "project_consent",
+          assignable: true,
+          assignmentBlockedReason: null,
           consentId: "consent-2",
           fullName: "Kim Example",
           email: "kim@example.com",
           headshotThumbnailUrl: "https://example.com/headshot.webp",
+          similarityScore: null,
+          scoreSource: "unscored",
           currentAssetLink: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          projectConsentState: "signed",
         },
       ],
-      selectedReplacementConsentId: "consent-2",
+      selectedReplacementCandidateKey: "consent:consent-2",
+      unknownPersonLabel: "Unknown person",
+      consentIdentityLabel: "Consent",
+      recurringIdentityLabel: "Recurring",
       onRemoveLink: () => {},
       onToggleChangePerson: () => {},
       onSelectReplacement: () => {},

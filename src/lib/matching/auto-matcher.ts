@@ -59,7 +59,7 @@ export type AutoMatcherMaterializedFace = {
 
 export type AutoMatcherMaterializationInput = {
   tenantId: string;
-  projectId: string;
+  projectId?: string | null;
   assetId: string;
   assetType: "photo" | "headshot";
   storage: AutoMatcherStorageRef;

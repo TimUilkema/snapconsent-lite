@@ -27,6 +27,14 @@ function buildPageData(canManageProfiles: boolean): RecurringProfilesPageData {
       profileTypeId: null,
       includeArchived: false,
     },
+    baselineTemplates: [
+      {
+        id: randomUUID(),
+        name: "Baseline Consent",
+        version: "v1",
+        scope: "tenant",
+      },
+    ],
     profileTypes: [
       {
         id: randomUUID(),
@@ -59,6 +67,26 @@ function buildPageData(canManageProfiles: boolean): RecurringProfilesPageData {
           status: "active",
           archivedAt: null,
         },
+        baselineConsent: {
+          state: "pending",
+          pendingRequest: {
+            id: randomUUID(),
+            expiresAt: new Date().toISOString(),
+            consentPath: "/rp/example-token",
+            emailSnapshot: "jordan@example.com",
+            updatedAt: new Date().toISOString(),
+          },
+          latestActivityAt: new Date().toISOString(),
+          latestRequestOutcome: null,
+        },
+        matchingReadiness: {
+          state: "ready",
+          authorized: true,
+          currentHeadshotId: randomUUID(),
+          selectionFaceId: randomUUID(),
+          selectionStatus: "auto_selected",
+          materializationStatus: "completed",
+        },
       },
       {
         id: randomUUID(),
@@ -72,6 +100,46 @@ function buildPageData(canManageProfiles: boolean): RecurringProfilesPageData {
           label: "Board",
           status: "archived",
           archivedAt: new Date().toISOString(),
+        },
+        baselineConsent: {
+          state: "revoked",
+          pendingRequest: null,
+          latestActivityAt: new Date().toISOString(),
+          latestRequestOutcome: null,
+        },
+        matchingReadiness: {
+          state: "blocked_no_opt_in",
+          authorized: false,
+          currentHeadshotId: null,
+          selectionFaceId: null,
+          selectionStatus: null,
+          materializationStatus: null,
+        },
+      },
+      {
+        id: randomUUID(),
+        fullName: "Taylor Morgan",
+        email: "taylor@example.com",
+        status: "active",
+        updatedAt: new Date().toISOString(),
+        archivedAt: null,
+        profileType: null,
+        baselineConsent: {
+          state: "missing",
+          pendingRequest: null,
+          latestActivityAt: null,
+          latestRequestOutcome: {
+            status: "cancelled",
+            changedAt: new Date().toISOString(),
+          },
+        },
+        matchingReadiness: {
+          state: "missing_headshot",
+          authorized: true,
+          currentHeadshotId: null,
+          selectionFaceId: null,
+          selectionStatus: null,
+          materializationStatus: null,
         },
       },
     ],
@@ -97,8 +165,15 @@ test("profiles directory shell renders manage and read-only states with translat
   assert.match(manageMarkup, /Active profiles/);
   assert.match(manageMarkup, /No type/);
   assert.match(manageMarkup, /Type archived/);
+  assert.match(manageMarkup, /Baseline consent/);
+  assert.match(manageMarkup, /Matching/);
+  assert.match(manageMarkup, /Ready/);
+  assert.match(manageMarkup, /View details/);
+  assert.match(manageMarkup, /Archive profile/);
+  assert.doesNotMatch(manageMarkup, /Copy baseline link/);
+  assert.match(manageMarkup, /Latest request cancelled/);
   assert.match(manageMarkup, /Deferred follow-up work/);
-  assert.match(manageMarkup, /Request baseline consent/);
+  assert.doesNotMatch(manageMarkup, /Deferred follow-up work[\s\S]*Request baseline consent/);
 
   const readOnlyMarkup = renderToStaticMarkup(
     createElement(
@@ -112,5 +187,7 @@ test("profiles directory shell renders manage and read-only states with translat
   assert.doesNotMatch(readOnlyMarkup, /Create profile/);
   assert.doesNotMatch(readOnlyMarkup, /New profile type/);
   assert.doesNotMatch(readOnlyMarkup, /Active profile types/);
+  assert.match(readOnlyMarkup, /View details/);
+  assert.doesNotMatch(readOnlyMarkup, /Copy baseline link/);
   assert.match(readOnlyMarkup, /Deferred follow-up work/);
 });

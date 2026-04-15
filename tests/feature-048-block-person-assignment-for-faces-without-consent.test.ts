@@ -348,18 +348,37 @@ async function getFaceLinks(context: ProjectContext, assetId: string) {
 }
 
 async function getFaceSuppressions(context: ProjectContext, assetId: string) {
+  const { data: assignees, error: assigneeError } = await admin
+    .from("project_face_assignees")
+    .select("id, consent_id")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId)
+    .eq("assignee_kind", "project_consent");
+  assertNoError(assigneeError, "get suppression assignees");
+  const consentIdByAssigneeId = new Map(
+    ((assignees ?? []) as Array<{ id: string; consent_id: string | null }>)
+      .filter((row) => typeof row.consent_id === "string" && row.consent_id.length > 0)
+      .map((row) => [row.id, row.consent_id as string] as const),
+  );
+
   const { data, error } = await admin
-    .from("asset_face_consent_link_suppressions")
-    .select("asset_face_id, consent_id, reason")
+    .from("asset_face_assignee_link_suppressions")
+    .select("asset_face_id, project_face_assignee_id, reason")
     .eq("tenant_id", context.tenantId)
     .eq("project_id", context.projectId)
     .eq("asset_id", assetId);
   assertNoError(error, "get face suppressions");
-  return (data ?? []) as Array<{
+  return ((data ?? []) as Array<{
     asset_face_id: string;
-    consent_id: string;
+    project_face_assignee_id: string;
     reason: "manual_unlink" | "manual_replace";
-  }>;
+  }>)
+    .map((row) => ({
+      asset_face_id: row.asset_face_id,
+      consent_id: consentIdByAssigneeId.get(row.project_face_assignee_id) ?? "",
+      reason: row.reason,
+    }))
+    .filter((row) => row.consent_id.length > 0);
 }
 
 async function seedCompareRow(input: {

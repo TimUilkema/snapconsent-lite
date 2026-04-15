@@ -174,9 +174,12 @@
       "previewConsentSummaryLabel": "Samenvatting toestemming",
       "previewHeadshotLabel": "Headshot",
       "previewNoEmail": "Geen e-mailadres",
+      "previewUnknownPerson": "Profielmatch",
       "previewUnknownValue": "Onbekend",
       "previewStatusActive": "Actief",
       "previewStatusRevoked": "Ingetrokken",
+      "previewIdentityProjectConsent": "Projecttoestemming",
+      "previewIdentityRecurringProfile": "Terugkerend profiel",
       "previewEnabled": "Ingeschakeld",
       "previewDisabled": "Uitgeschakeld",
       "previewRemoveLink": "Koppeling verwijderen",
@@ -203,8 +206,13 @@
       "previewSavingFaceLink": "Koppeling opslaan...",
       "previewCurrentPerson": "Huidig",
       "previewLinkedToFace": "Al gekoppeld",
+      "previewLinkedPeopleLoading": "Gekoppelde personen laden...",
       "previewPickerLoading": "Personen laden...",
       "previewPickerEmpty": "Er zijn geen geschikte personen beschikbaar voor deze afbeelding.",
+      "previewRecurringBlockedMissing": "Projectspecifieke terugkerende toestemming is vereist voordat deze profielmatch kan worden toegewezen.",
+      "previewRecurringBlockedPending": "Er loopt nog een projectspecifiek toestemmingsverzoek voor deze profielmatch.",
+      "previewRecurringBlockedRevoked": "Deze projectspecifieke toestemming is ingetrokken, dus deze profielmatch kan niet worden toegewezen.",
+      "previewOpenCandidateImage": "Open {name}",
       "previewShowHiddenFaces": "Verborgen gezichten tonen ({count})",
       "previewBlockFace": "Gezicht blokkeren",
       "previewBlockingFace": "Gezicht blokkeren...",
@@ -251,14 +259,16 @@
       "breadcrumbProjects": "Projecten",
       "projectSectionsAria": "Projectsecties",
       "exportProject": "Project exporteren",
-      "sectionInvites": "Uitnodigingen",
+      "sectionParticipants": "Deelnemers",
       "sectionAssets": "Assets",
-      "subtitle": "Beheer toestemmingsuitnodigingen, bekijk gegevens van personen en koppel projectfoto's aan ondertekende toestemmingen.",
+      "subtitle": "Beheer bekende profielen, eenmalige toestemmingsintake, persoonsgegevens en projectfotomatching op één plek.",
       "statsStatus": "Status",
       "statsInvites": "Uitnodigingen",
       "statsSignedConsents": "Ondertekende toestemmingen",
-      "invitesTitle": "Uitnodigingen",
-      "invitesSubtitle": "Verstuurde uitnodigingen, ondertekende toestemmingsdetails, headshots en handmatige matching staan hier.",
+      "participantsTitle": "Deelnemers",
+      "participantsSubtitle": "Bekende terugkerende profielen en eenmalige projectondertekenaars staan hier samen zonder de bestaande uitnodigingsflow te wijzigen.",
+      "oneOffParticipantsTitle": "Eenmalige ondertekenaars en uitnodigingslinks",
+      "oneOffParticipantsSubtitle": "Bestaande QR- en publieke uitnodigingslinks blijven project-lokaal en ongewijzigd in deze sectie.",
       "unknownSubject": "Onbekende persoon",
       "unknownEmail": "Onbekende e-mail",
       "inviteIdLabel": "Uitnodiging-ID:",
@@ -288,6 +298,77 @@
       "noInvitesYet": "Nog geen uitnodigingen.",
       "assetsTitle": "Assets",
       "assetsSubtitle": "Upload projectfoto's, filter grote verzamelingen en bekijk gekoppelde personen."
+    },
+    "participants": {
+      "knownProfilesTitle": "Bekende profielen",
+      "knownProfilesSubtitle": "Voeg bestaande terugkerende profielen toe aan dit project en volg projectspecifieke toestemming los van baseline-toestemming.",
+      "knownProfilesEmpty": "Er zijn nog geen terugkerende profielen aan dit project toegevoegd.",
+      "baselineLabel": "Baseline",
+      "matchSourceLabel": "Matchbron",
+      "archivedProfile": "Gearchiveerd profiel",
+      "archivedProfileHelper": "Gearchiveerde profielen blijven zichtbaar voor projectgeschiedenis, maar nieuwe projectspecifieke verzoeken zijn geblokkeerd.",
+      "participantAddedLabel": "Toegevoegd aan project",
+      "latestProjectStatusLabel": "Projecttoestemmingsstatus",
+      "noRequestYet": "Nog geen projectverzoek",
+      "templateLine": "Sjabloon: {name} {version}",
+      "missing": "Nog geen projecttoestemmingsverzoek.",
+      "pendingUntil": "In afwachting tot {date}",
+      "signedAt": "Ondertekend {date}",
+      "revokedAt": "Ingetrokken {date}",
+      "projectState": {
+        "missing": "Ontbreekt",
+        "pending": "In afwachting",
+        "signed": "Ondertekend",
+        "revoked": "Ingetrokken"
+      },
+      "baselineState": {
+        "missing": "Ontbreekt",
+        "pending": "In afwachting",
+        "signed": "Ondertekend",
+        "revoked": "Ingetrokken"
+      },
+      "matchSourceState": {
+        "blocked_no_opt_in": "Niet toegestaan",
+        "missing_headshot": "Geen headshot",
+        "materializing": "Wordt verwerkt",
+        "no_face_detected": "Geen gezicht",
+        "needs_face_selection": "Kies gezicht",
+        "unusable_headshot": "Onbruikbaar",
+        "ready": "Gereed"
+      },
+      "matchSourceDescription": {
+        "blocked_no_opt_in": "Baseline matching-opt-in is vereist voordat deze deelnemer een herbruikbare matchbron kan hebben.",
+        "missing_headshot": "Upload een headshot voor dit terugkerende profiel voordat deze deelnemer een toekomstige matchbron kan worden.",
+        "materializing": "De huidige headshot van het terugkerende profiel wordt nog geanalyseerd.",
+        "no_face_detected": "De huidige headshot van het terugkerende profiel bevat geen detecteerbaar gezicht.",
+        "needs_face_selection": "Voor deze headshot van het terugkerende profiel moet eerst een gezicht worden gekozen.",
+        "unusable_headshot": "Er is een gezicht gedetecteerd, maar deze headshot van het terugkerende profiel is niet bruikbaar voor matching.",
+        "ready": "Deze deelnemer heeft een gereed terugkerend profiel als matchbron."
+      },
+      "addExistingProfile": {
+        "title": "Bestaand profiel toevoegen",
+        "subtitle": "Kies een terugkerend profiel uit de directory. Toevoegen aan het project maakt geen ondertekende toestemming aan.",
+        "label": "Profiel",
+        "empty": "Er zijn geen extra actieve profielen beschikbaar om toe te voegen.",
+        "submit": "Aan project toevoegen",
+        "submitting": "Toevoegen..."
+      },
+      "request": {
+        "templateLabel": "Toestemmingsverklaring",
+        "selectTemplatePlaceholder": "Selecteer een toestemmingsverklaring",
+        "scopeStandard": "Standaard",
+        "scopeOrganization": "Organisatie",
+        "emptyTemplates": "Er zijn geen gepubliceerde toestemmingsverklaringen beschikbaar voor projectverzoeken.",
+        "submit": "Projectverzoek maken",
+        "submitting": "Verzoek maken...",
+        "expiresLabel": "Verloopt",
+        "emailLabel": "Verzoek-e-mail",
+        "linkLabel": "Projecttoestemmingslink",
+        "copy": "Link kopiëren",
+        "open": "Link openen",
+        "copied": "Projecttoestemmingslink gekopieerd.",
+        "copyError": "De projecttoestemmingslink kon niet worden gekopieerd."
+      }
     }
   },
   "publicInvite": {
@@ -355,6 +436,61 @@
       "already": "Toestemming was al ingetrokken.",
       "invalid": "Deze intrek-link is ongeldig.",
       "expired": "Deze intrek-link is verlopen."
+    }
+  },
+  "publicRecurringConsent": {
+    "title": "Terugkerend toestemmingsformulier",
+    "profileLabel": "{name} ({email})",
+    "success": "Terugkerende toestemming succesvol verzonden.",
+    "duplicate": "Dit terugkerende toestemmingsverzoek is al verzonden.",
+    "receiptQueued": "Terugkerende toestemming opgeslagen. Ontvangstmail wordt opnieuw geprobeerd.",
+    "cannotSubmit": "Dit terugkerende toestemmingsverzoek accepteert geen nieuwe inzendingen.",
+    "backToHome": "Terug naar home",
+    "messages": {
+      "signed": "Dit terugkerende toestemmingsverzoek is al ondertekend.",
+      "expired": "Dit terugkerende toestemmingsverzoek is verlopen.",
+      "unavailable": "Dit terugkerende toestemmingsverzoek is niet meer beschikbaar."
+    },
+    "errors": {
+      "invalid": "Deze link voor terugkerende toestemming is ongeldig.",
+      "expired": "Deze link voor terugkerende toestemming is verlopen.",
+      "unavailable": "Dit terugkerende toestemmingsverzoek is niet meer beschikbaar.",
+      "server": "Terugkerende toestemming kan nu niet worden verzonden. Probeer opnieuw.",
+      "fallback": "Dit terugkerende toestemmingsverzoek kan niet worden verwerkt."
+    },
+    "form": {
+      "fullNameLabel": "Volledige naam",
+      "emailLabel": "E-mail",
+      "scopeLabel": "Doeleinde",
+      "durationLabel": "Geldigheidsduur",
+      "requiredField": "Verplicht",
+      "selectPlaceholder": "Selecteer een optie",
+      "emptySelectionOption": "Geen selectie",
+      "emptyCheckboxOptionLabel": "Leeg",
+      "faceMatchOptIn": "Ik geef toestemming voor facial matching om foto's waarop ik sta te koppelen.",
+      "headshotLaterTitle": "Headshot na toestemming",
+      "headshotLaterBody": "Als je instemt met facial matching, kan een teamlid je later vragen om een private headshot toe te voegen zodat je terugkerende profiel in projecten gematcht kan worden.",
+      "consentTextTitle": "Toestemmingstekst",
+      "consentTextUnavailable": "Toestemmingsverklaring niet beschikbaar.",
+      "submit": "Toestemming verzenden",
+      "errors": {
+        "consentAcknowledgementRequired": "Bevestig eerst dat je de toestemmingstekst hebt gelezen en akkoord gaat."
+      },
+      "consentAcknowledgementLabel": "Ik heb de toestemmingstekst gelezen en ga akkoord met de inhoud."
+    }
+  },
+  "publicRecurringRevoke": {
+    "title": "Terugkerende toestemming intrekken",
+    "subtitle": "Gebruik deze pagina om toekomstige verwerking van je terugkerende toestemming in te trekken.",
+    "profileLabel": "{name} ({email})",
+    "reasonLabel": "Reden (optioneel)",
+    "submit": "Toestemming intrekken",
+    "backToHome": "Terug naar home",
+    "messages": {
+      "revoked": "Terugkerende toestemming succesvol ingetrokken.",
+      "already": "Terugkerende toestemming was al ingetrokken.",
+      "invalid": "Deze terugkerende intrek-link is ongeldig.",
+      "expired": "Deze terugkerende intrek-link is verlopen."
     }
   },
   "templates": {
@@ -512,6 +648,8 @@
       "columnName": "Naam",
       "columnType": "Type",
       "columnEmail": "E-mail",
+      "columnBaselineConsent": "Basis-toestemming",
+      "columnMatching": "Matching",
       "columnStatus": "Status",
       "columnUpdated": "Bijgewerkt",
       "columnActions": "Acties",
@@ -529,7 +667,172 @@
     },
     "deferred": {
       "title": "Uitgesteld vervolgwerk",
-      "body": "Toestemmingsverzoeken, herinneringen, bulkimport en externe directory-sync zijn bewust uitgesteld. Deze slice legt alleen de basis van de directory voor terugkerende profielen."
+      "body": "Extra toestemmingsverzoeken, bulkimport en externe directory-sync blijven uitgesteld. Baseline follow-up registreert nu alleen placeholder-delivery en verstuurt nog geen echte e-mail."
+    },
+    "detail": {
+      "viewDetails": "Details bekijken",
+      "hideDetails": "Details verbergen",
+      "loading": "Profieldetails laden...",
+      "currentTitle": "Huidige baseline",
+      "pendingTitle": "Huidige openstaande aanvraag",
+      "activeConsentTitle": "Actieve baseline-toestemming",
+      "latestRevokedTitle": "Laatst ingetrokken baseline-toestemming",
+      "actionsTitle": "Huidige acties",
+      "requestHint": "Stuur een nieuw baseline-verzoek voor dit profiel. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
+      "revokedHint": "Deze baseline-toestemming is ingetrokken. Stuur een nieuw verzoek om opnieuw te vragen. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
+      "noHistory": "Nog geen baseline-aanvraag of ondertekende baseline-toestemming.",
+      "requestHistoryTitle": "Aanvraaggeschiedenis",
+      "consentHistoryTitle": "Baseline-toestemmingsgeschiedenis",
+      "requestHistoryEmpty": "Nog geen baseline-aanvragen.",
+      "consentHistoryEmpty": "Nog geen ondertekende baseline-toestemmingsgeschiedenis.",
+      "nameLabel": "Naam",
+      "emailLabel": "E-mail",
+      "typeLabel": "Type",
+      "updatedLabel": "Bijgewerkt",
+      "templateLabel": "Sjabloon",
+      "createdAtLabel": "Aangemaakt",
+      "changedAtLabel": "Laatste wijziging",
+      "expiresAtLabel": "Verloopt",
+      "signedAtLabel": "Ondertekend",
+      "revokedAtLabel": "Ingetrokken",
+      "scopeLabel": "Scope",
+      "durationLabel": "Duur",
+      "receiptSentAtLabel": "Ontvangstbewijs verzonden",
+      "unknownValue": "Onbekend",
+      "noType": "Geen type",
+      "notSent": "Niet verzonden",
+      "notRevoked": "Niet ingetrokken",
+      "signedBadge": "Ondertekend",
+      "revokedBadge": "Ingetrokken",
+      "readOnly": "Je kunt dit profiel bekijken, maar alleen workspace-eigenaren en admins kunnen baseline-toestemming beheren.",
+      "archivedReadOnly": "Gearchiveerde profielen blijven hier zichtbaar, maar baseline-acties zijn uitgeschakeld.",
+      "requestHistory": {
+        "status": {
+          "pending": "Openstaand",
+          "signed": "Ondertekend",
+          "expired": "Verlopen",
+          "cancelled": "Geannuleerd",
+          "superseded": "Vervangen"
+        }
+      }
+    },
+    "baseline": {
+      "state": {
+        "missing": "Ontbreekt",
+        "pending": "In afwachting",
+        "signed": "Ondertekend",
+        "revoked": "Ingetrokken"
+      },
+      "activity": {
+        "missing": "Nog geen basis-toestemmingsverzoek.",
+        "unknown": "Laatste activiteit niet beschikbaar.",
+        "pendingUntil": "In afwachting tot {date}",
+        "signedAt": "Ondertekend {date}",
+        "revokedAt": "Ingetrokken {date}",
+        "latestCancelledAt": "Laatste verzoek geannuleerd {date}",
+        "latestReplacedAt": "Laatste verzoek vervangen {date}",
+        "latestExpiredAt": "Laatste verzoek verlopen {date}"
+      },
+      "request": {
+        "templateLabel": "Gepubliceerde verklaring",
+        "scopeStandard": "Standaard",
+        "scopeOrganization": "Organisatie",
+        "submit": "Basisverzoek maken",
+        "submitting": "Basisverzoek maken...",
+        "emptyTemplates": "Er zijn geen gepubliceerde toestemmingsverklaringen beschikbaar voor basisverzoeken."
+      },
+      "pending": {
+        "emailLabel": "Verzoek-e-mail",
+        "expiresLabel": "Verloopt",
+        "linkLabel": "Link basis-toestemming",
+        "copy": "Link kopiëren",
+        "open": "Link openen",
+        "cancel": "Verzoek annuleren",
+        "cancelling": "Annuleren...",
+        "replace": "Verzoek vervangen",
+        "replacing": "Vervangen...",
+        "copied": "Basislink gekopieerd.",
+        "copyError": "De basislink kon niet worden gekopieerd."
+      },
+      "followUp": {
+        "sendReminder": "Herinnering sturen",
+        "sendingReminder": "Herinnering registreren...",
+        "sendNewRequest": "Nieuw verzoek sturen",
+        "sendingNewRequest": "Nieuw verzoek voorbereiden...",
+        "latestTitle": "Laatste follow-up",
+        "actionLabel": "Actie",
+        "statusLabel": "Status",
+        "targetEmailLabel": "Doel-e-mail",
+        "attemptedAtLabel": "Geregistreerd",
+        "placeholderHelper": "De laatste follow-up is in placeholder-modus geregistreerd. E-maildelivery is nog niet geconfigureerd.",
+        "actionLabels": {
+          "reminder": "Herinnering",
+          "new_request": "Nieuw verzoek"
+        },
+        "statusLabels": {
+          "recorded": "Geregistreerd",
+          "failed": "Mislukt"
+        },
+        "success": {
+          "reminder": "Herinnering geregistreerd voor het huidige verzoek. E-maildelivery is nog niet geconfigureerd. Kopieer of open de link om die handmatig te delen.",
+          "newRequest": "Nieuw verzoek gemaakt en placeholder-delivery geregistreerd. E-maildelivery is nog niet geconfigureerd. Kopieer of open de nieuwe link om die handmatig te delen."
+        }
+      }
+    },
+    "matching": {
+      "state": {
+        "blocked_no_opt_in": "Niet toegestaan",
+        "missing_headshot": "Geen headshot",
+        "materializing": "Wordt verwerkt",
+        "no_face_detected": "Geen gezicht",
+        "needs_face_selection": "Kies gezicht",
+        "unusable_headshot": "Onbruikbaar",
+        "ready": "Gereed"
+      },
+      "description": {
+        "blocked_no_opt_in": "Een actieve baseline-toestemming met matching-opt-in is vereist.",
+        "missing_headshot": "Upload een headshot voor dit terugkerende profiel om een toekomstige matchbron te maken.",
+        "materializing": "De huidige headshot van het terugkerende profiel wordt nog geanalyseerd.",
+        "no_face_detected": "Er is geen gezicht gedetecteerd in de huidige headshot van het terugkerende profiel.",
+        "needs_face_selection": "Kies een gezicht uit de huidige headshot van het terugkerende profiel.",
+        "unusable_headshot": "Er is een gezicht gedetecteerd, maar de huidige headshot van het terugkerende profiel is niet bruikbaar voor matching.",
+        "ready": "Dit terugkerende profiel heeft een geselecteerd gezicht en is gereed als toekomstige matchbron."
+      }
+    },
+    "headshot": {
+      "title": "Matching-headshot",
+      "upload": "Headshot uploaden",
+      "replace": "Headshot vervangen",
+      "uploading": "Headshot uploaden...",
+      "authorizationRequired": "Schakel matching in op de actieve baseline-toestemming voordat je een headshot voor een terugkerend profiel uploadt of vervangt.",
+      "previewAlt": "Voorvertoning van headshot van terugkerend profiel",
+      "previewHelp": "Alle gedetecteerde gezichten worden opgeslagen voor controle. Alleen het geselecteerde gezicht wordt de toekomstige matchbron.",
+      "selection": {
+        "auto": "Automatisch geselecteerd",
+        "manual": "Handmatige selectie"
+      },
+      "meta": {
+        "fileName": "Huidig bestand",
+        "uploadedAt": "Geupload",
+        "faceCount": "Gedetecteerde gezichten",
+        "materializedAt": "Gematerialiseerd",
+        "notAvailable": "Niet beschikbaar"
+      },
+      "faceSelection": {
+        "title": "Gezichtsselectie vereist",
+        "help": "Er zijn meerdere plausibele gezichten gedetecteerd. Kies het juiste gezicht voor dit terugkerende profiel.",
+        "faceLabel": "Gezicht {index}",
+        "metrics": "Oppervlak {area}% · Zekerheid {confidence}%",
+        "select": "Gebruik dit gezicht",
+        "selecting": "Opslaan...",
+        "selected": "Geselecteerd"
+      },
+      "success": {
+        "uploaded": "Headshot geupload en geanalyseerd.",
+        "replaced": "Headshot vervangen en geanalyseerd.",
+        "repairQueued": "Headshot geupload. Directe analyse is niet afgerond, dus herstel is ingepland.",
+        "faceSelected": "Gezichtsselectie opgeslagen."
+      }
     },
     "status": {
       "active": "Actief",
@@ -543,6 +846,7 @@
       "archiveType": "Type archiveren",
       "archivingType": "Type archiveren...",
       "requestBaselineConsent": "Basis-toestemming aanvragen",
+      "copyBaselineLink": "Basislink kopiëren",
       "sendReminder": "Herinnering sturen",
       "requestExtraConsent": "Extra toestemming aanvragen",
       "archiveProfile": "Profiel archiveren",
@@ -572,15 +876,22 @@
       "invalid_asset_type": "Ongeldig asset-type.",
       "invalid_filename": "Bestandsnaam is verplicht.",
       "invalid_content_type": "Niet-ondersteund bestandstype.",
+      "invalid_content_hash": "Ongeldige bestandshash.",
       "invalid_file_size": "Ongeldige bestandsgrootte.",
       "invalid_profile_name": "De profielnaam moet tussen 2 en 160 tekens zijn.",
       "invalid_profile_email": "Vul een geldig e-mailadres in.",
+      "baseline_follow_up_template_required": "Kies een gepubliceerde verklaring voordat je een nieuw verzoek stuurt.",
+      "baseline_follow_up_delivery_record_failed": "De follow-up kon niet worden geregistreerd. Er is geen e-mail verstuurd.",
       "invalid_profile_type_label": "Profieltypes moeten tussen 2 en 80 tekens zijn.",
       "recurring_profile_management_forbidden": "Alleen eigenaren en admins van de werkruimte kunnen profielen beheren.",
       "recurring_profile_not_found": "Profiel niet gevonden.",
       "recurring_profile_type_not_found": "Profieltype niet gevonden.",
       "recurring_profile_email_conflict": "Er bestaat al een actief profiel met dit e-mailadres.",
       "recurring_profile_type_conflict": "Er bestaat al een actief profieltype met dit label.",
+      "recurring_profile_face_match_not_opted_in": "Actieve baseline matching-opt-in is vereist voor headshots van terugkerende profielen.",
+      "recurring_profile_headshot_not_found": "Headshot van terugkerend profiel niet gevonden.",
+      "recurring_profile_headshot_face_not_found": "Geselecteerd gezicht van terugkerend profiel niet gevonden.",
+      "recurring_profile_headshot_not_materialized": "Headshot van terugkerend profiel is nog niet gereed voor gezichtsselectie.",
       "project_create_failed": "Project maken mislukt.",
       "invalid_template_name": "De naam van de toestemmingsverklaring moet tussen 2 en 120 tekens zijn.",
       "invalid_template_description": "De beschrijving van de toestemmingsverklaring mag maximaal 500 tekens bevatten.",
@@ -597,7 +908,19 @@
       "duplicate_structured_field_key": "Elke veldsleutel moet uniek zijn.",
       "duplicate_structured_option_key": "Elke optiesleutel moet binnen het veld uniek zijn.",
       "invalid_structured_text_limits": "De instellingen voor tekstvelden zijn ongeldig.",
-      "template_publish_conflict": "Een andere versie is eerst gepubliceerd. Vernieuw en probeer opnieuw."
+      "template_publish_conflict": "Een andere versie is eerst gepubliceerd. Vernieuw en probeer opnieuw.",
+      "baseline_template_unavailable": "De geselecteerde gepubliceerde toestemmingsverklaring is niet beschikbaar.",
+      "baseline_consent_already_signed": "Dit profiel heeft al een actieve basis-toestemming.",
+      "recurring_profile_archived": "Gearchiveerde profielen kunnen geen basis-toestemmingsverzoeken ontvangen.",
+      "baseline_consent_request_not_found": "Basis-toestemmingsverzoek niet gevonden.",
+      "baseline_consent_request_not_pending": "Dit basis-toestemmingsverzoek is niet langer in afwachting.",
+      "baseline_consent_request_cancel_failed": "Het basis-toestemmingsverzoek kon niet worden geannuleerd.",
+      "baseline_consent_request_replace_failed": "Het basis-toestemmingsverzoek kon niet worden vervangen.",
+      "project_profile_participant_not_found": "Projectdeelnemer niet gevonden.",
+      "project_profile_participant_forbidden": "Je hebt geen toegang tot deze projectdeelnemer.",
+      "project_consent_already_signed": "Dit profiel heeft al een actieve projecttoestemming.",
+      "project_template_unavailable": "De gekozen gepubliceerde toestemmingsverklaring is niet beschikbaar voor dit projectverzoek.",
+      "default_template_unavailable": "De projectstandaard is niet beschikbaar. Kies een andere gepubliceerde toestemmingsverklaring."
     }
   }
 }

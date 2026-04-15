@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { queueAssetImageDerivativesForAssetIds } from "@/lib/assets/asset-image-derivatives";
 import { getCurrentConsentHeadshotFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
+import { getCurrentProjectRecurringSourceBoundary } from "@/lib/matching/project-recurring-sources";
 import { shouldEnqueuePhotoUploadedOnFinalize } from "@/lib/matching/auto-match-trigger-conditions";
 
 type QueueProjectAssetPostFinalizeProcessingInput = {
@@ -46,6 +47,10 @@ export async function queueProjectAssetPostFinalizeProcessing(
       input.tenantId,
       input.projectId,
     );
+    const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(input.supabase, {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+    });
     await enqueuePhotoUploadedJob({
       tenantId: input.tenantId,
       projectId: input.projectId,
@@ -56,6 +61,9 @@ export async function queueProjectAssetPostFinalizeProcessing(
         boundarySnapshotAt: boundary.boundarySnapshotAt,
         boundaryConsentCreatedAt: boundary.boundaryConsentCreatedAt,
         boundaryConsentId: boundary.boundaryConsentId,
+        recurringBoundarySnapshotAt: recurringBoundary.boundarySnapshotAt,
+        recurringBoundaryParticipantCreatedAt: recurringBoundary.boundaryParticipantCreatedAt,
+        recurringBoundaryParticipantId: recurringBoundary.boundaryProjectProfileParticipantId,
       },
     });
   } catch {

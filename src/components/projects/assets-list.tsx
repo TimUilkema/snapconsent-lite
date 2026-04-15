@@ -29,7 +29,10 @@ type AssetRow = {
   }>;
   linkedFaceOverlays?: Array<{
     assetFaceId: string;
-    consentId: string;
+    projectFaceAssigneeId: string;
+    identityKind: "project_consent" | "project_recurring_consent";
+    consentId: string | null;
+    projectProfileParticipantId: string | null;
     fullName: string | null;
     email: string | null;
     headshotThumbnailUrl: string | null;
@@ -117,8 +120,27 @@ function buildConsentHref(projectId: string, consentId: string) {
   return `/projects/${projectId}?${params.toString()}#consent-${consentId}`;
 }
 
-function getConsentLabel(overlay: NonNullable<AssetRow["linkedFaceOverlays"]>[number]) {
-  return overlay.fullName || overlay.email || `Consent ${overlay.consentId}`;
+function buildOverlayHref(
+  projectId: string,
+  overlay: NonNullable<AssetRow["linkedFaceOverlays"]>[number],
+) {
+  return overlay.consentId ? buildConsentHref(projectId, overlay.consentId) : `/projects/${projectId}`;
+}
+
+function getOverlayLabel(overlay: NonNullable<AssetRow["linkedFaceOverlays"]>[number]) {
+  if (overlay.fullName || overlay.email) {
+    return overlay.fullName || overlay.email || "";
+  }
+
+  if (overlay.consentId) {
+    return `Consent ${overlay.consentId}`;
+  }
+
+  if (overlay.projectProfileParticipantId) {
+    return `Recurring participant ${overlay.projectProfileParticipantId}`;
+  }
+
+  return "Recurring participant";
 }
 
 function getOverlayLinkSourceLabel(
@@ -134,9 +156,9 @@ function buildAssetPreviewFaceOverlays(
   t: ReturnType<typeof useTranslations>,
 ) {
   return (asset.linkedFaceOverlays ?? []).map((overlay) => ({
-    id: `${overlay.assetFaceId}:${overlay.consentId}`,
-    href: buildConsentHref(projectId, overlay.consentId),
-    label: getConsentLabel(overlay),
+    id: `${overlay.assetFaceId}:${overlay.projectFaceAssigneeId}`,
+    href: buildOverlayHref(projectId, overlay),
+    label: getOverlayLabel(overlay),
     faceBoxNormalized: overlay.faceBoxNormalized,
     headshotThumbnailUrl: overlay.headshotThumbnailUrl,
     matchConfidence: overlay.matchConfidence,
@@ -153,10 +175,12 @@ function buildAssetPreviewMetadata(
   const parts: string[] = [];
 
   if (Number.isFinite(asset.originalWidth) && Number.isFinite(asset.originalHeight)) {
+    const originalWidth = asset.originalWidth as number;
+    const originalHeight = asset.originalHeight as number;
     parts.push(
       t("previewOriginalSize", {
-        width: asset.originalWidth,
-        height: asset.originalHeight,
+        width: originalWidth,
+        height: originalHeight,
       }),
     );
   }

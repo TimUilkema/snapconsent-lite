@@ -331,12 +331,14 @@ async function seedCurrentManualFaceLink(
   const current = await materializePhotoFaces(supabase, context, assetId, 1);
   const face = current!.faces[0];
   assert.ok(face);
+  const assigneeId = await ensureProjectConsentAssigneeId(supabase, context, consentId);
 
   const { error } = await supabase.from("asset_face_consent_links").upsert(
     {
       asset_face_id: face.id,
       asset_materialization_id: current!.materialization.id,
       asset_id: assetId,
+      project_face_assignee_id: assigneeId,
       consent_id: consentId,
       tenant_id: context.tenantId,
       project_id: context.projectId,
@@ -355,6 +357,28 @@ async function seedCurrentManualFaceLink(
     materializationId: current!.materialization.id,
     assetFaceId: face.id,
   };
+}
+
+async function ensureProjectConsentAssigneeId(
+  supabase: SupabaseClient,
+  context: ProjectContext,
+  consentId: string,
+) {
+  const { data, error } = await supabase
+    .from("project_face_assignees")
+    .upsert(
+      {
+        tenant_id: context.tenantId,
+        project_id: context.projectId,
+        assignee_kind: "project_consent",
+        consent_id: consentId,
+      },
+      { onConflict: "tenant_id,project_id,consent_id" },
+    )
+    .select("id")
+    .single();
+  assertNoError(error, "ensure consent assignee");
+  return (data as { id: string }).id;
 }
 
 
@@ -448,18 +472,19 @@ test("likely mode returns confidence-sorted unlinked candidates in the 0.25-to-t
       .upsert(candidateRows, { onConflict: "asset_id,consent_id" });
     assertNoError(seedCandidatesError, "seed likely candidates");
 
-    const { error: suppressionError } = await admin.from("asset_face_consent_link_suppressions").upsert(
+    const suppressionAssigneeId = await ensureProjectConsentAssigneeId(admin, context, consent.consentId);
+    const { error: suppressionError } = await admin.from("asset_face_assignee_link_suppressions").upsert(
       {
         asset_face_id: suppressedFace!.faces[0]!.id,
         asset_materialization_id: suppressedFace!.materialization.id,
         asset_id: suppressedPhotoId,
-        consent_id: consent.consentId,
+        project_face_assignee_id: suppressionAssigneeId,
         tenant_id: context.tenantId,
         project_id: context.projectId,
         reason: "manual_unlink",
         created_by: context.userId,
       },
-      { onConflict: "asset_face_id,consent_id" },
+      { onConflict: "asset_face_id,project_face_assignee_id" },
     );
     assertNoError(suppressionError, "seed suppression");
 

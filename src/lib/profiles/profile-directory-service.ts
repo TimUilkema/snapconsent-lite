@@ -1,7 +1,21 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { listVisibleTemplatesForTenant } from "@/lib/templates/template-service";
+import {
+  getStructuredOptionLabel,
+  type StructuredFieldsSnapshot,
+} from "@/lib/templates/structured-fields";
+import { deriveRecurringProfileConsentToken } from "@/lib/tokens/public-token";
+import { buildRecurringProfileConsentPath } from "@/lib/url/paths";
 
+import {
+  deriveRecurringProfileMatchingReadiness,
+  getRecurringProfileHeadshotDetail,
+  getRecurringProfileHeadshotSignedPreviewUrl,
+  type RecurringProfileHeadshotDetail,
+  type RecurringProfileMatchingReadiness,
+} from "./profile-headshot-service";
 import { resolveProfilesAccess, type ProfilesAccess } from "./profile-access";
 
 type RecurringProfileStatus = "active" | "archived";
@@ -31,6 +45,85 @@ type RecurringProfileRow = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+};
+
+type RecurringProfileConsentRequestRow = {
+  id: string;
+  tenant_id: string;
+  profile_id: string;
+  consent_kind: "baseline";
+  consent_template_id: string;
+  profile_email_snapshot: string;
+  status: "pending" | "signed" | "expired" | "superseded" | "cancelled";
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+  superseded_by_request_id: string | null;
+};
+
+type RecurringProfileConsentRow = {
+  id: string;
+  tenant_id: string;
+  profile_id: string;
+  consent_kind: "baseline";
+  signed_at: string;
+  revoked_at: string | null;
+  created_at: string;
+};
+
+type RecurringProfileConsentRequestDetailRow = {
+  id: string;
+  tenant_id: string;
+  profile_id: string;
+  consent_kind: "baseline";
+  consent_template_id: string;
+  profile_name_snapshot: string;
+  profile_email_snapshot: string;
+  status: "pending" | "signed" | "expired" | "superseded" | "cancelled";
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+  superseded_by_request_id: string | null;
+};
+
+type RecurringProfileConsentDetailRow = {
+  id: string;
+  tenant_id: string;
+  profile_id: string;
+  request_id: string;
+  consent_kind: "baseline";
+  consent_template_id: string;
+  profile_name_snapshot: string;
+  profile_email_snapshot: string;
+  consent_version: string;
+  structured_fields_snapshot: StructuredFieldsSnapshot | null;
+  signed_at: string;
+  revoked_at: string | null;
+  revoke_reason: string | null;
+  receipt_email_sent_at: string | null;
+  created_at: string;
+};
+
+type RecurringProfileConsentRequestDeliveryAttemptRow = {
+  id: string;
+  tenant_id: string;
+  profile_id: string;
+  request_id: string;
+  action_kind: "reminder" | "new_request";
+  delivery_mode: "placeholder";
+  status: "recorded" | "failed";
+  target_email: string;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+};
+
+type ConsentTemplateLookupRow = {
+  id: string;
+  tenant_id: string | null;
+  name: string;
+  version: string;
+  status: "draft" | "published" | "archived";
 };
 
 type IdempotencyRow<T> = {
@@ -67,6 +160,29 @@ export type RecurringProfileListItem = {
     status: RecurringProfileTypeStatus;
     archivedAt: string | null;
   } | null;
+  baselineConsent: {
+    state: "missing" | "pending" | "signed" | "revoked";
+    pendingRequest: {
+      id: string;
+      expiresAt: string;
+      consentPath: string;
+      emailSnapshot: string;
+      updatedAt: string;
+    } | null;
+    latestActivityAt: string | null;
+    latestRequestOutcome: {
+      status: "cancelled" | "superseded" | "expired";
+      changedAt: string;
+    } | null;
+  };
+  matchingReadiness: RecurringProfileMatchingReadiness;
+};
+
+export type BaselineConsentTemplateOption = {
+  id: string;
+  name: string;
+  version: string;
+  scope: "app" | "tenant";
 };
 
 export type RecurringProfilesSummary = {
@@ -86,8 +202,117 @@ export type RecurringProfilesPageData = {
   access: ProfilesAccess;
   summary: RecurringProfilesSummary;
   filters: RecurringProfilesFilters;
+  baselineTemplates: BaselineConsentTemplateOption[];
   profileTypes: RecurringProfileTypeSummary[];
   profiles: RecurringProfileListItem[];
+};
+
+export type RecurringProfileStructuredSummary = {
+  scopeLabels: string[];
+  durationLabel: string | null;
+};
+
+export type RecurringProfileDetailData = {
+  access: ProfilesAccess;
+  profile: {
+    id: string;
+    fullName: string;
+    email: string;
+    status: RecurringProfileStatus;
+    updatedAt: string;
+    archivedAt: string | null;
+    profileType: {
+      id: string;
+      label: string;
+      status: RecurringProfileTypeStatus;
+      archivedAt: string | null;
+    } | null;
+  };
+  baselineConsent: RecurringProfileListItem["baselineConsent"] & {
+    pendingRequest: (RecurringProfileListItem["baselineConsent"]["pendingRequest"] & {
+      fullNameSnapshot: string;
+      templateName: string | null;
+      templateVersion: string | null;
+      createdAt: string;
+    }) | null;
+    activeConsent: {
+      id: string;
+      requestId: string;
+      signedAt: string;
+      emailSnapshot: string;
+      fullNameSnapshot: string;
+      templateName: string | null;
+      templateVersion: string | null;
+      structuredSummary: RecurringProfileStructuredSummary | null;
+      receiptEmailSentAt: string | null;
+    } | null;
+    latestRevokedConsent: {
+      id: string;
+      requestId: string;
+      signedAt: string;
+      revokedAt: string;
+      revokeReason: string | null;
+      emailSnapshot: string;
+      fullNameSnapshot: string;
+      templateName: string | null;
+      templateVersion: string | null;
+      structuredSummary: RecurringProfileStructuredSummary | null;
+      receiptEmailSentAt: string | null;
+    } | null;
+    latestFollowUpAttempt?: {
+      id: string;
+      requestId: string;
+      actionKind: "reminder" | "new_request";
+      deliveryMode: "placeholder";
+      status: "recorded" | "failed";
+      targetEmail: string;
+      attemptedAt: string;
+      errorCode: string | null;
+    } | null;
+  };
+  requestHistory: Array<{
+    id: string;
+    status: "pending" | "signed" | "expired" | "superseded" | "cancelled";
+    createdAt: string;
+    expiresAt: string;
+    changedAt: string;
+    emailSnapshot: string;
+    fullNameSnapshot: string;
+    templateName: string | null;
+    templateVersion: string | null;
+    supersededByRequestId: string | null;
+  }>;
+  consentHistory: Array<{
+    id: string;
+    requestId: string;
+    signedAt: string;
+    revokedAt: string | null;
+    revokeReason: string | null;
+    emailSnapshot: string;
+    fullNameSnapshot: string;
+    templateName: string | null;
+    templateVersion: string | null;
+    structuredSummary: RecurringProfileStructuredSummary | null;
+    receiptEmailSentAt: string | null;
+  }>;
+  actions: {
+    canManageBaseline: boolean;
+    canRequestBaselineConsent: boolean;
+    canCopyBaselineLink: boolean;
+    canOpenBaselineLink: boolean;
+    canCancelPendingRequest: boolean;
+    canReplacePendingRequest: boolean;
+    availableBaselineFollowUpAction?: "reminder" | "new_request" | null;
+  };
+  headshotMatching: RecurringProfileHeadshotDetail & {
+    previewUrl: string | null;
+    actions: {
+      canManage: boolean;
+      canUpload: boolean;
+      canReplace: boolean;
+      canSelectFace: boolean;
+    };
+  };
 };
 
 type ListRecurringProfilesPageDataInput = {
@@ -97,6 +322,13 @@ type ListRecurringProfilesPageDataInput = {
   q?: string | null;
   profileTypeId?: string | null;
   includeArchived?: boolean;
+};
+
+type GetRecurringProfileDetailDataInput = {
+  supabase: SupabaseClient;
+  tenantId: string;
+  userId: string;
+  profileId: string;
 };
 
 type CreateRecurringProfileInput = {
@@ -250,6 +482,8 @@ function mapRecurringProfileType(row: RecurringProfileTypeRow, activeProfileCoun
 function mapRecurringProfile(
   row: RecurringProfileRow,
   profileType: RecurringProfileTypeRow | null,
+  baselineConsent: RecurringProfileListItem["baselineConsent"],
+  matchingReadiness: RecurringProfileMatchingReadiness,
 ): RecurringProfileListItem {
   return {
     id: row.id,
@@ -266,6 +500,170 @@ function mapRecurringProfile(
           archivedAt: profileType.archived_at,
         }
       : null,
+    baselineConsent,
+    matchingReadiness,
+  };
+}
+
+function buildRecurringProfileStructuredSummary(
+  snapshot: StructuredFieldsSnapshot | null,
+): RecurringProfileStructuredSummary | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  const scopeValue = snapshot.values.scope;
+  const durationValue = snapshot.values.duration;
+
+  const scopeLabels =
+    scopeValue?.valueType === "checkbox_list"
+      ? scopeValue.selectedOptionKeys
+          .map((optionKey) => getStructuredOptionLabel(snapshot.definition.builtInFields.scope, optionKey))
+          .filter((value): value is string => Boolean(value))
+      : [];
+  const durationLabel =
+    durationValue?.valueType === "single_select" && durationValue.selectedOptionKey
+      ? getStructuredOptionLabel(
+          snapshot.definition.builtInFields.duration,
+          durationValue.selectedOptionKey,
+        )
+      : null;
+
+  if (scopeLabels.length === 0 && !durationLabel) {
+    return null;
+  }
+
+  return {
+    scopeLabels,
+    durationLabel,
+  };
+}
+
+async function listTemplatesByIds(
+  supabase: SupabaseClient,
+  tenantId: string,
+  templateIds: string[],
+): Promise<Map<string, ConsentTemplateLookupRow>> {
+  const uniqueTemplateIds = Array.from(new Set(templateIds.filter((templateId) => isUuid(templateId))));
+  if (uniqueTemplateIds.length === 0) {
+    return new Map();
+  }
+
+  const [appTemplatesResult, tenantTemplatesResult] = await Promise.all([
+    supabase
+      .from("consent_templates")
+      .select("id, tenant_id, name, version, status")
+      .is("tenant_id", null)
+      .in("id", uniqueTemplateIds),
+    supabase
+      .from("consent_templates")
+      .select("id, tenant_id, name, version, status")
+      .eq("tenant_id", tenantId)
+      .in("id", uniqueTemplateIds),
+  ]);
+
+  if (appTemplatesResult.error || tenantTemplatesResult.error) {
+    throw new HttpError(500, "template_lookup_failed", "Unable to load consent template details.");
+  }
+
+  const templateRows = [
+    ...((appTemplatesResult.data as ConsentTemplateLookupRow[] | null) ?? []),
+    ...((tenantTemplatesResult.data as ConsentTemplateLookupRow[] | null) ?? []),
+  ];
+
+  return new Map(templateRows.map((row) => [row.id, row]));
+}
+
+function deriveBaselineConsentSummary(
+  profileId: string,
+  requestRows: RecurringProfileConsentRequestRow[],
+  consentRows: RecurringProfileConsentRow[],
+): RecurringProfileListItem["baselineConsent"] {
+  const terminalRequestOutcome =
+    requestRows
+      .map((row) => {
+        if (row.status === "pending" && new Date(row.expires_at).getTime() <= Date.now()) {
+          return {
+            status: "expired" as const,
+            changedAt: row.expires_at,
+          };
+        }
+
+        if (row.status === "expired" || row.status === "cancelled" || row.status === "superseded") {
+          return {
+            status: row.status,
+            changedAt: row.updated_at,
+          };
+        }
+
+        return null;
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime())[0] ?? null;
+  const activePendingRequest =
+    requestRows
+      .filter((row) => row.status === "pending" && new Date(row.expires_at).getTime() > Date.now())
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null;
+  const activeSignedConsent =
+    consentRows
+      .filter((row) => row.revoked_at === null)
+      .sort((a, b) => new Date(b.signed_at).getTime() - new Date(a.signed_at).getTime())[0] ?? null;
+  const latestRevokedConsent =
+    consentRows
+      .filter((row) => row.revoked_at !== null)
+      .sort(
+        (a, b) =>
+          new Date(b.revoked_at ?? b.signed_at).getTime() - new Date(a.revoked_at ?? a.signed_at).getTime(),
+      )[0] ?? null;
+
+  if (activeSignedConsent) {
+    return {
+      state: "signed",
+      pendingRequest: null,
+      latestActivityAt: activeSignedConsent.signed_at,
+      latestRequestOutcome: null,
+    };
+  }
+
+  if (activePendingRequest) {
+    const token = deriveRecurringProfileConsentToken({ requestId: activePendingRequest.id });
+    return {
+      state: "pending",
+      pendingRequest: {
+        id: activePendingRequest.id,
+        expiresAt: activePendingRequest.expires_at,
+        consentPath: buildRecurringProfileConsentPath(token),
+        emailSnapshot: activePendingRequest.profile_email_snapshot,
+        updatedAt: activePendingRequest.updated_at,
+      },
+      latestActivityAt: activePendingRequest.expires_at,
+      latestRequestOutcome: null,
+    };
+  }
+
+  if (latestRevokedConsent) {
+    return {
+      state: "revoked",
+      pendingRequest: null,
+      latestActivityAt: latestRevokedConsent.revoked_at,
+      latestRequestOutcome: null,
+    };
+  }
+
+  return {
+    state: "missing",
+    pendingRequest: null,
+    latestActivityAt: null,
+    latestRequestOutcome: terminalRequestOutcome,
+  };
+}
+
+function createMissingBaselineConsentSummary(): RecurringProfileListItem["baselineConsent"] {
+  return {
+    state: "missing",
+    pendingRequest: null,
+    latestActivityAt: null,
+    latestRequestOutcome: null,
   };
 }
 
@@ -429,7 +827,13 @@ export async function listRecurringProfilesPageData(
   const access = await resolveProfilesAccess(input.supabase, input.tenantId, input.userId);
   const normalizedQuery = normalizeSearchQuery(input.q);
 
-  const [{ data: profileTypeData, error: profileTypeError }, { data: profileData, error: profileError }] =
+  const [
+    { data: profileTypeData, error: profileTypeError },
+    { data: profileData, error: profileError },
+    { data: requestData, error: requestError },
+    { data: consentData, error: consentError },
+    baselineTemplates,
+  ] =
     await Promise.all([
       input.supabase
         .from("recurring_profile_types")
@@ -441,6 +845,21 @@ export async function listRecurringProfilesPageData(
         .select(RECURRING_PROFILE_SELECT)
         .eq("tenant_id", input.tenantId)
         .order("updated_at", { ascending: false }),
+      input.supabase
+        .from("recurring_profile_consent_requests")
+        .select(
+          "id, tenant_id, profile_id, consent_kind, consent_template_id, profile_email_snapshot, status, expires_at, created_at, updated_at, superseded_by_request_id",
+        )
+        .eq("tenant_id", input.tenantId)
+        .eq("consent_kind", "baseline"),
+      input.supabase
+        .from("recurring_profile_consents")
+        .select("id, tenant_id, profile_id, consent_kind, signed_at, revoked_at, created_at")
+        .eq("tenant_id", input.tenantId)
+        .eq("consent_kind", "baseline"),
+      access.canManageProfiles
+        ? listVisibleTemplatesForTenant(input.supabase, input.tenantId)
+        : Promise.resolve([]),
     ]);
 
   if (profileTypeError) {
@@ -450,11 +869,25 @@ export async function listRecurringProfilesPageData(
   if (profileError) {
     throw new HttpError(500, "recurring_profile_list_failed", "Unable to load recurring profiles.");
   }
+  if (requestError) {
+    throw new HttpError(
+      500,
+      "recurring_profile_consent_request_list_failed",
+      "Unable to load recurring baseline consent requests.",
+    );
+  }
+  if (consentError) {
+    throw new HttpError(500, "recurring_profile_consent_list_failed", "Unable to load recurring baseline consents.");
+  }
 
   const profileTypes = ((profileTypeData as RecurringProfileTypeRow[] | null) ?? []).slice();
   const profiles = ((profileData as RecurringProfileRow[] | null) ?? []).slice();
+  const requestRows = ((requestData as RecurringProfileConsentRequestRow[] | null) ?? []).slice();
+  const consentRows = ((consentData as RecurringProfileConsentRow[] | null) ?? []).slice();
 
   const profileTypeMap = new Map(profileTypes.map((profileType) => [profileType.id, profileType]));
+  const requestRowsByProfileId = new Map<string, RecurringProfileConsentRequestRow[]>();
+  const consentRowsByProfileId = new Map<string, RecurringProfileConsentRow[]>();
   const activeProfileCountByTypeId = new Map<string, number>();
 
   for (const profile of profiles) {
@@ -466,6 +899,18 @@ export async function listRecurringProfilesPageData(
       profile.profile_type_id,
       (activeProfileCountByTypeId.get(profile.profile_type_id) ?? 0) + 1,
     );
+  }
+
+  for (const requestRow of requestRows) {
+    const current = requestRowsByProfileId.get(requestRow.profile_id) ?? [];
+    current.push(requestRow);
+    requestRowsByProfileId.set(requestRow.profile_id, current);
+  }
+
+  for (const consentRow of consentRows) {
+    const current = consentRowsByProfileId.get(consentRow.profile_id) ?? [];
+    current.push(consentRow);
+    consentRowsByProfileId.set(consentRow.profile_id, current);
   }
 
   const resolvedProfileTypeId =
@@ -483,8 +928,40 @@ export async function listRecurringProfilesPageData(
 
       const haystacks = [profile.full_name.toLowerCase(), profile.email.toLowerCase()];
       return haystacks.some((value) => value.includes(normalizedQuery.toLowerCase()));
-    })
-    .map((profile) => mapRecurringProfile(profile, profileTypeMap.get(profile.profile_type_id ?? "") ?? null));
+    });
+
+  const matchingReadinessByProfileId = new Map(
+    await Promise.all(
+      visibleProfiles.map(async (profile) => [
+        profile.id,
+        await deriveRecurringProfileMatchingReadiness({
+          supabase: input.supabase,
+          tenantId: input.tenantId,
+          profileId: profile.id,
+        }),
+      ]),
+    ),
+  );
+
+  const visibleProfileItems = visibleProfiles.map((profile) =>
+    mapRecurringProfile(
+      profile,
+      profileTypeMap.get(profile.profile_type_id ?? "") ?? null,
+      deriveBaselineConsentSummary(
+        profile.id,
+        requestRowsByProfileId.get(profile.id) ?? [],
+        consentRowsByProfileId.get(profile.id) ?? [],
+      ),
+      matchingReadinessByProfileId.get(profile.id) ?? {
+        state: "blocked_no_opt_in",
+        authorized: false,
+        currentHeadshotId: null,
+        selectionFaceId: null,
+        selectionStatus: null,
+        materializationStatus: null,
+      },
+    ),
+  );
 
   return {
     access,
@@ -501,10 +978,278 @@ export async function listRecurringProfilesPageData(
       profileTypeId: resolvedProfileTypeId,
       includeArchived: Boolean(input.includeArchived),
     },
+    baselineTemplates: baselineTemplates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      version: template.version,
+      scope: template.scope,
+    })),
     profileTypes: profileTypes.map((profileType) =>
       mapRecurringProfileType(profileType, activeProfileCountByTypeId.get(profileType.id) ?? 0),
     ),
-    profiles: visibleProfiles,
+    profiles: visibleProfileItems,
+  };
+}
+
+export async function getRecurringProfileDetailPanelData(
+  input: GetRecurringProfileDetailDataInput,
+): Promise<RecurringProfileDetailData> {
+  const access = await resolveProfilesAccess(input.supabase, input.tenantId, input.userId);
+  if (!access.canViewProfiles) {
+    throw new HttpError(403, "recurring_profile_view_forbidden", "You do not have access to recurring profiles.");
+  }
+
+  if (!isUuid(input.profileId)) {
+    throw new HttpError(404, "recurring_profile_not_found", "Recurring profile not found.");
+  }
+
+  const profile = await getRecurringProfileRowById(input.supabase, input.tenantId, input.profileId);
+  if (!profile) {
+    throw new HttpError(404, "recurring_profile_not_found", "Recurring profile not found.");
+  }
+
+  const [profileType, requestRowsResult, consentRowsResult, latestFollowUpAttemptResult] = await Promise.all([
+    profile.profile_type_id
+      ? getRecurringProfileTypeRowById(input.supabase, input.tenantId, profile.profile_type_id)
+      : Promise.resolve(null),
+    input.supabase
+      .from("recurring_profile_consent_requests")
+      .select(
+        "id, tenant_id, profile_id, consent_kind, consent_template_id, profile_name_snapshot, profile_email_snapshot, status, expires_at, created_at, updated_at, superseded_by_request_id",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("profile_id", input.profileId)
+      .eq("consent_kind", "baseline")
+      .order("created_at", { ascending: false })
+      .limit(20),
+    input.supabase
+      .from("recurring_profile_consents")
+      .select(
+        "id, tenant_id, profile_id, request_id, consent_kind, consent_template_id, profile_name_snapshot, profile_email_snapshot, consent_version, structured_fields_snapshot, signed_at, revoked_at, revoke_reason, receipt_email_sent_at, created_at",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("profile_id", input.profileId)
+      .eq("consent_kind", "baseline")
+      .order("signed_at", { ascending: false })
+      .limit(20),
+    input.supabase
+      .from("recurring_profile_consent_request_delivery_attempts")
+      .select(
+        "id, tenant_id, profile_id, request_id, action_kind, delivery_mode, status, target_email, error_code, error_message, created_at",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("profile_id", input.profileId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (requestRowsResult.error) {
+    throw new HttpError(
+      500,
+      "recurring_profile_consent_request_list_failed",
+      "Unable to load recurring baseline consent requests.",
+    );
+  }
+
+  if (consentRowsResult.error) {
+    throw new HttpError(500, "recurring_profile_consent_list_failed", "Unable to load recurring baseline consents.");
+  }
+  if (latestFollowUpAttemptResult.error) {
+    throw new HttpError(
+      500,
+      "recurring_profile_follow_up_attempt_list_failed",
+      "Unable to load recurring baseline follow-up attempts.",
+    );
+  }
+
+  const requestRows = ((requestRowsResult.data as RecurringProfileConsentRequestDetailRow[] | null) ?? []).slice();
+  const consentRows = ((consentRowsResult.data as RecurringProfileConsentDetailRow[] | null) ?? []).slice();
+  const latestFollowUpAttempt =
+    (latestFollowUpAttemptResult.data as RecurringProfileConsentRequestDeliveryAttemptRow | null) ?? null;
+  const baselineSummary = deriveBaselineConsentSummary(profile.id, requestRows, consentRows);
+  const templateMap = await listTemplatesByIds(
+    input.supabase,
+    input.tenantId,
+    [
+      ...requestRows.map((row) => row.consent_template_id),
+      ...consentRows.map((row) => row.consent_template_id),
+    ],
+  );
+  const consentByRequestId = new Map(consentRows.map((row) => [row.request_id, row]));
+  const activePendingRequest =
+    requestRows.find((row) => row.status === "pending" && new Date(row.expires_at).getTime() > Date.now()) ?? null;
+  const activeSignedConsent = consentRows.find((row) => row.revoked_at === null) ?? null;
+  const latestRevokedConsent = consentRows.find((row) => row.revoked_at !== null) ?? null;
+  const pendingToken = activePendingRequest
+    ? deriveRecurringProfileConsentToken({ requestId: activePendingRequest.id })
+    : null;
+  const canManageBaseline = access.canManageProfiles && profile.status === "active";
+  const availableBaselineFollowUpAction =
+    !canManageBaseline || activeSignedConsent
+      ? null
+      : activePendingRequest
+        ? "reminder"
+        : baselineSummary.state === "missing" || baselineSummary.state === "revoked"
+          ? "new_request"
+          : null;
+  const headshotMatching = await getRecurringProfileHeadshotDetail({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    profileId: input.profileId,
+  });
+  const headshotPreviewUrl = await getRecurringProfileHeadshotSignedPreviewUrl({
+    supabase: input.supabase,
+    headshot: headshotMatching.currentHeadshot,
+  });
+  const canManageHeadshot = access.canManageProfiles && profile.status === "active";
+
+  return {
+    access,
+    profile: {
+      id: profile.id,
+      fullName: profile.full_name,
+      email: profile.email,
+      status: profile.status,
+      updatedAt: profile.updated_at,
+      archivedAt: profile.archived_at,
+      profileType: profileType
+        ? {
+            id: profileType.id,
+            label: profileType.label,
+            status: profileType.status,
+            archivedAt: profileType.archived_at,
+          }
+        : null,
+    },
+    baselineConsent: {
+      ...baselineSummary,
+      pendingRequest:
+        activePendingRequest && pendingToken
+          ? {
+              id: activePendingRequest.id,
+              expiresAt: activePendingRequest.expires_at,
+              consentPath: buildRecurringProfileConsentPath(pendingToken),
+              emailSnapshot: activePendingRequest.profile_email_snapshot,
+              updatedAt: activePendingRequest.updated_at,
+              fullNameSnapshot: activePendingRequest.profile_name_snapshot,
+              templateName: templateMap.get(activePendingRequest.consent_template_id)?.name ?? null,
+              templateVersion: templateMap.get(activePendingRequest.consent_template_id)?.version ?? null,
+              createdAt: activePendingRequest.created_at,
+            }
+          : null,
+      activeConsent: activeSignedConsent
+        ? {
+            id: activeSignedConsent.id,
+            requestId: activeSignedConsent.request_id,
+            signedAt: activeSignedConsent.signed_at,
+            emailSnapshot: activeSignedConsent.profile_email_snapshot,
+            fullNameSnapshot: activeSignedConsent.profile_name_snapshot,
+            templateName: templateMap.get(activeSignedConsent.consent_template_id)?.name ?? null,
+            templateVersion:
+              templateMap.get(activeSignedConsent.consent_template_id)?.version ?? activeSignedConsent.consent_version,
+            structuredSummary: buildRecurringProfileStructuredSummary(
+              activeSignedConsent.structured_fields_snapshot,
+            ),
+            receiptEmailSentAt: activeSignedConsent.receipt_email_sent_at,
+          }
+        : null,
+      latestRevokedConsent:
+        latestRevokedConsent && latestRevokedConsent.revoked_at
+          ? {
+              id: latestRevokedConsent.id,
+              requestId: latestRevokedConsent.request_id,
+              signedAt: latestRevokedConsent.signed_at,
+              revokedAt: latestRevokedConsent.revoked_at,
+              revokeReason: latestRevokedConsent.revoke_reason,
+              emailSnapshot: latestRevokedConsent.profile_email_snapshot,
+              fullNameSnapshot: latestRevokedConsent.profile_name_snapshot,
+              templateName: templateMap.get(latestRevokedConsent.consent_template_id)?.name ?? null,
+              templateVersion:
+                templateMap.get(latestRevokedConsent.consent_template_id)?.version
+                ?? latestRevokedConsent.consent_version,
+              structuredSummary: buildRecurringProfileStructuredSummary(
+                latestRevokedConsent.structured_fields_snapshot,
+              ),
+              receiptEmailSentAt: latestRevokedConsent.receipt_email_sent_at,
+            }
+          : null,
+      latestFollowUpAttempt: latestFollowUpAttempt
+        ? {
+            id: latestFollowUpAttempt.id,
+            requestId: latestFollowUpAttempt.request_id,
+            actionKind: latestFollowUpAttempt.action_kind,
+            deliveryMode: latestFollowUpAttempt.delivery_mode,
+            status: latestFollowUpAttempt.status,
+            targetEmail: latestFollowUpAttempt.target_email,
+            attemptedAt: latestFollowUpAttempt.created_at,
+            errorCode: latestFollowUpAttempt.error_code,
+          }
+        : null,
+    },
+    requestHistory: requestRows.map((row) => {
+      const matchingConsent = consentByRequestId.get(row.id) ?? null;
+      const changedAt =
+        row.status === "signed" && matchingConsent
+          ? matchingConsent.signed_at
+          : row.status === "expired" || (row.status === "pending" && new Date(row.expires_at).getTime() <= Date.now())
+            ? row.expires_at
+            : row.updated_at;
+
+      return {
+        id: row.id,
+        status:
+          row.status === "pending" && new Date(row.expires_at).getTime() <= Date.now() ? "expired" : row.status,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        changedAt,
+        emailSnapshot: row.profile_email_snapshot,
+        fullNameSnapshot: row.profile_name_snapshot,
+        templateName: templateMap.get(row.consent_template_id)?.name ?? null,
+        templateVersion: templateMap.get(row.consent_template_id)?.version ?? null,
+        supersededByRequestId: row.superseded_by_request_id,
+      };
+    }),
+    consentHistory: consentRows.map((row) => ({
+      id: row.id,
+      requestId: row.request_id,
+      signedAt: row.signed_at,
+      revokedAt: row.revoked_at,
+      revokeReason: row.revoke_reason,
+      emailSnapshot: row.profile_email_snapshot,
+      fullNameSnapshot: row.profile_name_snapshot,
+      templateName: templateMap.get(row.consent_template_id)?.name ?? null,
+      templateVersion: templateMap.get(row.consent_template_id)?.version ?? row.consent_version,
+      structuredSummary: buildRecurringProfileStructuredSummary(row.structured_fields_snapshot),
+      receiptEmailSentAt: row.receipt_email_sent_at,
+    })),
+    actions: {
+      canManageBaseline,
+      canRequestBaselineConsent:
+        canManageBaseline && (baselineSummary.state === "missing" || baselineSummary.state === "revoked"),
+      canCopyBaselineLink: Boolean(activePendingRequest),
+      canOpenBaselineLink: Boolean(activePendingRequest),
+      canCancelPendingRequest: canManageBaseline && Boolean(activePendingRequest),
+      canReplacePendingRequest: canManageBaseline && Boolean(activePendingRequest),
+      availableBaselineFollowUpAction,
+    },
+    headshotMatching: {
+      ...headshotMatching,
+      previewUrl: headshotPreviewUrl,
+      actions: {
+        canManage: canManageHeadshot,
+        canUpload: canManageHeadshot && headshotMatching.readiness.authorized,
+        canReplace:
+          canManageHeadshot
+          && headshotMatching.readiness.authorized
+          && Boolean(headshotMatching.currentHeadshot),
+        canSelectFace:
+          canManageHeadshot
+          && headshotMatching.readiness.authorized
+          && headshotMatching.readiness.state === "needs_face_selection"
+          && headshotMatching.candidateFaces.length > 0,
+      },
+    },
   };
 }
 
@@ -575,7 +1320,7 @@ export async function createRecurringProfile(
   }
 
   const payload = {
-    profile: mapRecurringProfile(data as RecurringProfileRow, profileType),
+    profile: mapRecurringProfile(data as RecurringProfileRow, profileType, createMissingBaselineConsentSummary()),
   };
 
   await writeIdempotencyPayload(input.supabase, input.tenantId, input.userId, operation, idempotencyKey, payload);
@@ -603,7 +1348,7 @@ export async function archiveRecurringProfile(input: ArchiveRecurringProfileInpu
     : null;
 
   if (existingProfile.status === "archived") {
-    return mapRecurringProfile(existingProfile, existingProfileType);
+    return mapRecurringProfile(existingProfile, existingProfileType, createMissingBaselineConsentSummary());
   }
 
   const { data, error } = await input.supabase
@@ -622,7 +1367,7 @@ export async function archiveRecurringProfile(input: ArchiveRecurringProfileInpu
   }
 
   if (data) {
-    return mapRecurringProfile(data as RecurringProfileRow, existingProfileType);
+    return mapRecurringProfile(data as RecurringProfileRow, existingProfileType, createMissingBaselineConsentSummary());
   }
 
   const archivedProfile = await getRecurringProfileRowById(input.supabase, input.tenantId, input.profileId);
@@ -630,7 +1375,7 @@ export async function archiveRecurringProfile(input: ArchiveRecurringProfileInpu
     throw new HttpError(404, "recurring_profile_not_found", "Recurring profile not found.");
   }
 
-  return mapRecurringProfile(archivedProfile, existingProfileType);
+  return mapRecurringProfile(archivedProfile, existingProfileType, createMissingBaselineConsentSummary());
 }
 
 export async function createRecurringProfileType(

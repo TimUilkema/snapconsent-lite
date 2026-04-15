@@ -65,6 +65,19 @@ type HeadshotAssetRow = {
   storage_path: string | null;
 };
 
+type RecurringProfileRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+};
+
+type RecurringHeadshotRow = {
+  id: string;
+  profile_id: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
+};
+
 type ConsentFilterOptionRow = {
   id: string;
   subjects: Array<{
@@ -322,7 +335,10 @@ export async function GET(request: Request, context: RouteContext) {
       string,
       Array<{
         assetFaceId: string;
-        consentId: string;
+        projectFaceAssigneeId: string;
+        identityKind: "project_consent" | "project_recurring_consent";
+        consentId: string | null;
+        projectProfileParticipantId: string | null;
         fullName: string | null;
         email: string | null;
         headshotThumbnailUrl: string | null;
@@ -372,10 +388,13 @@ export async function GET(request: Request, context: RouteContext) {
       const consentIdsForLookup = Array.from(
         new Set([
           ...assignments.map((assignment) => assignment.consentId),
-          ...linkedFaceOverlays.map((overlay) => overlay.consentId),
+          ...linkedFaceOverlays
+            .map((overlay) => overlay.consentId)
+            .filter((value): value is string => typeof value === "string" && value.length > 0),
         ]),
       );
       const resolvedConsentSummaryById = new Map<string, { fullName: string | null; email: string | null }>();
+      const recurringSummaryByProfileId = new Map<string, { fullName: string | null; email: string | null }>();
       if (consentIdsForLookup.length > 0) {
         const consentDetails = await supabase
           .from("consents")
@@ -399,8 +418,41 @@ export async function GET(request: Request, context: RouteContext) {
           });
         });
       }
-      const overlayConsentIds = Array.from(new Set(linkedFaceOverlays.map((overlay) => overlay.consentId)));
+      const recurringProfileIds = Array.from(
+        new Set(
+          linkedFaceOverlays
+            .map((overlay) => overlay.profileId)
+            .filter((value): value is string => typeof value === "string" && value.length > 0),
+        ),
+      );
+      if (recurringProfileIds.length > 0) {
+        const { data: recurringProfiles, error: recurringProfilesError } = await supabase
+          .from("recurring_profiles")
+          .select("id, full_name, email")
+          .eq("tenant_id", tenantId)
+          .in("id", recurringProfileIds);
+
+        if (recurringProfilesError) {
+          throw new HttpError(500, "asset_link_lookup_failed", "Unable to load linked recurring profiles.");
+        }
+
+        ((recurringProfiles ?? []) as RecurringProfileRow[]).forEach((profile) => {
+          recurringSummaryByProfileId.set(profile.id, {
+            fullName: profile.full_name?.trim() ?? null,
+            email: profile.email?.trim() ?? null,
+          });
+        });
+      }
+
+      const overlayConsentIds = Array.from(
+        new Set(
+          linkedFaceOverlays
+            .map((overlay) => overlay.consentId)
+            .filter((value): value is string => typeof value === "string" && value.length > 0),
+        ),
+      );
       const headshotThumbnailUrlByConsentId = new Map<string, string | null>();
+      const recurringHeadshotThumbnailUrlByProfileId = new Map<string, string | null>();
 
       if (overlayConsentIds.length > 0) {
         const currentHeadshots = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, {
@@ -448,6 +500,48 @@ export async function GET(request: Request, context: RouteContext) {
         }
       }
 
+      if (recurringProfileIds.length > 0) {
+        const { data: recurringHeadshots, error: recurringHeadshotsError } = await supabase
+          .from("recurring_profile_headshots")
+          .select("id, profile_id, storage_bucket, storage_path")
+          .eq("tenant_id", tenantId)
+          .is("superseded_at", null)
+          .eq("upload_status", "uploaded")
+          .in("profile_id", recurringProfileIds)
+          .order("created_at", { ascending: false });
+
+        if (recurringHeadshotsError) {
+          throw new HttpError(500, "asset_link_lookup_failed", "Unable to load linked recurring headshots.");
+        }
+
+        const latestHeadshotByProfileId = new Map<string, RecurringHeadshotRow>();
+        ((recurringHeadshots ?? []) as RecurringHeadshotRow[]).forEach((headshot) => {
+          if (!latestHeadshotByProfileId.has(headshot.profile_id)) {
+            latestHeadshotByProfileId.set(headshot.profile_id, headshot);
+          }
+        });
+
+        await Promise.all(
+          Array.from(latestHeadshotByProfileId.entries()).map(async ([profileId, headshot]) => {
+            if (!headshot.storage_bucket || !headshot.storage_path) {
+              recurringHeadshotThumbnailUrlByProfileId.set(profileId, null);
+              return;
+            }
+
+            const { data, error } = await supabase.storage
+              .from(headshot.storage_bucket)
+              .createSignedUrl(headshot.storage_path, 60 * 60);
+
+            recurringHeadshotThumbnailUrlByProfileId.set(
+              profileId,
+              !error && data?.signedUrl
+                ? resolveLoopbackStorageUrlForHostHeader(data.signedUrl, requestHostHeader)
+                : null,
+            );
+          }),
+        );
+      }
+
       assignments.forEach((assignment) => {
         const currentCount = assetLinkCountMap.get(assignment.assetId) ?? 0;
         assetLinkCountMap.set(assignment.assetId, currentCount + 1);
@@ -468,13 +562,26 @@ export async function GET(request: Request, context: RouteContext) {
 
       linkedFaceOverlays.forEach((overlay) => {
         const existing = assetLinkedFaceOverlayMap.get(overlay.assetId) ?? [];
-        const summary = resolvedConsentSummaryById.get(overlay.consentId);
+        const summary =
+          overlay.identityKind === "project_consent" && overlay.consentId
+            ? resolvedConsentSummaryById.get(overlay.consentId) ?? null
+            : overlay.profileId
+              ? recurringSummaryByProfileId.get(overlay.profileId) ?? null
+              : null;
         existing.push({
           assetFaceId: overlay.assetFaceId,
+          projectFaceAssigneeId: overlay.projectFaceAssigneeId,
+          identityKind: overlay.identityKind,
           consentId: overlay.consentId,
+          projectProfileParticipantId: overlay.projectProfileParticipantId,
           fullName: summary?.fullName ?? null,
           email: summary?.email ?? null,
-          headshotThumbnailUrl: headshotThumbnailUrlByConsentId.get(overlay.consentId) ?? null,
+          headshotThumbnailUrl:
+            overlay.identityKind === "project_consent" && overlay.consentId
+              ? headshotThumbnailUrlByConsentId.get(overlay.consentId) ?? null
+              : overlay.profileId
+                ? recurringHeadshotThumbnailUrlByProfileId.get(overlay.profileId) ?? null
+                : null,
           faceRank: overlay.faceRank,
           faceBoxNormalized: overlay.faceBoxNormalized,
           linkSource: overlay.linkSource,

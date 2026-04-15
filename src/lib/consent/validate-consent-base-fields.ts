@@ -4,6 +4,7 @@ type ValidateConsentBaseFieldsInput = {
   consentAcknowledged: boolean;
   faceMatchOptIn: boolean;
   hasHeadshot: boolean;
+  requireHeadshotWhenOptedIn?: boolean;
 };
 
 export type ConsentBaseFieldErrors = Partial<
@@ -29,7 +30,7 @@ export function validateConsentBaseFields(input: ValidateConsentBaseFieldsInput)
     fieldErrors.consent_acknowledged = "required";
   }
 
-  if (input.faceMatchOptIn && !input.hasHeadshot) {
+  if ((input.requireHeadshotWhenOptedIn ?? true) && input.faceMatchOptIn && !input.hasHeadshot) {
     fieldErrors.face_match_section = "headshot_required";
   }
 
