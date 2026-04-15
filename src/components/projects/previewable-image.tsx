@@ -1095,7 +1095,7 @@ export function ImagePreviewLightbox({
         )
       : new Map<string, PreviewOverlayCardRect>();
   const previewScene = (
-    <div className="relative h-[min(82vh,980px)] overflow-hidden rounded-[22px] border border-zinc-200/90 bg-zinc-100 p-3 select-none">
+    <div className="relative h-[clamp(19rem,56vh,48rem)] overflow-hidden rounded-[22px] border border-zinc-200/90 bg-zinc-100 p-3 select-none lg:h-[clamp(21rem,58vh,50rem)]">
       {onPrevious ? (
         <button
           type="button"
@@ -1310,13 +1310,13 @@ export function ImagePreviewLightbox({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/55 p-4 backdrop-blur-[2px] select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/55 p-3 backdrop-blur-[2px] select-none sm:p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="relative w-[min(94vw,1400px)] rounded-[28px] border border-white/85 bg-white/94 p-3 shadow-[0_36px_120px_rgba(15,23,42,0.34),0_12px_32px_rgba(15,23,42,0.18)]"
+        className="relative max-h-[96vh] w-[min(96vw,1520px)] overflow-y-auto rounded-[28px] border border-white/85 bg-white/94 p-3 shadow-[0_36px_120px_rgba(15,23,42,0.34),0_12px_32px_rgba(15,23,42,0.18)]"
         onClick={(event) => event.stopPropagation()}
       >
         {chrome === "header" ? (
@@ -1405,7 +1405,7 @@ export function ImagePreviewLightbox({
         ) : null}
 
           {sidePanel ? (
-            <div className={`${chrome === "header" ? "mt-3" : ""} grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]`}>
+            <div className={`${chrome === "header" ? "mt-3" : ""} grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)] 2xl:grid-cols-[minmax(0,1fr)_26rem]`}>
               <div className="min-w-0 space-y-3">
                 {previewScene}
                 {belowScene}

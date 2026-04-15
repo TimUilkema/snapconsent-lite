@@ -798,8 +798,8 @@ export function AssetPreviewLinkedPeopleStrip({
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-3">
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="rounded-xl border border-zinc-200 bg-white p-2.5">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {linkedFaces.map((linkedFace) => {
           const displayName = linkedFace.displayName || linkedFace.email || unknownPersonLabel;
           const isHovered = hoveredLinkedFaceId === linkedFace.assetFaceId;
@@ -819,13 +819,13 @@ export function AssetPreviewLinkedPeopleStrip({
               onFocus={() => onHoverChange(linkedFace.assetFaceId)}
               onBlur={() => onHoverChange(null)}
               onClick={() => onSelect(linkedFace.assetFaceId)}
-              className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
+              className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
                 isSelected || isHovered
                   ? getLinkToneClasses(linkedFace.linkSource, true)
                   : getLinkToneClasses(linkedFace.linkSource, false)
               }`}
             >
-              <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md border border-zinc-200 bg-zinc-100">
+              <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-zinc-200 bg-zinc-100">
                 {thumbnailUrl ? (
                   <span
                     aria-hidden="true"
@@ -837,11 +837,11 @@ export function AssetPreviewLinkedPeopleStrip({
                 )}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-zinc-900">{displayName}</span>
-                <span className="mt-1 flex items-center gap-1.5 text-xs text-zinc-600">
+                <span className="block truncate text-[13px] font-medium leading-5 text-zinc-900">{displayName}</span>
+                <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-zinc-600">
                   <LinkSourceIcon
                     linkSource={linkedFace.linkSource}
-                    className={`h-3.5 w-3.5 ${getLinkIconToneClass(linkedFace.linkSource)}`}
+                    className={`h-3 w-3 ${getLinkIconToneClass(linkedFace.linkSource)}`}
                   />
                   <span>
                     {linkedFace.linkSource === "auto" && typeof linkedFace.matchConfidence === "number"
@@ -2392,7 +2392,7 @@ export function ProjectAssetPreviewLightbox({
         ) : null
       }
       belowScene={
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <AssetPreviewSceneActions
             hiddenFaceCount={previewData?.hiddenFaceCount ?? 0}
             showHiddenFaces={showHiddenFaces}
