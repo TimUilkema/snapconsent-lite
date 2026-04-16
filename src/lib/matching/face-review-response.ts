@@ -44,14 +44,14 @@ export async function serializeFaceReviewSessionResponse(
     tenantId,
     projectId,
     use: "thumbnail",
-    fallback: "transform",
+    fallback: "original",
     enqueueMissingDerivative: true,
   });
   const previewMap = await resolveSignedAssetDisplayUrlsForAssets(null, assets, {
     tenantId,
     projectId,
     use: "preview",
-    fallback: "transform",
+    fallback: "original",
   });
   const derivativeMap = await signFaceDerivativeUrls(Array.from(derivatives.values()));
 

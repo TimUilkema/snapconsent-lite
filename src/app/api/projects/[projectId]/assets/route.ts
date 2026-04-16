@@ -315,14 +315,14 @@ export async function GET(request: Request, context: RouteContext) {
       tenantId,
       projectId,
       use: "thumbnail",
-      fallback: "transform",
+      fallback: "original",
       enqueueMissingDerivative: true,
     });
     const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assetRows, {
       tenantId,
       projectId,
       use: "preview",
-      fallback: "transform",
+      fallback: "original",
     });
 
     const assetLinkCountMap = new Map<string, number>();

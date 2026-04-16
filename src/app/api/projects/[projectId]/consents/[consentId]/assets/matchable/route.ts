@@ -88,14 +88,14 @@ export async function GET(request: Request, context: RouteContext) {
       tenantId,
       projectId,
       use: "thumbnail",
-      fallback: "transform",
+      fallback: "original",
       enqueueMissingDerivative: true,
     });
     const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, result.assets, {
       tenantId,
       projectId,
       use: "preview",
-      fallback: "transform",
+      fallback: "original",
     });
 
     return Response.json(

@@ -390,7 +390,7 @@ async function loadHeadshotThumbnailMap(input: MatchingScopeInput, consentIds: s
       tenantId: input.tenantId,
       projectId: input.projectId,
       use: "preview",
-      fallback: "transform",
+      fallback: "original",
     }),
   ]);
 

@@ -79,14 +79,14 @@ export async function GET(_request: Request, context: RouteContext) {
       tenantId,
       projectId,
       use: "thumbnail",
-      fallback: "transform",
+      fallback: "original",
       enqueueMissingDerivative: true,
     });
     const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assets, {
       tenantId,
       projectId,
       use: "preview",
-      fallback: "transform",
+      fallback: "original",
     });
     const linkedFaceIds = assets.map((asset) => asset.asset_face_id).filter((value): value is string => Boolean(value));
     const faceDerivativeRows = await loadFaceImageDerivativesForFaceIds(
