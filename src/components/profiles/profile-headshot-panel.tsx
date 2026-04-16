@@ -119,7 +119,6 @@ export function ProfileHeadshotPanel({
   onMutated,
 }: ProfileHeadshotPanelProps) {
   const t = useTranslations("profiles.headshot");
-  const tMatching = useTranslations("profiles.matching");
   const tErrors = useTranslations("errors");
   const locale = useLocale();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -259,9 +258,6 @@ export function ProfileHeadshotPanel({
               </span>
             ) : null}
           </div>
-          <p className="max-w-3xl text-sm text-zinc-700">
-            {tMatching(`description.${headshotMatching.readiness.state}`)}
-          </p>
           {!headshotMatching.readiness.authorized && headshotMatching.actions.canManage ? (
             <p className="text-sm text-zinc-700">{t("authorizationRequired")}</p>
           ) : null}
@@ -306,7 +302,7 @@ export function ProfileHeadshotPanel({
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
 
       {currentHeadshot ? (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <HeadshotMetaField label={t("meta.fileName")} value={currentHeadshot.original_filename} />
           <HeadshotMetaField
             label={t("meta.uploadedAt")}
@@ -316,23 +312,11 @@ export function ProfileHeadshotPanel({
                 : t("meta.notAvailable")
             }
           />
-          <HeadshotMetaField
-            label={t("meta.faceCount")}
-            value={String(currentMaterialization?.face_count ?? 0)}
-          />
-          <HeadshotMetaField
-            label={t("meta.materializedAt")}
-            value={
-              currentMaterialization?.materialized_at
-                ? formatDateTime(currentMaterialization.materialized_at, locale)
-                : t("meta.notAvailable")
-            }
-          />
         </div>
       ) : null}
 
       {headshotMatching.previewUrl ? (
-        <div className="mt-4 space-y-3">
+        <div className="mt-4">
           <div className="relative mx-auto max-w-sm overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100">
             {/* Signed storage previews are rendered directly to avoid next/image host config churn for this bounded flow. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -364,7 +348,6 @@ export function ProfileHeadshotPanel({
               );
             })}
           </div>
-          <p className="text-xs text-zinc-600">{t("previewHelp")}</p>
         </div>
       ) : null}
 

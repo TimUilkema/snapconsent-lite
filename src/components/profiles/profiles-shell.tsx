@@ -123,25 +123,6 @@ type ProfileDetailPanelContentProps = {
   onMutated: (notice?: DetailMutationNotice) => void;
 };
 
-function DisabledButton({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      disabled
-      aria-disabled="true"
-      className={`rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-500 opacity-70 ${className}`.trim()}
-    >
-      {children}
-    </button>
-  );
-}
-
 function ProfileStatusBadge({ archived }: { archived: boolean }) {
   const t = useTranslations("profiles.status");
 
@@ -717,8 +698,8 @@ export function ProfileDetailPanelContent({
   }
 
   return (
-    <div className="space-y-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
-      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+    <div className="grid gap-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 xl:grid-cols-2">
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 xl:col-span-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <h3 className="text-base font-semibold text-zinc-900">{t("currentTitle")}</h3>
@@ -728,7 +709,7 @@ export function ProfileDetailPanelContent({
             </div>
             <p className="text-sm text-zinc-700">{renderBaselineActivity()}</p>
           </div>
-          <div className="grid gap-3 text-sm text-zinc-700 sm:grid-cols-2">
+          <div className="grid gap-3 text-sm text-zinc-700 sm:grid-cols-2 xl:grid-cols-4">
             <DetailField label={t("nameLabel")} value={detail.profile.fullName} />
             <DetailField label={t("emailLabel")} value={detail.profile.email} />
             <DetailField
@@ -767,7 +748,6 @@ export function ProfileDetailPanelContent({
                 value={formatDateTime(detail.baselineConsent.latestFollowUpAttempt.attemptedAt, locale)}
               />
             </div>
-            <p className="mt-3 text-sm text-zinc-700">{tFollowUp("placeholderHelper")}</p>
           </div>
         ) : null}
       </section>
@@ -784,7 +764,7 @@ export function ProfileDetailPanelContent({
           <div className="mb-3">
             <h3 className="text-base font-semibold text-zinc-900">{t("pendingTitle")}</h3>
           </div>
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-4 grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
             <DetailField
               label={t("templateLabel")}
               value={
@@ -823,7 +803,7 @@ export function ProfileDetailPanelContent({
           <div className="mb-4">
             <h3 className="text-base font-semibold text-zinc-900">{t("activeConsentTitle")}</h3>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
             <DetailField
               label={t("templateLabel")}
               value={
@@ -840,14 +820,6 @@ export function ProfileDetailPanelContent({
               label={t("emailLabel")}
               value={detail.baselineConsent.activeConsent.emailSnapshot}
             />
-            <DetailField
-              label={t("receiptSentAtLabel")}
-              value={
-                detail.baselineConsent.activeConsent.receiptEmailSentAt
-                  ? formatDateTime(detail.baselineConsent.activeConsent.receiptEmailSentAt, locale)
-                  : t("notSent")
-              }
-            />
           </div>
           <div className="mt-4">
             <StructuredSummaryFields summary={detail.baselineConsent.activeConsent.structuredSummary} />
@@ -862,7 +834,7 @@ export function ProfileDetailPanelContent({
           <div className="mb-4">
             <h3 className="text-base font-semibold text-zinc-900">{t("latestRevokedTitle")}</h3>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
             <DetailField
               label={t("templateLabel")}
               value={
@@ -930,7 +902,7 @@ export function ProfileDetailPanelContent({
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 xl:col-span-2">
         <h3 className="text-base font-semibold text-zinc-900">{t("requestHistoryTitle")}</h3>
         {detail.requestHistory.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-600">{t("requestHistoryEmpty")}</p>
@@ -938,64 +910,19 @@ export function ProfileDetailPanelContent({
           <div className="mt-4 space-y-3">
             {detail.requestHistory.map((request) => (
               <div key={request.id} className="rounded-lg border border-zinc-200 p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="space-y-1">
-                    <RequestStatusBadge status={request.status} />
-                    <p className="text-sm font-medium text-zinc-900">
-                      {request.templateName
-                        ? `${request.templateName} ${request.templateVersion ?? ""}`.trim()
-                        : t("unknownValue")}
-                    </p>
-                  </div>
-                  <p className="text-xs text-zinc-500">{request.id}</p>
+                <div className="space-y-1">
+                  <RequestStatusBadge status={request.status} />
+                  <p className="text-sm font-medium text-zinc-900">
+                    {request.templateName
+                      ? `${request.templateName} ${request.templateVersion ?? ""}`.trim()
+                      : t("unknownValue")}
+                  </p>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <DetailField label={t("createdAtLabel")} value={formatDateTime(request.createdAt, locale)} />
                   <DetailField label={t("changedAtLabel")} value={formatDateTime(request.changedAt, locale)} />
                   <DetailField label={t("expiresAtLabel")} value={formatDateTime(request.expiresAt, locale)} />
                   <DetailField label={t("emailLabel")} value={request.emailSnapshot} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-lg border border-zinc-200 bg-white p-4">
-        <h3 className="text-base font-semibold text-zinc-900">{t("consentHistoryTitle")}</h3>
-        {detail.consentHistory.length === 0 ? (
-          <p className="mt-3 text-sm text-zinc-600">{t("consentHistoryEmpty")}</p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {detail.consentHistory.map((consent) => (
-              <div key={consent.id} className="rounded-lg border border-zinc-200 p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-zinc-900">
-                      {consent.templateName
-                        ? `${consent.templateName} ${consent.templateVersion ?? ""}`.trim()
-                        : t("unknownValue")}
-                    </p>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      {consent.revokedAt ? t("revokedBadge") : t("signedBadge")}
-                    </p>
-                  </div>
-                  <p className="text-xs text-zinc-500">{consent.id}</p>
-                </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <DetailField label={t("signedAtLabel")} value={formatDateTime(consent.signedAt, locale)} />
-                  <DetailField
-                    label={t("revokedAtLabel")}
-                    value={consent.revokedAt ? formatDateTime(consent.revokedAt, locale) : t("notRevoked")}
-                  />
-                  <DetailField label={t("emailLabel")} value={consent.emailSnapshot} />
-                  <DetailField
-                    label={t("receiptSentAtLabel")}
-                    value={consent.receiptEmailSentAt ? formatDateTime(consent.receiptEmailSentAt, locale) : t("notSent")}
-                  />
-                </div>
-                <div className="mt-4">
-                  <StructuredSummaryFields summary={consent.structuredSummary} />
                 </div>
               </div>
             ))}
@@ -1530,12 +1457,7 @@ export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
                           </div>
                         </td>
                         <td className="border-b border-zinc-100 px-4 py-4">
-                          <div className="space-y-1">
-                            <MatchingReadinessBadge state={profile.matchingReadiness.state} />
-                            <p className="text-xs text-zinc-600">
-                              {t(`matching.description.${profile.matchingReadiness.state}`)}
-                            </p>
-                          </div>
+                          <MatchingReadinessBadge state={profile.matchingReadiness.state} />
                         </td>
                         <td className="border-b border-zinc-100 px-4 py-4">
                           <ProfileStatusBadge archived={profile.status === "archived"} />
@@ -1611,16 +1533,6 @@ export function ProfilesShellView({ data, router }: ProfilesShellViewProps) {
               )}
             </tbody>
           </table>
-        </div>
-      </section>
-
-      <section className="content-card rounded-xl p-5">
-        <h2 className="text-lg font-semibold text-zinc-900">{t("deferred.title")}</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">{t("deferred.body")}</p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <DisabledButton>{t("actions.requestExtraConsent")}</DisabledButton>
-          <DisabledButton>{t("actions.importProfiles")}</DisabledButton>
-          <DisabledButton>{t("actions.syncDirectory")}</DisabledButton>
         </div>
       </section>
     </div>

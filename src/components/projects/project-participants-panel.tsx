@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 
+import { PreviewableImage } from "@/components/projects/previewable-image";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 import { formatDateTime } from "@/lib/i18n/format";
@@ -24,6 +25,13 @@ type ProjectParticipantsPanelProps = {
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
   defaultTemplateWarning?: string | null;
+  profileHeadshotUrls?: Record<
+    string,
+    {
+      thumbnailUrl: string | null;
+      previewUrl: string | null;
+    }
+  >;
 };
 
 type ProjectParticipantsPanelViewProps = ProjectParticipantsPanelProps & {
@@ -66,25 +74,6 @@ function ConsentStateBadge({
         : state === "revoked"
           ? "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700"
           : "inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700";
-
-  return <span className={className}>{t(state)}</span>;
-}
-
-function MatchSourceReadinessBadge({
-  state,
-}: {
-  state: ProjectParticipantsPanelData["knownProfiles"][number]["matchingReadiness"]["state"];
-}) {
-  const t = useTranslations("projects.participants.matchSourceState");
-
-  const className =
-    state === "ready"
-      ? "inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
-      : state === "materializing" || state === "needs_face_selection"
-        ? "inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"
-        : state === "blocked_no_opt_in" || state === "missing_headshot"
-          ? "inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700"
-          : "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700";
 
   return <span className={className}>{t(state)}</span>;
 }
@@ -381,6 +370,7 @@ export function ProjectParticipantsPanelView({
   templates,
   defaultTemplateId,
   defaultTemplateWarning,
+  profileHeadshotUrls,
   router,
 }: ProjectParticipantsPanelViewProps) {
   const locale = useLocale();
@@ -388,10 +378,7 @@ export function ProjectParticipantsPanelView({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-base font-semibold text-zinc-900">{t("knownProfilesTitle")}</h3>
-        <p className="mt-1 text-sm text-zinc-600">{t("knownProfilesSubtitle")}</p>
-      </div>
+      <h3 className="text-base font-semibold text-zinc-900">{t("knownProfilesTitle")}</h3>
 
       {defaultTemplateWarning ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -409,96 +396,87 @@ export function ProjectParticipantsPanelView({
         <p className="text-sm text-zinc-600">{t("knownProfilesEmpty")}</p>
       ) : (
         <ul className="space-y-3">
-          {data.knownProfiles.map((participant) => (
-            <li key={participant.participantId} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="space-y-2">
-                    <div>
-                      <p className="font-medium text-zinc-900">{participant.profile.fullName}</p>
-                      <p className="text-sm text-zinc-700">{participant.profile.email}</p>
+          {data.knownProfiles.map((participant) => {
+            const profileHeadshot = profileHeadshotUrls?.[participant.profile.id] ?? null;
+
+            return (
+              <li key={participant.participantId} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-2">
+                      <div>
+                        <p className="font-medium text-zinc-900">{participant.profile.fullName}</p>
+                        <p className="text-sm text-zinc-700">{participant.profile.email}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <ConsentStateBadge state={participant.projectConsent.state} />
+                        {participant.profile.status === "archived" ? (
+                          <span className="inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
+                            {t("archivedProfile")}
+                          </span>
+                        ) : null}
+                        {participant.profile.profileType ? (
+                          <span className="inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
+                            {participant.profile.profileType.label}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="text-sm text-zinc-700">
+                        {renderProjectConsentActivity(participant, locale, t)}
+                      </p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <ConsentStateBadge state={participant.projectConsent.state} />
-                      <span className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
-                        <span>{t("baselineLabel")}</span>
-                        <ConsentStateBadge state={participant.baselineConsentState} tone="secondary" />
-                      </span>
-                      <span className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
-                        <span>{t("matchSourceLabel")}</span>
-                        <MatchSourceReadinessBadge state={participant.matchingReadiness.state} />
-                      </span>
-                      {participant.profile.status === "archived" ? (
-                        <span className="inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
-                          {t("archivedProfile")}
-                        </span>
-                      ) : null}
-                      {participant.profile.profileType ? (
-                        <span className="inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
-                          {participant.profile.profileType.label}
-                        </span>
-                      ) : null}
-                    </div>
+                    {profileHeadshot?.thumbnailUrl ? (
+                      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100">
+                        <PreviewableImage
+                          src={profileHeadshot.thumbnailUrl}
+                          previewSrc={profileHeadshot.previewUrl}
+                          alt={t("profileHeadshotAlt", {
+                            fullName: participant.profile.fullName,
+                          })}
+                          className="h-full w-full"
+                          imageClassName="h-full w-full object-cover"
+                          lightboxChrome="floating"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {participant.projectConsent.pendingRequest?.template ? (
                     <p className="text-sm text-zinc-700">
-                      {renderProjectConsentActivity(participant, locale, t)}
+                      {t("templateLine", {
+                        name: participant.projectConsent.pendingRequest.template.name,
+                        version: participant.projectConsent.pendingRequest.template.version,
+                      })}
                     </p>
-                  </div>
+                  ) : null}
+                  {!participant.projectConsent.pendingRequest && participant.projectConsent.activeConsent?.template ? (
+                    <p className="text-sm text-zinc-700">
+                      {t("templateLine", {
+                        name: participant.projectConsent.activeConsent.template.name,
+                        version: participant.projectConsent.activeConsent.template.version,
+                      })}
+                    </p>
+                  ) : null}
+                  {!participant.projectConsent.pendingRequest && !participant.projectConsent.activeConsent && participant.projectConsent.latestRevokedConsent?.template ? (
+                    <p className="text-sm text-zinc-700">
+                      {t("templateLine", {
+                        name: participant.projectConsent.latestRevokedConsent.template.name,
+                        version: participant.projectConsent.latestRevokedConsent.template.version,
+                      })}
+                    </p>
+                  ) : null}
 
-                  <div className="grid gap-3 text-sm text-zinc-700 sm:grid-cols-2 lg:min-w-[18rem]">
-                    <div className="rounded-lg bg-zinc-50 p-3">
-                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{t("participantAddedLabel")}</p>
-                      <p className="mt-1">{formatDateTime(participant.createdAt, locale)}</p>
-                    </div>
-                    <div className="rounded-lg bg-zinc-50 p-3">
-                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{t("latestProjectStatusLabel")}</p>
-                      <p className="mt-1">{participant.projectConsent.state === "missing" ? t("noRequestYet") : renderProjectConsentActivity(participant, locale, t)}</p>
-                    </div>
-                  </div>
+                  <ProjectProfileParticipantActions
+                    projectId={projectId}
+                    participant={participant}
+                    templates={templates}
+                    defaultTemplateId={defaultTemplateId}
+                    router={router}
+                  />
                 </div>
-
-                <p className="text-sm text-zinc-700">
-                  {t(`matchSourceDescription.${participant.matchingReadiness.state}`)}
-                </p>
-
-                {participant.projectConsent.pendingRequest?.template ? (
-                  <p className="text-sm text-zinc-700">
-                    {t("templateLine", {
-                      name: participant.projectConsent.pendingRequest.template.name,
-                      version: participant.projectConsent.pendingRequest.template.version,
-                    })}
-                  </p>
-                ) : null}
-                {!participant.projectConsent.pendingRequest && participant.projectConsent.activeConsent?.template ? (
-                  <p className="text-sm text-zinc-700">
-                    {t("templateLine", {
-                      name: participant.projectConsent.activeConsent.template.name,
-                      version: participant.projectConsent.activeConsent.template.version,
-                    })}
-                  </p>
-                ) : null}
-                {!participant.projectConsent.pendingRequest && !participant.projectConsent.activeConsent && participant.projectConsent.latestRevokedConsent?.template ? (
-                  <p className="text-sm text-zinc-700">
-                    {t("templateLine", {
-                      name: participant.projectConsent.latestRevokedConsent.template.name,
-                      version: participant.projectConsent.latestRevokedConsent.template.version,
-                    })}
-                  </p>
-                ) : null}
-
-                {participant.profile.status === "archived" ? (
-                  <p className="text-sm text-zinc-600">{t("archivedProfileHelper")}</p>
-                ) : null}
-
-                <ProjectProfileParticipantActions
-                  projectId={projectId}
-                  participant={participant}
-                  templates={templates}
-                  defaultTemplateId={defaultTemplateId}
-                  router={router}
-                />
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

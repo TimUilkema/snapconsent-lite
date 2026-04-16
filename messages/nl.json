@@ -19,7 +19,7 @@
     "ariaPrimary": "Primaire navigatie",
     "dashboard": "Dashboard",
     "projects": "Projecten",
-    "profiles": "Profielen",
+    "profiles": "Personen",
     "templates": "Verklaringen"
   },
   "home": {
@@ -266,8 +266,8 @@
       "statsInvites": "Uitnodigingen",
       "statsSignedConsents": "Ondertekende toestemmingen",
       "participantsTitle": "Deelnemers",
-      "participantsSubtitle": "Bekende terugkerende profielen en eenmalige projectondertekenaars staan hier samen zonder de bestaande uitnodigingsflow te wijzigen.",
-      "oneOffParticipantsTitle": "Eenmalige ondertekenaars en uitnodigingslinks",
+      "participantsSubtitle": "",
+      "oneOffParticipantsTitle": "Eenmalige ondertekenaars",
       "oneOffParticipantsSubtitle": "Bestaande QR- en publieke uitnodigingslinks blijven project-lokaal en ongewijzigd in deze sectie.",
       "unknownSubject": "Onbekende persoon",
       "unknownEmail": "Onbekende e-mail",
@@ -300,9 +300,10 @@
       "assetsSubtitle": "Upload projectfoto's, filter grote verzamelingen en bekijk gekoppelde personen."
     },
     "participants": {
-      "knownProfilesTitle": "Bekende profielen",
-      "knownProfilesSubtitle": "Voeg bestaande terugkerende profielen toe aan dit project en volg projectspecifieke toestemming los van baseline-toestemming.",
+      "knownProfilesTitle": "Profielen",
+      "knownProfilesSubtitle": "",
       "knownProfilesEmpty": "Er zijn nog geen terugkerende profielen aan dit project toegevoegd.",
+      "profileHeadshotAlt": "Headshot van {fullName}",
       "baselineLabel": "Baseline",
       "matchSourceLabel": "Matchbron",
       "archivedProfile": "Gearchiveerd profiel",
@@ -310,7 +311,7 @@
       "participantAddedLabel": "Toegevoegd aan project",
       "latestProjectStatusLabel": "Projecttoestemmingsstatus",
       "noRequestYet": "Nog geen projectverzoek",
-      "templateLine": "Sjabloon: {name} {version}",
+      "templateLine": "{name} {version}",
       "missing": "Nog geen projecttoestemmingsverzoek.",
       "pendingUntil": "In afwachting tot {date}",
       "signedAt": "Ondertekend {date}",
@@ -501,10 +502,10 @@
     },
     "list": {
       "title": "Verklaringen",
-      "subtitle": "Maak, publiceer en beheer de toestemmingsverklaringen die in je projecten worden gebruikt.",
+      "subtitle": "",
       "orgTemplatesTitle": "Organisatieverklaringen",
       "orgTemplatesSubtitle": "Concepten, gepubliceerde versies en archiefgeschiedenis voor deze werkruimte.",
-      "orgTemplatesEmpty": "Nog geen organisatiesverklaringen.",
+      "orgTemplatesEmpty": "Nog geen organisatieverklaringen.",
       "updatedOn": "Bijgewerkt {date}",
       "appTemplatesTitle": "Standaard app-verklaringen",
       "appTemplatesSubtitle": "Centraal beheerde verklaringen die direct in je projecten gebruikt kunnen worden.",
@@ -523,8 +524,8 @@
     },
     "detail": {
       "breadcrumbTemplates": "Verklaringen",
-      "scopeApp": "Standaard app-Verklaring",
-      "scopeOrganization": "Organisatiesverklaringen",
+      "scopeApp": "Standaard app-verklaring",
+      "scopeOrganization": "Organisatieverklaring",
       "categoryLabel": "Categorie",
       "uncategorized": "Zonder categorie",
       "updatedLabel": "Bijgewerkt",
@@ -544,7 +545,7 @@
       "createVersion": "Nieuwe versie maken",
       "structuredFieldsTitle": "Gestructureerde toestemmingsvelden",
       "structuredFieldsSubtitle": "",
-      "structuredFieldsLegacy": "Deze sjabloonversie gebruikt nog het legacy toestemmingsformulier en heeft geen definitie voor gestructureerde velden.",
+      "structuredFieldsLegacy": "Deze versie gebruikt nog het oude toestemmingsformulier en heeft geen definitie voor gestructureerde velden.",
       "builtInFieldsTitle": "Ingebouwde velden",
       "scopeFieldTitle": "Doeleinde",
       "scopeFieldDescription": "",
@@ -606,11 +607,11 @@
     }
   },
   "profiles": {
-    "title": "Profielen",
-    "subtitle": "Beheer herbruikbare terugkerende persoonsrecords in de werkruimtedirectory. Deze module is de basis voor latere basis-toestemming en opvolgverzoeken.",
-    "boundaryNote": "Project- en eventuitnodigingen voor toestemming blijven onder Projecten. Profielen is bedoeld voor terugkerende personen op werkruimteniveau.",
+    "title": "Personen",
+    "subtitle": "Beheer herbruikbare terugkerende personen in de werkruimtedirectory.",
+    "boundaryNote": "Project- en eventtoestemming blijft onder Projecten. Personen is bedoeld voor terugkerende mensen op werkruimteniveau.",
     "header": {
-      "manageHint": "Maak hier profielen aan en beheer profieltypes.",
+      "manageHint": "Voeg hier personen toe en beheer profieltypes.",
       "readOnlyHint": "Je kunt de directory met terugkerende profielen hier bekijken, maar alleen eigenaren en admins van de werkruimte kunnen deze wijzigen."
     },
     "create": {
@@ -630,10 +631,10 @@
       "empty": "Er zijn nog geen actieve profieltypes."
     },
     "summary": {
-      "activeProfiles": "Actieve profielen",
-      "archivedProfiles": "Gearchiveerde profielen",
+      "activeProfiles": "Actieve personen",
+      "archivedProfiles": "Gearchiveerde personen",
       "profileTypes": "Profieltypes",
-      "activeWithoutType": "Actieve profielen zonder type"
+      "activeWithoutType": "Actieve personen zonder type"
     },
     "filters": {
       "searchLabel": "Zoeken",
@@ -648,7 +649,7 @@
       "columnName": "Naam",
       "columnType": "Type",
       "columnEmail": "E-mail",
-      "columnBaselineConsent": "Basis-toestemming",
+      "columnBaselineConsent": "Standaardverklaring",
       "columnMatching": "Matching",
       "columnStatus": "Status",
       "columnUpdated": "Bijgewerkt",
@@ -658,11 +659,11 @@
       "archivedTypeBadge": "Type gearchiveerd"
     },
     "empty": {
-      "title": "Nog geen terugkerende profielen",
+      "title": "Nog geen personen",
       "body": "Terugkerende profielen staan hier als herbruikbare persoonsrecords voor doorlopende relaties met je organisatie.",
       "boundary": "Eenmalige project- of eventuitnodigingen voor toestemming blijven ongewijzigd en worden nog steeds beheerd onder Projecten.",
       "readOnlyHint": "Deze werkruimte is voor jouw rol alleen-lezen.",
-      "filteredTitle": "Geen profielen gevonden voor deze filters",
+      "filteredTitle": "Geen personen gevonden voor deze filters",
       "filteredBody": "Probeer een andere zoekterm, verwijder het typefilter of toon ook gearchiveerde profielen."
     },
     "deferred": {
@@ -673,18 +674,18 @@
       "viewDetails": "Details bekijken",
       "hideDetails": "Details verbergen",
       "loading": "Profieldetails laden...",
-      "currentTitle": "Huidige baseline",
+      "currentTitle": "Huidige standaardverklaring",
       "pendingTitle": "Huidige openstaande aanvraag",
-      "activeConsentTitle": "Actieve baseline-toestemming",
-      "latestRevokedTitle": "Laatst ingetrokken baseline-toestemming",
+      "activeConsentTitle": "Actieve standaardverklaring",
+      "latestRevokedTitle": "Laatst ingetrokken standaardverklaring",
       "actionsTitle": "Huidige acties",
-      "requestHint": "Stuur een nieuw baseline-verzoek voor dit profiel. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
-      "revokedHint": "Deze baseline-toestemming is ingetrokken. Stuur een nieuw verzoek om opnieuw te vragen. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
-      "noHistory": "Nog geen baseline-aanvraag of ondertekende baseline-toestemming.",
+      "requestHint": "Stuur een nieuw verzoek voor de standaardverklaring van deze persoon. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
+      "revokedHint": "Deze standaardverklaring is ingetrokken. Stuur een nieuw verzoek om opnieuw te vragen. Placeholder-delivery wordt geregistreerd, maar er wordt nog geen e-mail verstuurd.",
+      "noHistory": "Nog geen verzoek of ondertekende standaardverklaring.",
       "requestHistoryTitle": "Aanvraaggeschiedenis",
-      "consentHistoryTitle": "Baseline-toestemmingsgeschiedenis",
-      "requestHistoryEmpty": "Nog geen baseline-aanvragen.",
-      "consentHistoryEmpty": "Nog geen ondertekende baseline-toestemmingsgeschiedenis.",
+      "consentHistoryTitle": "Geschiedenis standaardverklaringen",
+      "requestHistoryEmpty": "Nog geen verzoeken voor de standaardverklaring.",
+      "consentHistoryEmpty": "Nog geen ondertekende standaardverklaringen.",
       "nameLabel": "Naam",
       "emailLabel": "E-mail",
       "typeLabel": "Type",
@@ -704,8 +705,8 @@
       "notRevoked": "Niet ingetrokken",
       "signedBadge": "Ondertekend",
       "revokedBadge": "Ingetrokken",
-      "readOnly": "Je kunt dit profiel bekijken, maar alleen workspace-eigenaren en admins kunnen baseline-toestemming beheren.",
-      "archivedReadOnly": "Gearchiveerde profielen blijven hier zichtbaar, maar baseline-acties zijn uitgeschakeld.",
+      "readOnly": "Je kunt deze persoon bekijken, maar alleen workspace-eigenaren en admins kunnen de standaardverklaring beheren.",
+      "archivedReadOnly": "Gearchiveerde personen blijven hier zichtbaar, maar acties voor de standaardverklaring zijn uitgeschakeld.",
       "requestHistory": {
         "status": {
           "pending": "Openstaand",
@@ -724,7 +725,7 @@
         "revoked": "Ingetrokken"
       },
       "activity": {
-        "missing": "Nog geen basis-toestemmingsverzoek.",
+        "missing": "Nog geen verzoek voor de standaardverklaring.",
         "unknown": "Laatste activiteit niet beschikbaar.",
         "pendingUntil": "In afwachting tot {date}",
         "signedAt": "Ondertekend {date}",
@@ -737,22 +738,22 @@
         "templateLabel": "Gepubliceerde verklaring",
         "scopeStandard": "Standaard",
         "scopeOrganization": "Organisatie",
-        "submit": "Basisverzoek maken",
-        "submitting": "Basisverzoek maken...",
-        "emptyTemplates": "Er zijn geen gepubliceerde toestemmingsverklaringen beschikbaar voor basisverzoeken."
+        "submit": "Verzoek standaardverklaring maken",
+        "submitting": "Verzoek standaardverklaring maken...",
+        "emptyTemplates": "Er zijn geen gepubliceerde toestemmingsverklaringen beschikbaar voor verzoeken voor de standaardverklaring."
       },
       "pending": {
         "emailLabel": "Verzoek-e-mail",
         "expiresLabel": "Verloopt",
-        "linkLabel": "Link basis-toestemming",
+        "linkLabel": "Link standaardverklaring",
         "copy": "Link kopiëren",
         "open": "Link openen",
         "cancel": "Verzoek annuleren",
         "cancelling": "Annuleren...",
         "replace": "Verzoek vervangen",
         "replacing": "Vervangen...",
-        "copied": "Basislink gekopieerd.",
-        "copyError": "De basislink kon niet worden gekopieerd."
+        "copied": "Link naar de standaardverklaring gekopieerd.",
+        "copyError": "De link naar de standaardverklaring kon niet worden gekopieerd."
       },
       "followUp": {
         "sendReminder": "Herinnering sturen",
@@ -790,7 +791,7 @@
         "ready": "Gereed"
       },
       "description": {
-        "blocked_no_opt_in": "Een actieve baseline-toestemming met matching-opt-in is vereist.",
+        "blocked_no_opt_in": "Een actieve standaardverklaring met matching-opt-in is vereist.",
         "missing_headshot": "Upload een headshot voor dit terugkerende profiel om een toekomstige matchbron te maken.",
         "materializing": "De huidige headshot van het terugkerende profiel wordt nog geanalyseerd.",
         "no_face_detected": "Er is geen gezicht gedetecteerd in de huidige headshot van het terugkerende profiel.",
@@ -804,7 +805,7 @@
       "upload": "Headshot uploaden",
       "replace": "Headshot vervangen",
       "uploading": "Headshot uploaden...",
-      "authorizationRequired": "Schakel matching in op de actieve baseline-toestemming voordat je een headshot voor een terugkerend profiel uploadt of vervangt.",
+        "authorizationRequired": "Schakel matching in op de actieve standaardverklaring voordat je een headshot voor een terugkerend profiel uploadt of vervangt.",
       "previewAlt": "Voorvertoning van headshot van terugkerend profiel",
       "previewHelp": "Alle gedetecteerde gezichten worden opgeslagen voor controle. Alleen het geselecteerde gezicht wordt de toekomstige matchbron.",
       "selection": {

@@ -19,7 +19,7 @@
     "ariaPrimary": "Primary navigation",
     "dashboard": "Dashboard",
     "projects": "Projects",
-    "profiles": "Profiles",
+    "profiles": "People",
     "templates": "Templates"
   },
   "home": {
@@ -266,8 +266,8 @@
       "statsInvites": "Invites",
       "statsSignedConsents": "Signed consents",
       "participantsTitle": "Participants",
-      "participantsSubtitle": "Known recurring profiles and one-off project signers live together here without changing the one-off invite flow.",
-      "oneOffParticipantsTitle": "One-off signers and invite links",
+      "participantsSubtitle": "",
+      "oneOffParticipantsTitle": "One-off signers",
       "oneOffParticipantsSubtitle": "Existing QR and public invite links stay project-local and unchanged in this section.",
       "unknownSubject": "Unknown subject",
       "unknownEmail": "Unknown email",
@@ -300,9 +300,10 @@
       "assetsSubtitle": "Upload project photos, filter large collections, and inspect linked subjects."
     },
     "participants": {
-      "knownProfilesTitle": "Known profiles",
-      "knownProfilesSubtitle": "Add existing recurring profiles to this project and track project-specific consent separately from baseline consent.",
+      "knownProfilesTitle": "Profiles",
+      "knownProfilesSubtitle": "",
       "knownProfilesEmpty": "No recurring profiles have been added to this project yet.",
+      "profileHeadshotAlt": "Headshot of {fullName}",
       "baselineLabel": "Baseline",
       "matchSourceLabel": "Match source",
       "archivedProfile": "Archived profile",
@@ -310,7 +311,7 @@
       "participantAddedLabel": "Added to project",
       "latestProjectStatusLabel": "Project consent status",
       "noRequestYet": "No project request yet",
-      "templateLine": "Template: {name} {version}",
+      "templateLine": "{name} {version}",
       "missing": "No project consent request yet.",
       "pendingUntil": "Pending until {date}",
       "signedAt": "Signed {date}",
@@ -501,7 +502,7 @@
     },
     "list": {
       "title": "Templates",
-      "subtitle": "Create, publish, and maintain the consent templates used in your projects.",
+      "subtitle": "",
       "orgTemplatesTitle": "Organization templates",
       "orgTemplatesSubtitle": "Drafts, published versions, and archived history for this workspace.",
       "orgTemplatesEmpty": "No organization templates yet.",
@@ -606,11 +607,11 @@
     }
   },
   "profiles": {
-    "title": "Profiles",
-    "subtitle": "Manage reusable recurring people records for your workspace directory. This module is the foundation for future baseline consent and follow-up flows.",
-    "boundaryNote": "Project and event invite consent stays under Projects. Profiles is reserved for recurring people managed at the workspace level.",
+    "title": "People",
+    "subtitle": "Manage reusable recurring people records for your workspace directory.",
+    "boundaryNote": "Project and event invite consent stays under Projects. People is reserved for recurring people managed at the workspace level.",
     "header": {
-      "manageHint": "Create profiles and manage profile types here.",
+      "manageHint": "Add people and manage profile types here.",
       "readOnlyHint": "You can view the recurring profile directory here, but only workspace owners and admins can change it."
     },
     "create": {
@@ -630,10 +631,10 @@
       "empty": "No active profile types yet."
     },
     "summary": {
-      "activeProfiles": "Active profiles",
-      "archivedProfiles": "Archived profiles",
+      "activeProfiles": "Active people",
+      "archivedProfiles": "Archived people",
       "profileTypes": "Profile types",
-      "activeWithoutType": "Active profiles without type"
+      "activeWithoutType": "Active people without type"
     },
     "filters": {
       "searchLabel": "Search",
@@ -648,7 +649,7 @@
         "columnName": "Name",
         "columnType": "Type",
         "columnEmail": "Email",
-        "columnBaselineConsent": "Baseline consent",
+        "columnBaselineConsent": "Standard declaration",
         "columnMatching": "Matching",
         "columnStatus": "Status",
         "columnUpdated": "Updated",
@@ -658,11 +659,11 @@
       "archivedTypeBadge": "Type archived"
     },
     "empty": {
-      "title": "No recurring profiles yet",
+      "title": "No people yet",
       "body": "Recurring profiles live here as reusable people records for ongoing relationships with your organization.",
       "boundary": "One-off project or event invite consent is unchanged and still managed under Projects.",
       "readOnlyHint": "This workspace is read-only for your role.",
-      "filteredTitle": "No profiles match these filters",
+      "filteredTitle": "No people match these filters",
       "filteredBody": "Try a different search, remove the type filter, or include archived profiles."
     },
     "deferred": {
@@ -673,18 +674,18 @@
       "viewDetails": "View details",
       "hideDetails": "Hide details",
       "loading": "Loading profile details...",
-      "currentTitle": "Current baseline",
+      "currentTitle": "Current standard declaration",
       "pendingTitle": "Current pending request",
-      "activeConsentTitle": "Active baseline consent",
-      "latestRevokedTitle": "Latest revoked baseline consent",
+      "activeConsentTitle": "Active standard declaration",
+      "latestRevokedTitle": "Latest revoked standard declaration",
       "actionsTitle": "Current actions",
-      "requestHint": "Send a new baseline request for this profile. Placeholder delivery will be recorded, but no email will be sent yet.",
-      "revokedHint": "This baseline consent was revoked. Send a new request to ask again. Placeholder delivery will be recorded, but no email will be sent yet.",
-      "noHistory": "No baseline request or signed baseline consent yet.",
+      "requestHint": "Send a new standard declaration request for this person. Placeholder delivery will be recorded, but no email will be sent yet.",
+      "revokedHint": "This standard declaration was revoked. Send a new request to ask again. Placeholder delivery will be recorded, but no email will be sent yet.",
+      "noHistory": "No standard declaration request or signed standard declaration yet.",
       "requestHistoryTitle": "Request history",
-      "consentHistoryTitle": "Baseline consent history",
-      "requestHistoryEmpty": "No baseline requests yet.",
-      "consentHistoryEmpty": "No signed baseline consent history yet.",
+      "consentHistoryTitle": "Standard declaration history",
+      "requestHistoryEmpty": "No standard declaration requests yet.",
+      "consentHistoryEmpty": "No signed standard declaration history yet.",
       "nameLabel": "Name",
       "emailLabel": "Email",
       "typeLabel": "Type",
@@ -704,8 +705,8 @@
       "notRevoked": "Not revoked",
       "signedBadge": "Signed",
       "revokedBadge": "Revoked",
-      "readOnly": "You can inspect this profile, but only workspace owners and admins can manage baseline consent.",
-      "archivedReadOnly": "Archived profiles remain visible here, but baseline actions are disabled.",
+      "readOnly": "You can inspect this person, but only workspace owners and admins can manage the standard declaration.",
+      "archivedReadOnly": "Archived people remain visible here, but standard declaration actions are disabled.",
       "requestHistory": {
         "status": {
           "pending": "Pending",
@@ -724,7 +725,7 @@
         "revoked": "Revoked"
       },
       "activity": {
-        "missing": "No baseline consent request yet.",
+        "missing": "No standard declaration request yet.",
         "unknown": "Latest activity unavailable.",
         "pendingUntil": "Pending until {date}",
         "signedAt": "Signed {date}",
@@ -737,22 +738,22 @@
         "templateLabel": "Published template",
         "scopeStandard": "Standard",
         "scopeOrganization": "Organization",
-        "submit": "Create baseline request",
-        "submitting": "Creating baseline request...",
-        "emptyTemplates": "No published consent templates are available for baseline requests."
+        "submit": "Create standard declaration request",
+        "submitting": "Creating standard declaration request...",
+        "emptyTemplates": "No published consent templates are available for standard declaration requests."
       },
       "pending": {
         "emailLabel": "Request email",
         "expiresLabel": "Expires",
-        "linkLabel": "Baseline consent link",
+        "linkLabel": "Standard declaration link",
         "copy": "Copy link",
         "open": "Open link",
         "cancel": "Cancel request",
         "cancelling": "Cancelling...",
         "replace": "Replace request",
         "replacing": "Replacing...",
-        "copied": "Baseline link copied.",
-        "copyError": "Unable to copy the baseline link."
+        "copied": "Standard declaration link copied.",
+        "copyError": "Unable to copy the standard declaration link."
       },
       "followUp": {
         "sendReminder": "Send reminder",
@@ -804,7 +805,7 @@
         "upload": "Upload headshot",
         "replace": "Replace headshot",
         "uploading": "Uploading headshot...",
-        "authorizationRequired": "Enable matching in the active baseline consent before uploading or replacing a recurring profile headshot.",
+        "authorizationRequired": "Enable matching in the active standard declaration before uploading or replacing a recurring profile headshot.",
         "previewAlt": "Recurring profile headshot preview",
         "previewHelp": "All detected faces are stored for review. Only one selected face becomes the future matching source.",
         "selection": {

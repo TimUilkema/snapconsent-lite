@@ -10,6 +10,8 @@ import {
   archiveTenantTemplate,
   createTenantTemplate,
   createTenantTemplateVersion,
+  getVisiblePublishedTemplateById,
+  listVisibleTemplatesForTenant,
   publishTenantTemplate,
   setProjectDefaultTemplate,
   updateDraftTemplate,
@@ -348,4 +350,70 @@ test("signed consents keep the published template snapshot after newer versions 
     consentRow.consent_text,
     "Feature 039 snapshot body version one with enough content to pass validation.",
   );
+});
+
+test("published template visibility is limited to tenant-owned templates", async () => {
+  const context = await createTenantContext(adminClient);
+
+  const created = await createTenantTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    idempotencyKey: `feature039-visible-${randomUUID()}`,
+    name: "Tenant Visible Template",
+    description: "Tenant visible template",
+    body: "Feature 039 visible template body with enough content to satisfy validation.",
+  });
+
+  await updateDraftTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: created.payload.template.id,
+    name: "Tenant Visible Template",
+    description: "Tenant visible template",
+    body: "Feature 039 visible template body with enough content to satisfy validation.",
+    structuredFieldsDefinition: withScopeOption(),
+  });
+
+  const publishedTenantTemplate = await publishTenantTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: created.payload.template.id,
+  });
+
+  const { data: appTemplate, error: appTemplateError } = await adminClient
+    .from("consent_templates")
+    .insert({
+      tenant_id: null,
+      template_key: `feature039-app-template-${randomUUID()}`,
+      name: "App Default Template",
+      description: "App-owned template for visibility coverage.",
+      version: "v1",
+      version_number: 1,
+      status: "published",
+      body: "Feature 039 app default template body with enough content to satisfy validation.",
+      created_by: context.ownerUserId,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(appTemplateError, "insert app visibility template");
+
+  const visibleTemplates = await listVisibleTemplatesForTenant(context.ownerClient, context.tenantId);
+  assert.deepEqual(visibleTemplates.map((template) => template.id), [publishedTenantTemplate.id]);
+
+  const visibleTenantTemplate = await getVisiblePublishedTemplateById(
+    context.ownerClient,
+    context.tenantId,
+    publishedTenantTemplate.id,
+  );
+  assert.equal(visibleTenantTemplate?.id, publishedTenantTemplate.id);
+
+  const visibleAppTemplate = await getVisiblePublishedTemplateById(
+    context.ownerClient,
+    context.tenantId,
+    appTemplate.id,
+  );
+  assert.equal(visibleAppTemplate, null);
 });

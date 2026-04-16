@@ -94,13 +94,7 @@ export default async function DashboardPage() {
               <dt className="text-zinc-500">{t("emailLabel")}</dt>
               <dd className="mt-1 font-medium text-zinc-900">{user?.email ?? t("unknownValue")}</dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-white p-3">
-              <dt className="text-zinc-500">{t("userIdLabel")}</dt>
-              <dd className="mt-1 break-all font-medium text-zinc-900">{user?.id ?? t("unknownValue")}</dd>
-            </div>
           </dl>
-
-          <p className="mt-4 text-sm text-zinc-600">{t("accountFooter")}</p>
         </aside>
       </div>
     </div>

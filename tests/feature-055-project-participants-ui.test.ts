@@ -122,6 +122,7 @@ test("project participants panel renders known profiles, baseline context, and p
   const { ProjectParticipantsPanelView } = await import(
     "../src/components/projects/project-participants-panel"
   );
+  const data = buildParticipantsData();
 
   const markup = renderToStaticMarkup(
     createElement(
@@ -129,7 +130,7 @@ test("project participants panel renders known profiles, baseline context, and p
       { locale: "en", messages: enMessages },
       createElement(ProjectParticipantsPanelView, {
         projectId: randomUUID(),
-        data: buildParticipantsData(),
+        data,
         templates: [
           {
             id: randomUUID(),
@@ -140,19 +141,28 @@ test("project participants panel renders known profiles, baseline context, and p
         ],
         defaultTemplateId: randomUUID(),
         defaultTemplateWarning: null,
+        profileHeadshotUrls: {
+          [data.knownProfiles[0]!.profile.id]: {
+            thumbnailUrl: "https://example.com/headshot-thumb.jpg",
+            previewUrl: "https://example.com/headshot-preview.jpg",
+          },
+        },
         router: { refresh() {} },
       }),
     ),
   );
 
-  assert.match(markup, /Known profiles/);
+  assert.match(markup, /Profiles/);
   assert.match(markup, /Add existing profile/);
-  assert.match(markup, /Baseline/);
-  assert.match(markup, /Match source/);
   assert.match(markup, /Copy link/);
   assert.match(markup, /Open link/);
   assert.match(markup, /Archived profile/);
   assert.match(markup, /Project Consent v2/);
+  assert.match(markup, /Headshot of Jordan Miles/);
+  assert.doesNotMatch(markup, /Match source/);
+  assert.doesNotMatch(markup, /Added to project/);
+  assert.doesNotMatch(markup, /Project consent status/);
+  assert.doesNotMatch(markup, /This participant has a ready recurring profile match source\./);
 });
 
 test("project participants panel renders request creation controls when project consent is missing", async () => {

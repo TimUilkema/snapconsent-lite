@@ -68,6 +68,26 @@ function buildDetailData(overrides: DetailOverrides): RecurringProfileDetailData
       availableBaselineFollowUpAction: "reminder",
       ...overrides.actions,
     },
+    headshotMatching: {
+      currentHeadshot: null,
+      currentMaterialization: null,
+      candidateFaces: [],
+      readiness: {
+        state: "missing_headshot",
+        authorized: true,
+        currentHeadshotId: null,
+        selectionFaceId: null,
+        selectionStatus: null,
+        materializationStatus: null,
+      },
+      previewUrl: null,
+      actions: {
+        canManage: true,
+        canUpload: true,
+        canReplace: false,
+        canSelectFace: false,
+      },
+    },
   };
 
   return base;

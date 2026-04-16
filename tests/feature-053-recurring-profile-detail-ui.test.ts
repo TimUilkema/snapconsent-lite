@@ -279,15 +279,15 @@ test("expanded profile detail panel renders current summary, pending actions, an
     ),
   );
 
-  assert.match(markup, /Current baseline/);
+  assert.match(markup, /Current standard declaration/);
   assert.match(markup, /Matching headshot/);
   assert.match(markup, /Current pending request/);
   assert.match(markup, /Request history/);
-  assert.match(markup, /Baseline consent history/);
   assert.match(markup, /Latest follow-up/);
   assert.match(markup, /Send reminder/);
   assert.match(markup, /Cancel request/);
   assert.match(markup, /Replace request/);
-  assert.match(markup, /Photos/);
-  assert.match(markup, /1 year/);
+  assert.doesNotMatch(markup, /Baseline consent history/);
+  assert.doesNotMatch(markup, /Latest follow-up recorded in placeholder mode/);
+  assert.doesNotMatch(markup, /Receipt sent/);
 });

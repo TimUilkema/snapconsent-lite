@@ -161,19 +161,19 @@ test("profiles directory shell renders manage and read-only states with translat
   );
 
   assert.match(manageMarkup, /Create profile/);
+  assert.match(manageMarkup, /People/);
   assert.match(manageMarkup, /Profile types/);
-  assert.match(manageMarkup, /Active profiles/);
+  assert.match(manageMarkup, /Active people/);
   assert.match(manageMarkup, /No type/);
   assert.match(manageMarkup, /Type archived/);
-  assert.match(manageMarkup, /Baseline consent/);
+  assert.match(manageMarkup, /Standard declaration/);
   assert.match(manageMarkup, /Matching/);
   assert.match(manageMarkup, /Ready/);
   assert.match(manageMarkup, /View details/);
   assert.match(manageMarkup, /Archive profile/);
   assert.doesNotMatch(manageMarkup, /Copy baseline link/);
   assert.match(manageMarkup, /Latest request cancelled/);
-  assert.match(manageMarkup, /Deferred follow-up work/);
-  assert.doesNotMatch(manageMarkup, /Deferred follow-up work[\s\S]*Request baseline consent/);
+  assert.doesNotMatch(manageMarkup, /Deferred follow-up work/);
 
   const readOnlyMarkup = renderToStaticMarkup(
     createElement(
@@ -189,5 +189,5 @@ test("profiles directory shell renders manage and read-only states with translat
   assert.doesNotMatch(readOnlyMarkup, /Active profile types/);
   assert.match(readOnlyMarkup, /View details/);
   assert.doesNotMatch(readOnlyMarkup, /Copy baseline link/);
-  assert.match(readOnlyMarkup, /Deferred follow-up work/);
+  assert.doesNotMatch(readOnlyMarkup, /Deferred follow-up work/);
 });

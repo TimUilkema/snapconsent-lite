@@ -10,7 +10,6 @@ import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-hea
 import { ConsentStructuredSnapshot } from "@/components/projects/consent-structured-snapshot";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
 import { PreviewableImage } from "@/components/projects/previewable-image";
-import { ProjectDefaultTemplateForm } from "@/components/projects/project-default-template-form";
 import { ProjectParticipantsPanel } from "@/components/projects/project-participants-panel";
 import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
 import { InviteActions } from "@/components/projects/invite-actions";
@@ -21,10 +20,7 @@ import { getProjectMatchingProgress } from "@/lib/matching/project-matching-prog
 import { getProjectParticipantsPanelData } from "@/lib/projects/project-participants-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import {
-  listVisibleTemplatesForTenant,
-  resolveTemplateManagementAccess,
-} from "@/lib/templates/template-service";
+import { listVisibleTemplatesForTenant } from "@/lib/templates/template-service";
 import type { StructuredFieldsSnapshot } from "@/lib/templates/structured-fields";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
@@ -124,6 +120,13 @@ type HeadshotAssetRow = {
   storage_path: string | null;
 };
 
+type RecurringProfileHeadshotPreviewRow = {
+  profile_id: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  created_at: string;
+};
+
 export default async function ProjectDashboardPage({ params, searchParams }: RouteProps) {
   const locale = await getLocale();
   const t = await getTranslations("projects.detail");
@@ -149,7 +152,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, description, status, created_at, default_consent_template_id")
+    .select("id, name, description, status, created_at")
     .eq("id", projectId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -158,15 +161,19 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     notFound();
   }
 
-  const [templates, templateAccess] = await Promise.all([
-    listVisibleTemplatesForTenant(supabase, tenantId),
-    resolveTemplateManagementAccess(supabase, tenantId, user.id),
-  ]);
+  const templates = await listVisibleTemplatesForTenant(supabase, tenantId);
   const participantPanelData = await getProjectParticipantsPanelData({
     supabase,
     tenantId,
     projectId: project.id,
   });
+  const recurringProfileHeadshotUrls: Record<
+    string,
+    {
+      thumbnailUrl: string | null;
+      previewUrl: string | null;
+    }
+  > = {};
 
   const templateOptions: ConsentTemplateOption[] = templates.map((template) => ({
     id: template.id,
@@ -174,13 +181,6 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     version: template.version,
     scope: template.scope,
   }));
-  const defaultTemplateId =
-    templateOptions.find((template) => template.id === project.default_consent_template_id)?.id ??
-    null;
-  const defaultTemplateWarning =
-    project.default_consent_template_id && !defaultTemplateId
-      ? t("defaultTemplateWarning")
-      : null;
 
   const { data: invites } = await supabase
     .from("subject_invites")
@@ -235,6 +235,44 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
 
   const inviteCount = inviteRows.length;
   const matchingProgress = await getProjectMatchingProgress(adminSupabase, tenantId, project.id);
+  const recurringProfileIds = participantPanelData.knownProfiles.map((participant) => participant.profile.id);
+
+  if (recurringProfileIds.length > 0) {
+    const { data: recurringHeadshots } = await adminSupabase
+      .from("recurring_profile_headshots")
+      .select("profile_id, storage_bucket, storage_path, created_at")
+      .eq("tenant_id", tenantId)
+      .in("profile_id", recurringProfileIds)
+      .eq("upload_status", "uploaded")
+      .is("superseded_at", null)
+      .order("created_at", { ascending: false });
+
+    const currentRecurringHeadshots = new Map<string, RecurringProfileHeadshotPreviewRow>();
+    ((recurringHeadshots as RecurringProfileHeadshotPreviewRow[] | null) ?? []).forEach((headshot) => {
+      if (!headshot.storage_bucket || !headshot.storage_path || currentRecurringHeadshots.has(headshot.profile_id)) {
+        return;
+      }
+
+      currentRecurringHeadshots.set(headshot.profile_id, headshot);
+    });
+
+    await Promise.all(
+      Array.from(currentRecurringHeadshots.values()).map(async (headshot) => {
+        const { data } = await adminSupabase.storage
+          .from(headshot.storage_bucket ?? "")
+          .createSignedUrl(headshot.storage_path ?? "", 60 * 60);
+        const signedUrl = data?.signedUrl ?? null;
+        const resolvedUrl = signedUrl
+          ? resolveLoopbackStorageUrlForHostHeader(signedUrl, requestHostHeader)
+          : null;
+
+        recurringProfileHeadshotUrls[headshot.profile_id] = {
+          thumbnailUrl: resolvedUrl,
+          previewUrl: resolvedUrl,
+        };
+      }),
+    );
+  }
 
   const currentHeadshots = await loadCurrentProjectConsentHeadshots(adminSupabase, tenantId, project.id, {
     optInOnly: true,
@@ -385,23 +423,20 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">{t("participantsTitle")}</h2>
-              <p className="mt-1 text-sm text-zinc-600">
-                {t("participantsSubtitle")}
-              </p>
             </div>
           </div>
           <ProjectParticipantsPanel
             projectId={project.id}
             data={participantPanelData}
             templates={templateOptions}
-            defaultTemplateId={defaultTemplateId}
-            defaultTemplateWarning={defaultTemplateWarning}
+            defaultTemplateId={null}
+            defaultTemplateWarning={null}
+            profileHeadshotUrls={recurringProfileHeadshotUrls}
           />
 
           <div className="space-y-4 border-t border-zinc-200 pt-6">
             <div>
               <h3 className="text-base font-semibold text-zinc-900">{t("oneOffParticipantsTitle")}</h3>
-              <p className="mt-1 text-sm text-zinc-600">{t("oneOffParticipantsSubtitle")}</p>
             </div>
             {inviteRows.length ? (
               <ul className="space-y-2 text-sm">
@@ -419,11 +454,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                 {invite.consents[0].subjects?.email ?? t("unknownEmail")}
                               </p>
                             </>
-                          ) : (
-                            <p>
-                              <span className="font-medium">{t("inviteIdLabel")}</span> {invite.id}
-                            </p>
-                          )}
+                          ) : null}
                           <p className="text-zinc-700">
                             {t("templateLabel")}{" "}
                             {invite.consent_template
@@ -641,19 +672,11 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
         </section>
 
         <aside>
-          {templateAccess.canManageTemplates ? (
-            <ProjectDefaultTemplateForm
-              projectId={project.id}
-              templates={templateOptions}
-              defaultTemplateId={defaultTemplateId}
-              warning={defaultTemplateWarning}
-            />
-          ) : null}
           <CreateInviteForm
             projectId={project.id}
             templates={templateOptions}
-            defaultTemplateId={defaultTemplateId}
-            warning={defaultTemplateWarning}
+            defaultTemplateId={null}
+            warning={null}
           />
         </aside>
       </div>

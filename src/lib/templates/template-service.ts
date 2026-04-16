@@ -483,33 +483,19 @@ export async function listVisibleTemplatesForTenant(
   supabase: SupabaseClient,
   tenantId: string,
 ): Promise<TemplateSummary[]> {
-  const [appTemplatesResult, tenantTemplatesResult] = await Promise.all([
-    supabase
-      .from("consent_templates")
-      .select(
-        "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
-      )
-      .is("tenant_id", null)
-      .eq("status", "published"),
-    supabase
-      .from("consent_templates")
-      .select(
-        "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
-      )
-      .eq("tenant_id", tenantId)
-      .eq("status", "published"),
-  ]);
+  const { data, error } = await supabase
+    .from("consent_templates")
+    .select(
+      "id, tenant_id, template_key, name, description, version, version_number, status, body, structured_fields_definition, form_layout_definition, created_at, updated_at, published_at, archived_at",
+    )
+    .eq("tenant_id", tenantId)
+    .eq("status", "published");
 
-  if (appTemplatesResult.error || tenantTemplatesResult.error) {
+  if (error) {
     throw new HttpError(500, "template_list_failed", "Unable to load consent templates.");
   }
 
-  const rows = [
-    ...((appTemplatesResult.data as TemplateRow[] | null) ?? []),
-    ...((tenantTemplatesResult.data as TemplateRow[] | null) ?? []),
-  ];
-
-  return rows.map(mapTemplateSummary).sort(compareTemplateSummaries);
+  return ((data as TemplateRow[] | null) ?? []).map(mapTemplateSummary).sort(compareTemplateSummaries);
 }
 
 export async function listManageableTemplatesForTenant(
@@ -568,7 +554,7 @@ export async function getVisiblePublishedTemplateById(
     return null;
   }
 
-  if (template.tenant_id !== null && template.tenant_id !== tenantId) {
+  if (template.tenant_id !== tenantId) {
     return null;
   }
 
