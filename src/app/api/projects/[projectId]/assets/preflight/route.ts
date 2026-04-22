@@ -23,7 +23,7 @@ type PreflightBody = {
 
 const MAX_PREFLIGHT_FILES = 2000;
 
-function normalizeAssetType(value: unknown): "photo" | "headshot" {
+function normalizeAssetType(value: unknown): "photo" | "headshot" | "video" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized || normalized === "photo") {
     return "photo";
@@ -31,6 +31,10 @@ function normalizeAssetType(value: unknown): "photo" | "headshot" {
 
   if (normalized === "headshot") {
     return "headshot";
+  }
+
+  if (normalized === "video") {
+    return "video";
   }
 
   throw new HttpError(400, "invalid_asset_type", "Invalid asset type.");

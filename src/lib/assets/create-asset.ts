@@ -1,15 +1,18 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import { isAcceptedImageUpload } from "@/lib/assets/asset-image-policy";
+import {
+  getAssetUploadMaxFileSizeBytes,
+  isAcceptedAssetUpload,
+  type AssetUploadType,
+} from "@/lib/assets/asset-upload-policy";
 import { HttpError } from "@/lib/http/errors";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 const STORAGE_BUCKET = "project-assets";
-const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_HEADSHOT_RETENTION_DAYS = 90;
 const MAX_REQUEST_CONSENT_IDS = 50;
 
-export type AssetType = "photo" | "headshot";
+export type AssetType = AssetUploadType;
 
 type CreateAssetInput = {
   supabase: SupabaseClient;
@@ -123,6 +126,7 @@ export async function ensureProjectAccess(
 }
 
 function validateFileMetadata(
+  assetType: AssetType,
   originalFilename: string,
   contentType: string,
   fileSizeBytes: number,
@@ -131,7 +135,7 @@ function validateFileMetadata(
     throw new HttpError(400, "invalid_filename", "File name is required.");
   }
 
-  if (!isAcceptedImageUpload(contentType, originalFilename)) {
+  if (!isAcceptedAssetUpload(assetType, contentType, originalFilename)) {
     throw new HttpError(400, "invalid_content_type", "Unsupported file type.");
   }
 
@@ -139,7 +143,7 @@ function validateFileMetadata(
     throw new HttpError(400, "invalid_file_size", "File size is required.");
   }
 
-  if (fileSizeBytes > MAX_FILE_SIZE_BYTES) {
+  if (fileSizeBytes > getAssetUploadMaxFileSizeBytes(assetType)) {
     throw new HttpError(400, "file_too_large", "File is too large.");
   }
 }
@@ -165,6 +169,10 @@ function normalizeDuplicatePolicy(value: string) {
 function normalizeAssetType(value: string | null | undefined): AssetType {
   if (value === "headshot") {
     return "headshot";
+  }
+
+  if (value === "video") {
+    return "video";
   }
 
   if (!value || value === "photo") {
@@ -217,13 +225,13 @@ export async function createAssetWithIdempotency(
   input: CreateAssetInput,
 ): Promise<CreateAssetResult> {
   const consentIds = normalizeConsentIds(input.consentIds);
-  validateFileMetadata(input.originalFilename, input.contentType, input.fileSizeBytes);
+  const assetType = normalizeAssetType(input.assetType ?? "photo");
+  validateFileMetadata(assetType, input.originalFilename, input.contentType, input.fileSizeBytes);
   if (!input.projectAccessValidated) {
     await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
   }
   await validateConsents(input.supabase, input.tenantId, input.projectId, consentIds);
 
-  const assetType = normalizeAssetType(input.assetType ?? "photo");
   const contentHash = normalizeContentHash(input.contentHash ?? null);
   const duplicatePolicy = normalizeDuplicatePolicy(input.duplicatePolicy);
   if (contentHash && input.contentHashAlgo && input.contentHashAlgo !== "sha256") {
@@ -282,7 +290,7 @@ export async function createAssetWithIdempotency(
     };
   }
 
-  if (contentHash && duplicatePolicy !== "upload_anyway") {
+  if (assetType !== "video" && contentHash && duplicatePolicy !== "upload_anyway") {
     const { data: duplicates, error: duplicateError } = await input.supabase
       .from("assets")
       .select("id")

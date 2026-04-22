@@ -549,24 +549,55 @@ async function getFallbackRows(
   },
 ) {
   let query = admin
-    .from("asset_consent_manual_photo_fallbacks")
-    .select("asset_id, consent_id")
+    .from("asset_assignee_links")
+    .select("asset_id, project_face_assignee_id")
     .eq("tenant_id", context.tenantId)
     .eq("project_id", context.projectId)
     .order("asset_id", { ascending: true })
-    .order("consent_id", { ascending: true });
+    .order("project_face_assignee_id", { ascending: true });
 
   if (filters?.assetId) {
     query = query.eq("asset_id", filters.assetId);
   }
 
   if (filters?.consentId) {
-    query = query.eq("consent_id", filters.consentId);
+    const assigneeId = await getConsentAssigneeId(context, filters.consentId);
+    if (!assigneeId) {
+      return [];
+    }
+
+    query = query.eq("project_face_assignee_id", assigneeId);
   }
 
   const { data, error } = await query;
   assertNoError(error, "select fallback rows");
-  return (data ?? []) as Array<{ asset_id: string; consent_id: string }>;
+  const rows = (data ?? []) as Array<{
+    asset_id: string;
+    project_face_assignee_id: string;
+  }>;
+  const assigneeIds = Array.from(new Set(rows.map((row) => row.project_face_assignee_id)));
+  let consentIdByAssigneeId = new Map<string, string>();
+  if (assigneeIds.length > 0) {
+    const { data: assignees, error: assigneeError } = await admin
+      .from("project_face_assignees")
+      .select("id, consent_id")
+      .eq("tenant_id", context.tenantId)
+      .eq("project_id", context.projectId)
+      .in("id", assigneeIds);
+    assertNoError(assigneeError, "select fallback assignees");
+    consentIdByAssigneeId = new Map(
+      ((assignees ?? []) as Array<{ id: string; consent_id: string | null }>)
+        .filter((row) => typeof row.consent_id === "string" && row.consent_id.length > 0)
+        .map((row) => [row.id, row.consent_id as string] as const),
+    );
+  }
+
+  return rows
+    .map((row) => ({
+      asset_id: row.asset_id,
+      consent_id: consentIdByAssigneeId.get(row.project_face_assignee_id) ?? "",
+    }))
+    .filter((row) => row.consent_id.length > 0);
 }
 
 async function getFallbackSuppressions(

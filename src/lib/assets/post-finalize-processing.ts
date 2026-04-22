@@ -11,7 +11,7 @@ type QueueProjectAssetPostFinalizeProcessingInput = {
   tenantId: string;
   projectId: string;
   assetId: string;
-  assetType: "photo" | "headshot";
+  assetType: "photo" | "headshot" | "video";
   consentIds: string[];
   source: "photo_finalize" | "photo_finalize_batch";
 };
@@ -19,7 +19,7 @@ type QueueProjectAssetPostFinalizeProcessingInput = {
 export async function queueProjectAssetPostFinalizeProcessing(
   input: QueueProjectAssetPostFinalizeProcessingInput,
 ) {
-  if (input.assetType === "photo") {
+  if (input.assetType === "photo" || input.assetType === "video") {
     try {
       await queueAssetImageDerivativesForAssetIds({
         tenantId: input.tenantId,

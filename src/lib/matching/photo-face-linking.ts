@@ -32,6 +32,15 @@ import {
   type ProjectFaceAssigneeKind,
 } from "@/lib/matching/project-face-assignees";
 import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
+import {
+  deleteWholeAssetLinkForAssignee,
+  deleteWholeAssetLinksForAssigneeIds,
+  loadCurrentWholeAssetLinksForAsset,
+  loadCurrentWholeAssetLinksForAssets,
+  manualLinkWholeAssetToConsent,
+  manualUnlinkWholeAssetFromConsent,
+  type EnrichedWholeAssetLinkRow,
+} from "@/lib/matching/whole-asset-linking";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 
 type MatchingScopeInput = {
@@ -280,7 +289,7 @@ export type LinkedPhotoRow = {
   matched_at: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
-  link_mode: "face" | "asset_fallback";
+  link_mode: "face" | "asset_fallback" | "whole_asset";
   asset_face_id: string | null;
   face_rank: number | null;
   detected_face_count: number | null;
@@ -1047,7 +1056,7 @@ async function markBlockedFaceRowsInactive(
   }
 }
 
-async function loadCurrentHiddenFacesForAssets(
+export async function loadCurrentHiddenFacesForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
@@ -1074,7 +1083,7 @@ async function loadCurrentHiddenFacesForAssets(
   return activeRows;
 }
 
-async function loadCurrentBlockedFacesForAssets(
+export async function loadCurrentBlockedFacesForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
@@ -1107,26 +1116,28 @@ async function loadFallbackRowsForAssets(
   projectId: string,
   assetIds: string[],
 ) {
-  if (assetIds.length === 0) {
+  const wholeAssetLinks = await loadCurrentWholeAssetLinksForAssets({
+    supabase,
+    tenantId,
+    projectId,
+    assetIds,
+  });
+
+  if (wholeAssetLinks.length === 0) {
     return [] as ManualFallbackRow[];
   }
 
-  const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
-      .from("asset_consent_manual_photo_fallbacks")
-      .select("asset_id, consent_id, tenant_id, project_id, created_by, created_at, updated_at")
-      .eq("tenant_id", tenantId)
-      .eq("project_id", projectId)
-      .in("asset_id", assetIdChunk);
-
-    if (error) {
-      throw new HttpError(500, "photo_fallback_lookup_failed", "Unable to load zero-face photo fallbacks.");
-    }
-
-    return (data ?? []) as ManualFallbackRow[];
-  });
-
-  return rows;
+  return wholeAssetLinks
+    .filter((row): row is EnrichedWholeAssetLinkRow & { consent_id: string } => typeof row.consent_id === "string")
+    .map((row) => ({
+      asset_id: row.asset_id,
+      consent_id: row.consent_id,
+      tenant_id: row.tenant_id,
+      project_id: row.project_id,
+      created_by: row.created_by,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
 }
 
 async function loadCurrentHeadshotMaterializationIds(
@@ -1658,16 +1669,23 @@ async function loadCurrentAssignmentsForAsset(
     throw new HttpError(500, "photo_face_suppression_lookup_failed", "Unable to load face suppressions.");
   }
 
-  const { data: fallbacks, error: fallbackError } = await supabase
-    .from("asset_consent_manual_photo_fallbacks")
-    .select("asset_id, consent_id, tenant_id, project_id, created_by, created_at, updated_at")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("asset_id", assetId);
-
-  if (fallbackError) {
-    throw new HttpError(500, "photo_fallback_lookup_failed", "Unable to load zero-face fallbacks.");
-  }
+  const wholeAssetLinks = await loadCurrentWholeAssetLinksForAsset({
+    supabase,
+    tenantId,
+    projectId,
+    assetId,
+  });
+  const fallbacks = wholeAssetLinks
+    .filter((row): row is EnrichedWholeAssetLinkRow & { consent_id: string } => typeof row.consent_id === "string")
+    .map((row) => ({
+      asset_id: row.asset_id,
+      consent_id: row.consent_id,
+      tenant_id: row.tenant_id,
+      project_id: row.project_id,
+      created_by: row.created_by,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })) satisfies ManualFallbackRow[];
 
   const { data: fallbackSuppressions, error: fallbackSuppressionError } = await supabase
     .from("asset_consent_manual_photo_fallback_suppressions")
@@ -1687,7 +1705,8 @@ async function loadCurrentAssignmentsForAsset(
   return {
     faceLinks: (faceLinksResult.data ?? []) as FaceLinkRow[],
     suppressions: (suppressionsResult.data ?? []) as FaceSuppressionRow[],
-    fallbacks: (fallbacks ?? []) as ManualFallbackRow[],
+    wholeAssetLinks,
+    fallbacks,
     fallbackSuppressions: (fallbackSuppressions ?? []) as ManualFallbackSuppressionRow[],
   };
 }
@@ -1777,16 +1796,21 @@ async function clearFallbackRowsForConsent(
   assetId: string,
   consentId: string,
 ) {
-  const { error: fallbackDeleteError } = await supabase
-    .from("asset_consent_manual_photo_fallbacks")
-    .delete()
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("asset_id", assetId)
-    .eq("consent_id", consentId);
-
-  if (fallbackDeleteError) {
-    throw new HttpError(500, "photo_fallback_write_failed", "Unable to update zero-face fallback state.");
+  const assigneeIdByConsentId = await loadProjectConsentFaceAssigneeIdsByConsentIds({
+    supabase,
+    tenantId,
+    projectId,
+    consentIds: [consentId],
+  });
+  const projectFaceAssigneeId = assigneeIdByConsentId.get(consentId) ?? null;
+  if (projectFaceAssigneeId) {
+    await deleteWholeAssetLinkForAssignee({
+      supabase,
+      tenantId,
+      projectId,
+      assetId,
+      projectFaceAssigneeId,
+    });
   }
 
   const { error: fallbackSuppressionDeleteError } = await supabase
@@ -2556,25 +2580,47 @@ export async function listLinkedPhotosForConsent(
     return (data ?? []) as FaceLinkRow[];
   });
 
-  const fallbacks = await runChunkedRead([input.consentId], async (consentIdChunk) => {
-    const { data, error } = await input.supabase
-      .from("asset_consent_manual_photo_fallbacks")
-      .select("asset_id, consent_id, tenant_id, project_id, created_by, created_at, updated_at")
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .in("consent_id", consentIdChunk);
+  const consentAssigneeId = (
+    await loadProjectConsentFaceAssigneeIdsByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: [input.consentId],
+    })
+  ).get(input.consentId) ?? null;
+  const wholeAssetLinks =
+    consentAssigneeId
+      ? (await runChunkedRead([consentAssigneeId], async (assigneeIdChunk) => {
+          const { data, error } = await input.supabase
+            .from("asset_assignee_links")
+            .select(
+              "asset_id, project_face_assignee_id, tenant_id, project_id, link_source, created_at, created_by, updated_at",
+            )
+            .eq("tenant_id", input.tenantId)
+            .eq("project_id", input.projectId)
+            .in("project_face_assignee_id", assigneeIdChunk);
 
-    if (error) {
-      throw new HttpError(500, "photo_fallback_lookup_failed", "Unable to load linked photos.");
-    }
+          if (error) {
+            throw new HttpError(500, "whole_asset_link_lookup_failed", "Unable to load linked photos.");
+          }
 
-    return (data ?? []) as ManualFallbackRow[];
-  });
+          return (data ?? []) as Array<{
+            asset_id: string;
+            project_face_assignee_id: string;
+            tenant_id: string;
+            project_id: string;
+            link_source: "manual";
+            created_at: string;
+            created_by: string | null;
+            updated_at: string;
+          }>;
+        }))
+      : [];
 
   const assetIds = Array.from(
     new Set([
       ...currentLinks.map((row) => row.asset_id),
-      ...fallbacks.map((row) => row.asset_id),
+      ...wholeAssetLinks.map((row) => row.asset_id),
     ]),
   );
   if (assetIds.length === 0) {
@@ -2655,10 +2701,10 @@ export async function listLinkedPhotosForConsent(
     });
   });
 
-  fallbacks.forEach((row) => {
+  wholeAssetLinks.forEach((row) => {
     const asset = assetById.get(row.asset_id);
     const materialization = materializations.get(row.asset_id);
-    if (!asset || !materialization || materialization.face_count !== 0) {
+    if (!asset || !materialization) {
       return;
     }
 
@@ -2678,7 +2724,7 @@ export async function listLinkedPhotosForConsent(
       matched_at: null,
       reviewed_at: null,
       reviewed_by: row.created_by,
-      link_mode: "asset_fallback",
+      link_mode: "whole_asset",
       asset_face_id: null,
       face_rank: null,
       detected_face_count: materialization.face_count,
@@ -2896,9 +2942,7 @@ async function buildReadyManualPhotoLinkState(input: {
   const currentConsentFaceLink =
     assignments.faceLinks.find((row) => isConsentBackedLink(row) && row.consent_id === input.consentId) ?? null;
   const currentConsentFallback =
-    input.current.materialization.face_count === 0
-      ? assignments.fallbacks.find((row) => row.consent_id === input.consentId) ?? null
-      : null;
+    assignments.fallbacks.find((row) => row.consent_id === input.consentId) ?? null;
 
   return {
     materializationStatus: "ready",
@@ -3130,14 +3174,16 @@ export async function manualLinkPhotoToProjectFaceAssignee(
       projectFaceAssigneeId: input.target.projectFaceAssigneeId,
     });
 
+    await deleteWholeAssetLinkForAssignee({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      projectFaceAssigneeId: input.target.projectFaceAssigneeId,
+    });
+
     if (input.target.consentId) {
-      await clearFallbackRowsForConsent(
-        input.supabase,
-        input.tenantId,
-        input.projectId,
-        input.assetId,
-        input.target.consentId,
-      );
+      await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
     }
 
     return {
@@ -3218,6 +3264,13 @@ export async function manualLinkPhotoToProjectFaceAssignee(
   }
 
   const nowIso = new Date().toISOString();
+  await deleteWholeAssetLinkForAssignee({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+    projectFaceAssigneeId: input.target.projectFaceAssigneeId,
+  });
   const { error: upsertError } = await input.supabase.from("asset_face_consent_links").upsert(
     {
       asset_face_id: requested.resolvedFace.id,
@@ -3303,28 +3356,21 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
       );
     }
 
-    const alreadyLinked = assignments.fallbacks.find((row) => row.consent_id === input.consentId) ?? null;
-    if (alreadyLinked) {
-      return {
-        kind: "already_linked",
-        mode: "asset_fallback",
-        assetFaceId: null,
-      };
-    }
+    const wholeAssetResult = await manualLinkWholeAssetToConsent({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentId: input.consentId,
+      actorUserId: input.actorUserId,
+      assetId: input.assetId,
+    });
 
-    const { error: upsertError } = await input.supabase.from("asset_consent_manual_photo_fallbacks").upsert(
-      {
-        asset_id: input.assetId,
-        consent_id: input.consentId,
-        tenant_id: input.tenantId,
-        project_id: input.projectId,
-        created_by: input.actorUserId ?? null,
-      },
-      { onConflict: "asset_id,consent_id" },
-    );
-
-    if (upsertError) {
-      throw new HttpError(500, "photo_fallback_write_failed", "Unable to link the photo fallback.");
+    if (wholeAssetResult.kind === "exact_face_conflict") {
+      throw new HttpError(
+        409,
+        "asset_assignee_exact_face_exists",
+        "This person already has a more specific face link on this asset.",
+      );
     }
 
     const { error: suppressionDeleteError } = await input.supabase
@@ -3342,10 +3388,16 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
     await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, input.consentId);
 
     return {
-      kind: "linked",
+      kind: wholeAssetResult.kind === "already_linked" ? "already_linked" : "linked",
       mode: "asset_fallback",
-      replacedConsentId: null,
       assetFaceId: null,
+      ...(
+        wholeAssetResult.kind === "already_linked"
+          ? {}
+          : {
+              replacedConsentId: null,
+            }
+      ),
     };
   }
 
@@ -3467,17 +3519,14 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
       );
     }
 
-    const { error: deleteError } = await input.supabase
-      .from("asset_consent_manual_photo_fallbacks")
-      .delete()
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("asset_id", input.assetId)
-      .eq("consent_id", input.consentId);
-
-    if (deleteError) {
-      throw new HttpError(500, "photo_fallback_write_failed", "Unable to unlink the zero-face fallback.");
-    }
+    await manualUnlinkWholeAssetFromConsent({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentId: input.consentId,
+      actorUserId: input.actorUserId,
+      assetId: input.assetId,
+    });
 
     const { error: suppressionUpsertError } = await input.supabase
       .from("asset_consent_manual_photo_fallback_suppressions")
@@ -4044,6 +4093,14 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     matcher_version: getAutoMatchCompareVersion(),
     updated_at: nowIso,
   }));
+
+  await deleteWholeAssetLinksForAssigneeIds({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+    projectFaceAssigneeIds: Array.from(new Set(Array.from(desiredAutoRows.values()).map((row) => row.projectFaceAssigneeId))),
+  });
 
   if (upserts.length > 0) {
     const { error } = await input.supabase.from("asset_face_consent_links").upsert(upserts, {

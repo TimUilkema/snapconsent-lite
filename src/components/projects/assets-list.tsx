@@ -10,6 +10,7 @@ import { formatDate } from "@/lib/i18n/format";
 
 type AssetRow = {
   id: string;
+  assetType: "photo" | "video";
   originalFilename: string;
   status: string;
   fileSizeBytes: number;
@@ -21,6 +22,7 @@ type AssetRow = {
   thumbnailState?: "ready_derivative" | "transform_fallback" | "processing" | "unavailable";
   previewUrl?: string | null;
   previewState?: "ready_derivative" | "transform_fallback" | "processing" | "unavailable";
+  playbackUrl?: string | null;
   linkedConsentCount?: number;
   linkedPeople?: Array<{
     consentId: string;
@@ -41,6 +43,10 @@ type AssetRow = {
     linkSource: "manual" | "auto";
     matchConfidence: number | null;
   }>;
+  reviewStatus?: "needs_review" | "blocked" | "resolved" | null;
+  unresolvedFaceCount?: number;
+  blockedFaceCount?: number;
+  firstNeedsReviewFaceId?: string | null;
 };
 
 type AssetsResponse = {
@@ -52,10 +58,23 @@ type AssetsResponse = {
     email: string | null;
     label: string;
   }>;
+  reviewSummary?: {
+    totalAssetCount: number;
+    needsReviewAssetCount: number;
+    blockedAssetCount: number;
+    resolvedAssetCount: number;
+  };
   message?: string;
 };
 
-type AssetSortOption = "created_at_desc" | "created_at_asc" | "file_size_desc" | "file_size_asc";
+type AssetSortOption =
+  | "created_at_desc"
+  | "created_at_asc"
+  | "file_size_desc"
+  | "file_size_asc"
+  | "needs_review_first";
+
+type AssetReviewFilter = "all" | "needs_review" | "blocked" | "resolved";
 
 type AssetsListProps = {
   projectId: string;
@@ -63,13 +82,27 @@ type AssetsListProps = {
 
 type AssetPageCacheEntry = {
   assets: AssetRow[];
+  reviewSummary: NonNullable<AssetsResponse["reviewSummary"]>;
   fetchedAt: number;
 };
 
 type AssetPageCache = Record<number, AssetPageCacheEntry>;
 
+type LoadedAssetPagePayload = {
+  assets: AssetRow[];
+  totalCount: number;
+  people: NonNullable<AssetsResponse["people"]>;
+  reviewSummary: NonNullable<AssetsResponse["reviewSummary"]>;
+};
+
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 const ASSET_PAGE_CACHE_TTL_MS = 90_000;
+const EMPTY_REVIEW_SUMMARY = {
+  totalAssetCount: 0,
+  needsReviewAssetCount: 0,
+  blockedAssetCount: 0,
+  resolvedAssetCount: 0,
+} as const;
 
 export function getAssetPageOffset(globalIndex: number, limit: number) {
   if (limit <= 0 || globalIndex <= 0) {
@@ -81,6 +114,13 @@ export function getAssetPageOffset(globalIndex: number, limit: number) {
 
 export function isAssetPageCacheFresh(fetchedAt: number, now = Date.now()) {
   return now - fetchedAt < ASSET_PAGE_CACHE_TTL_MS;
+}
+
+export function getInitialSelectedFaceIdForReview(
+  reviewFilter: AssetReviewFilter,
+  asset: Pick<AssetRow, "firstNeedsReviewFaceId">,
+) {
+  return reviewFilter === "needs_review" ? asset.firstNeedsReviewFaceId ?? null : null;
 }
 
 function formatBytes(value: number) {
@@ -113,6 +153,115 @@ function buildPageSummary(
   const start = offset + 1;
   const end = Math.min(offset + limit, totalCount);
   return t("showingRange", { start, end, total: totalCount });
+}
+
+function getReviewStatusClasses(status: NonNullable<AssetRow["reviewStatus"]>) {
+  switch (status) {
+    case "needs_review":
+      return "border-rose-200 bg-rose-50 text-rose-800";
+    case "blocked":
+      return "border-amber-200 bg-amber-50 text-amber-800";
+    case "resolved":
+    default:
+      return "border-zinc-300 bg-zinc-100 text-zinc-700";
+  }
+}
+
+export function isPreviewableAssetType(assetType: AssetRow["assetType"]) {
+  return assetType === "photo" || assetType === "video";
+}
+
+function isPreviewableAsset(asset: Pick<AssetRow, "assetType">) {
+  return isPreviewableAssetType(asset.assetType);
+}
+
+function isImageAsset(asset: Pick<AssetRow, "assetType">) {
+  return asset.assetType === "photo";
+}
+
+export function VideoAssetPlaceholder({
+  label,
+}: {
+  label: string;
+}) {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-zinc-100 text-zinc-600">
+      <div className="flex flex-col items-center gap-2">
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-8 w-8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="3.5" y="5.5" width="13" height="13" rx="2" />
+          <path d="m16.5 10 4-2.5v9L16.5 14" />
+        </svg>
+        <span className="text-xs font-medium">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+export function PreviewableVideoPoster({
+  src,
+  alt,
+  emptyLabel,
+  onOpenPreview,
+  openLabel,
+}: {
+  src: string | null;
+  alt: string;
+  emptyLabel: string;
+  onOpenPreview: () => void;
+  openLabel: string;
+}) {
+  const [failedImageSrc, setFailedImageSrc] = useState<string | null>(null);
+
+  if (!src || failedImageSrc === src) {
+    return (
+      <button
+        type="button"
+        onClick={onOpenPreview}
+        className="block h-full w-full cursor-pointer"
+        aria-label={openLabel}
+      >
+        <VideoAssetPlaceholder label={emptyLabel} />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenPreview}
+      className="group relative block h-full w-full cursor-pointer overflow-hidden bg-zinc-100"
+      aria-label={openLabel}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className="h-full w-full object-contain"
+        onError={() => setFailedImageSrc(src)}
+      />
+      <span className="pointer-events-none absolute inset-0 bg-zinc-950/0 transition-colors group-hover:bg-zinc-950/15" />
+      <span className="pointer-events-none absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-zinc-900 shadow-sm">
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="currentColor"
+        >
+          <path d="M8 6.5v11l9-5.5Z" />
+        </svg>
+      </span>
+    </button>
+  );
 }
 
 function buildConsentHref(projectId: string, consentId: string) {
@@ -204,6 +353,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
   const [queryInput, setQueryInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sort, setSort] = useState<AssetSortOption>("created_at_desc");
+  const [reviewFilter, setReviewFilter] = useState<AssetReviewFilter>("all");
   const [limit, setLimit] = useState<number>(20);
   const [offset, setOffset] = useState<number>(0);
   const [assets, setAssets] = useState<AssetRow[]>([]);
@@ -214,6 +364,8 @@ export function AssetsList({ projectId }: AssetsListProps) {
   const [selectedConsentIds, setSelectedConsentIds] = useState<string[]>([]);
   const [selectedAssetGlobalIndex, setSelectedAssetGlobalIndex] = useState<number | null>(null);
   const [people, setPeople] = useState<AssetsResponse["people"]>([]);
+  const [reviewSummary, setReviewSummary] = useState<NonNullable<AssetsResponse["reviewSummary"]>>(EMPTY_REVIEW_SUMMARY);
+  const [pendingListRefreshOnClose, setPendingListRefreshOnClose] = useState(false);
 
   const selectedConsentFilterKey = useMemo(
     () => [...selectedConsentIds].sort((a, b) => a.localeCompare(b)).join(","),
@@ -221,8 +373,8 @@ export function AssetsList({ projectId }: AssetsListProps) {
   );
 
   const queryCacheKey = useMemo(
-    () => `${searchQuery}::${selectedConsentFilterKey}::${sort}::${limit}`,
-    [limit, searchQuery, selectedConsentFilterKey, sort],
+    () => `${searchQuery}::${selectedConsentFilterKey}::${reviewFilter}::${sort}::${limit}`,
+    [limit, reviewFilter, searchQuery, selectedConsentFilterKey, sort],
   );
 
   useEffect(() => {
@@ -240,6 +392,8 @@ export function AssetsList({ projectId }: AssetsListProps) {
     setTotalCount(0);
     setError(null);
     setSelectedAssetGlobalIndex(null);
+    setReviewSummary(EMPTY_REVIEW_SUMMARY);
+    setPendingListRefreshOnClose(false);
   }, [queryCacheKey]);
 
   const fetchAssetsPage = useCallback(
@@ -249,6 +403,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
         params.set("q", searchQuery);
       }
       selectedConsentIds.forEach((consentId) => params.append("consentId", consentId));
+      params.set("review", reviewFilter);
       params.set("sort", sort);
       params.set("limit", String(limit));
       params.set("offset", String(pageOffset));
@@ -265,18 +420,28 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
       return payload;
     },
-    [limit, projectId, searchQuery, selectedConsentIds, sort, tErrors],
+    [limit, projectId, reviewFilter, searchQuery, selectedConsentIds, sort, tErrors],
   );
 
   const ensurePageLoaded = useCallback(
-    async (pageOffset: number, signal?: AbortSignal, options?: { forceRefresh?: boolean }) => {
+    async (
+      pageOffset: number,
+      signal?: AbortSignal,
+      options?: { forceRefresh?: boolean },
+    ): Promise<LoadedAssetPagePayload> => {
       const cachedEntry = assetPages[pageOffset];
       if (cachedEntry && !options?.forceRefresh && isAssetPageCacheFresh(cachedEntry.fetchedAt)) {
-        return cachedEntry.assets;
+        return {
+          assets: cachedEntry.assets,
+          totalCount,
+          people: (people ?? []) as NonNullable<AssetsResponse["people"]>,
+          reviewSummary: cachedEntry.reviewSummary,
+        };
       }
 
       const payload = await fetchAssetsPage(pageOffset, signal);
       const pageAssets = payload.assets ?? [];
+      const nextReviewSummary = payload.reviewSummary ?? EMPTY_REVIEW_SUMMARY;
       setAssetPages((current) => {
         const currentEntry = current[pageOffset];
         if (currentEntry && !options?.forceRefresh && isAssetPageCacheFresh(currentEntry.fetchedAt)) {
@@ -287,15 +452,22 @@ export function AssetsList({ projectId }: AssetsListProps) {
           ...current,
           [pageOffset]: {
             assets: pageAssets,
+            reviewSummary: nextReviewSummary,
             fetchedAt: Date.now(),
           },
         };
       });
       setTotalCount(payload.totalCount ?? 0);
       setPeople(payload.people ?? []);
-      return pageAssets;
+      setReviewSummary(nextReviewSummary);
+      return {
+        assets: pageAssets,
+        totalCount: payload.totalCount ?? 0,
+        people: (payload.people ?? []) as NonNullable<AssetsResponse["people"]>,
+        reviewSummary: nextReviewSummary,
+      };
     },
-    [assetPages, fetchAssetsPage],
+    [assetPages, fetchAssetsPage, people, totalCount],
   );
 
   useEffect(() => {
@@ -304,6 +476,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
     if (cachedPage && isAssetPageCacheFresh(cachedPage.fetchedAt)) {
       setAssets(cachedPage.assets);
+      setReviewSummary(cachedPage.reviewSummary);
       setIsLoading(false);
       return () => controller.abort();
     }
@@ -312,10 +485,20 @@ export function AssetsList({ projectId }: AssetsListProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const pageAssets = await ensurePageLoaded(offset, controller.signal, {
+        const payload = await ensurePageLoaded(offset, controller.signal, {
           forceRefresh: Boolean(cachedPage),
         });
-        setAssets(pageAssets);
+        if (payload.totalCount === 0 && offset > 0) {
+          setOffset(0);
+          return;
+        }
+
+        if (payload.totalCount > 0 && offset >= payload.totalCount) {
+          setOffset(getAssetPageOffset(payload.totalCount - 1, limit));
+          return;
+        }
+
+        setAssets(payload.assets);
       } catch (loadError) {
         if ((loadError as { name?: string })?.name === "AbortError") {
           return;
@@ -331,33 +514,47 @@ export function AssetsList({ projectId }: AssetsListProps) {
     void loadAssets();
 
     return () => controller.abort();
-  }, [assetPages, ensurePageLoaded, offset, tErrors]);
+  }, [assetPages, ensurePageLoaded, limit, offset, tErrors]);
 
   const sortOptions: Array<{ value: AssetSortOption; label: string }> = [
+    { value: "needs_review_first", label: t("sortNeedsReviewFirst") },
     { value: "created_at_desc", label: t("sortNewest") },
     { value: "created_at_asc", label: t("sortOldest") },
     { value: "file_size_desc", label: t("sortLargest") },
     { value: "file_size_asc", label: t("sortSmallest") },
   ];
 
-  const sortedAssets = useMemo(() => {
-    if (assets.length <= 1) {
-      return assets;
-    }
+  const reviewFilters: Array<{
+    value: AssetReviewFilter;
+    label: string;
+    count: number;
+  }> = [
+    { value: "all", label: t("reviewFilterAll"), count: reviewSummary.totalAssetCount },
+    { value: "needs_review", label: t("reviewFilterNeedsReview"), count: reviewSummary.needsReviewAssetCount },
+    { value: "blocked", label: t("reviewFilterBlocked"), count: reviewSummary.blockedAssetCount },
+    { value: "resolved", label: t("reviewFilterResolved"), count: reviewSummary.resolvedAssetCount },
+  ];
 
-    const copy = [...assets];
-    switch (sort) {
-      case "created_at_asc":
-        return copy.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      case "file_size_desc":
-        return copy.sort((a, b) => b.fileSizeBytes - a.fileSizeBytes);
-      case "file_size_asc":
-        return copy.sort((a, b) => a.fileSizeBytes - b.fileSizeBytes);
-      case "created_at_desc":
+  const reviewSummaryItems = [
+    { label: t("reviewSummaryAll"), count: reviewSummary.totalAssetCount },
+    { label: t("reviewSummaryNeedsReview"), count: reviewSummary.needsReviewAssetCount },
+    { label: t("reviewSummaryBlocked"), count: reviewSummary.blockedAssetCount },
+    { label: t("reviewSummaryResolved"), count: reviewSummary.resolvedAssetCount },
+  ];
+
+  const emptyStateLabel = useMemo(() => {
+    switch (reviewFilter) {
+      case "needs_review":
+        return t("emptyNeedsReview");
+      case "blocked":
+        return t("emptyBlocked");
+      case "resolved":
+        return t("emptyResolved");
+      case "all":
       default:
-        return copy.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return t("empty");
     }
-  }, [assets, sort]);
+  }, [reviewFilter, t]);
 
   const pageCount = useMemo(() => Math.max(1, Math.ceil(totalCount / limit)), [limit, totalCount]);
   const currentPage = useMemo(() => Math.floor(offset / limit) + 1, [limit, offset]);
@@ -421,15 +618,19 @@ export function AssetsList({ projectId }: AssetsListProps) {
       return;
     }
 
-    const selectedPageOffset = getAssetPageOffset(selectedAssetGlobalIndex, limit);
-    const refreshedAssets = await ensurePageLoaded(selectedPageOffset, undefined, {
-      forceRefresh: true,
-    });
+    setPendingListRefreshOnClose(true);
+  }, [selectedAssetGlobalIndex]);
 
-    if (offset === selectedPageOffset) {
-      setAssets(refreshedAssets);
-    }
-  }, [ensurePageLoaded, limit, offset, selectedAssetGlobalIndex]);
+  const navigateToAdjacentAsset = useCallback(
+    async (direction: -1 | 1) => {
+      if (selectedAssetGlobalIndex === null) {
+        return;
+      }
+
+      await navigateToAssetIndex(selectedAssetGlobalIndex + direction);
+    },
+    [navigateToAssetIndex, selectedAssetGlobalIndex],
+  );
 
   useEffect(() => {
     if (selectedAssetGlobalIndex === null) {
@@ -454,6 +655,17 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
     return () => controller.abort();
   }, [assetPages, ensurePageLoaded, nextAssetPageOffset, previousAssetPageOffset, selectedAssetGlobalIndex]);
+
+  const handleLightboxClose = useCallback(() => {
+    setSelectedAssetGlobalIndex(null);
+
+    if (!pendingListRefreshOnClose) {
+      return;
+    }
+
+    setPendingListRefreshOnClose(false);
+    setAssetPages({});
+  }, [pendingListRefreshOnClose]);
 
   return (
     <div className="space-y-4">
@@ -496,8 +708,38 @@ export function AssetsList({ projectId }: AssetsListProps) {
           </select>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
-          <span>{t("photoCount", { count: totalCount })}</span>
+          <span>{t("assetCount", { count: totalCount })}</span>
           <span>{buildPageSummary(offset, limit, totalCount, t)}</span>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {reviewFilters.map((filter) => {
+            const isActive = reviewFilter === filter.value;
+            return (
+              <button
+                key={filter.value}
+                type="button"
+                onClick={() => {
+                  setOffset(0);
+                  setReviewFilter(filter.value);
+                }}
+                className={
+                  isActive
+                    ? "rounded-md border border-zinc-900 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white"
+                    : "rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                }
+              >
+                {filter.label} ({filter.count})
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {reviewSummaryItems.map((item) => (
+            <div key={item.label} className="rounded-lg border border-zinc-200 px-3 py-2">
+              <p className="text-xs text-zinc-600">{item.label}</p>
+              <p className="mt-1 text-base font-semibold text-zinc-900">{item.count}</p>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -546,37 +788,86 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
       {isLoading ? (
         <p className="text-sm text-zinc-600">{t("loading")}</p>
-      ) : sortedAssets.length === 0 ? (
-        <p className="text-sm text-zinc-600">{t("empty")}</p>
+      ) : assets.length === 0 ? (
+        <p className="text-sm text-zinc-600">{emptyStateLabel}</p>
       ) : (
         <ul className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3 lg:grid-cols-4">
-          {sortedAssets.map((asset, assetIndex) => (
+          {assets.map((asset, assetIndex) => (
             <li key={asset.id} className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
               <div className="mb-2 aspect-square w-full overflow-hidden rounded bg-zinc-100">
-                <PreviewableImage
-                  src={asset.thumbnailUrl ?? null}
-                  previewSrc={asset.previewUrl ?? null}
-                  alt={asset.originalFilename}
-                  className="h-full w-full"
-                  imageClassName="h-full w-full object-contain"
-                  emptyState={asset.thumbnailState === "processing" ? "processing" : "unavailable"}
-                  emptyLabel={
-                    asset.thumbnailState === "processing" ? t("processingDisplay") : t("unavailableDisplay")
-                  }
+                {isImageAsset(asset) ? (
+                  <PreviewableImage
+                    src={asset.thumbnailUrl ?? null}
+                    previewSrc={asset.previewUrl ?? null}
+                    alt={asset.originalFilename}
+                    className="h-full w-full"
+                    imageClassName="h-full w-full object-contain"
+                    emptyState={asset.thumbnailState === "processing" ? "processing" : "unavailable"}
+                    emptyLabel={
+                      asset.thumbnailState === "processing" ? t("processingDisplay") : t("unavailableDisplay")
+                    }
                     previewFaceOverlays={buildAssetPreviewFaceOverlays(projectId, asset, t)}
-                  onOpenPreview={() => {
-                    void navigateToAssetIndex(offset + assetIndex);
-                  }}
-                />
+                    onOpenPreview={() => {
+                      void navigateToAssetIndex(offset + assetIndex);
+                    }}
+                  />
+                ) : (
+                  <PreviewableVideoPoster
+                    src={asset.thumbnailUrl ?? null}
+                    alt={asset.originalFilename}
+                    emptyLabel={
+                      asset.thumbnailState === "processing"
+                        ? t("videoPosterProcessing")
+                        : t("videoPosterUnavailable")
+                    }
+                    openLabel={t("videoPreviewOpen", { filename: asset.originalFilename })}
+                    onOpenPreview={() => {
+                      void navigateToAssetIndex(offset + assetIndex);
+                    }}
+                  />
+                )}
               </div>
               <p className="truncate text-sm font-medium text-zinc-900" title={asset.originalFilename}>
                 {asset.originalFilename}
               </p>
+              {isImageAsset(asset) ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <span
+                    className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-medium ${getReviewStatusClasses(asset.reviewStatus ?? "resolved")}`}
+                  >
+                    {t(
+                      asset.reviewStatus === "needs_review"
+                        ? "reviewStatusNeedsReview"
+                        : asset.reviewStatus === "blocked"
+                          ? "reviewStatusBlocked"
+                          : "reviewStatusResolved",
+                    )}
+                  </span>
+                  {(asset.unresolvedFaceCount ?? 0) > 0 ? (
+                    <span className="inline-flex rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-700">
+                      {t("reviewUnresolvedCount", { count: asset.unresolvedFaceCount ?? 0 })}
+                    </span>
+                  ) : null}
+                  {(asset.blockedFaceCount ?? 0) > 0 ? (
+                    <span className="inline-flex rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-700">
+                      {t("reviewBlockedCount", { count: asset.blockedFaceCount ?? 0 })}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <span className="inline-flex rounded-md border border-zinc-300 bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700">
+                    {t("videoBadge")}
+                  </span>
+                </div>
+              )}
               <p className="mt-1 text-xs text-zinc-600">{formatBytes(asset.fileSizeBytes)}</p>
               <p className="mt-1 text-xs text-zinc-600">{t("addedOn", { date: formatDate(asset.createdAt, locale) })}</p>
-              <p className="mt-1 text-xs text-zinc-600">
-                {t("linkedConsents", { count: asset.linkedConsentCount ?? 0 })}
-              </p>
+              {isImageAsset(asset) ? (
+                <p className="mt-1 text-xs text-zinc-600">
+                  {t("linkedConsents", { count: asset.linkedConsentCount ?? 0 })}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -605,38 +896,56 @@ export function AssetsList({ projectId }: AssetsListProps) {
         </div>
       </div>
 
-      {selectedAsset ? (
+      {selectedAsset && isPreviewableAsset(selectedAsset) ? (
         <ProjectAssetPreviewLightbox
           key={`${selectedAsset.id}:${selectedAssetGlobalIndex}`}
           projectId={projectId}
-          asset={{
-            id: selectedAsset.id,
-            originalFilename: selectedAsset.originalFilename,
-            previewUrl: selectedAsset.previewUrl ?? selectedAsset.thumbnailUrl ?? null,
-            thumbnailUrl: selectedAsset.thumbnailUrl ?? null,
-            previewState: selectedAsset.previewState,
-            initialPreviewFaceOverlays: buildAssetPreviewFaceOverlays(projectId, selectedAsset, t),
-          }}
+          asset={
+            selectedAsset.assetType === "photo"
+              ? {
+                  id: selectedAsset.id,
+                  assetType: "photo" as const,
+                  originalFilename: selectedAsset.originalFilename,
+                  previewUrl: selectedAsset.previewUrl ?? selectedAsset.thumbnailUrl ?? null,
+                  thumbnailUrl: selectedAsset.thumbnailUrl ?? null,
+                  previewState: selectedAsset.previewState,
+                  initialPreviewFaceOverlays: buildAssetPreviewFaceOverlays(projectId, selectedAsset, t),
+                }
+              : {
+                  id: selectedAsset.id,
+                  assetType: "video" as const,
+                  originalFilename: selectedAsset.originalFilename,
+                  playbackUrl: selectedAsset.playbackUrl ?? null,
+                  previewUrl: selectedAsset.previewUrl ?? selectedAsset.thumbnailUrl ?? null,
+                  thumbnailUrl: selectedAsset.thumbnailUrl ?? null,
+                  previewState: selectedAsset.previewState,
+                }
+          }
+          initialSelectedFaceId={
+            selectedAsset.assetType === "photo"
+              ? getInitialSelectedFaceIdForReview(reviewFilter, selectedAsset)
+              : null
+          }
           open
-          onClose={() => setSelectedAssetGlobalIndex(null)}
+          onClose={handleLightboxClose}
           onPrevious={
             selectedAssetGlobalIndex !== null && selectedAssetGlobalIndex > 0
               ? () => {
-                  void navigateToAssetIndex(selectedAssetGlobalIndex - 1);
+                  void navigateToAdjacentAsset(-1);
                 }
               : null
           }
           onNext={
             selectedAssetGlobalIndex !== null && selectedAssetGlobalIndex < totalCount - 1
               ? () => {
-                  void navigateToAssetIndex(selectedAssetGlobalIndex + 1);
+                  void navigateToAdjacentAsset(1);
                 }
               : null
           }
           canPrevious={selectedAssetGlobalIndex !== null && selectedAssetGlobalIndex > 0}
           canNext={selectedAssetGlobalIndex !== null && selectedAssetGlobalIndex < totalCount - 1}
-          previousLabel={t("previewPrevious")}
-          nextLabel={t("previewNext")}
+          previousLabel={selectedAsset.assetType === "photo" ? t("previewPrevious") : t("videoPreviewPrevious")}
+          nextLabel={selectedAsset.assetType === "photo" ? t("previewNext") : t("videoPreviewNext")}
           closeLabel={t("previewClose")}
           zoomInLabel={t("previewZoomIn")}
           zoomOutLabel={t("previewZoomOut")}
@@ -647,12 +956,14 @@ export function AssetsList({ projectId }: AssetsListProps) {
           metadataLabel={buildAssetPreviewMetadata(selectedAsset, locale, t) || null}
           counterLabel={
             selectedAssetGlobalIndex !== null
-              ? t("previewCounter", { current: selectedAssetGlobalIndex + 1, total: totalCount })
+              ? selectedAsset.assetType === "photo"
+                ? t("previewCounter", { current: selectedAssetGlobalIndex + 1, total: totalCount })
+                : t("videoPreviewCounter", { current: selectedAssetGlobalIndex + 1, total: totalCount })
               : null
           }
           preloadSrcs={[
-            previousAsset?.previewUrl ?? previousAsset?.thumbnailUrl ?? "",
-            nextAsset?.previewUrl ?? nextAsset?.thumbnailUrl ?? "",
+            previousAsset?.previewUrl ?? previousAsset?.thumbnailUrl ?? previousAsset?.playbackUrl ?? "",
+            nextAsset?.previewUrl ?? nextAsset?.thumbnailUrl ?? nextAsset?.playbackUrl ?? "",
           ]}
         />
       ) : null}

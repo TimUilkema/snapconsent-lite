@@ -11,12 +11,12 @@ type FinalizeAssetInput = {
   projectId: string;
   assetId: string;
   consentIds: string[];
-  expectedAssetType?: "photo" | "headshot" | null;
+  expectedAssetType?: "photo" | "headshot" | "video" | null;
 };
 
 export type FinalizedAsset = {
   assetId: string;
-  assetType: "photo" | "headshot";
+  assetType: "photo" | "headshot" | "video";
 };
 
 function normalizeConsentIds(consentIds: string[]) {

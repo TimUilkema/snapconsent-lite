@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 
 import { CreateProjectForm } from "@/components/projects/create-project-form";
@@ -17,6 +18,14 @@ export default async function ProjectsPage() {
   const locale = await getLocale();
   const t = await getTranslations("projects.list");
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
   const tenantId = await resolveTenantId(supabase);
 
   let projects: ProjectRow[] = [];

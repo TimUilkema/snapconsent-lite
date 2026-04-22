@@ -84,7 +84,7 @@ Example scheduler calls:
 curl -X POST "$APP_ORIGIN/api/internal/matching/worker" \
   -H "Authorization: Bearer $MATCHING_WORKER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"batchSize":25}'
+  -d '{"batchSize":10}'
 
 curl -X POST "$APP_ORIGIN/api/internal/matching/reconcile" \
   -H "Authorization: Bearer $MATCHING_RECONCILE_TOKEN" \
@@ -108,7 +108,7 @@ Example scheduler calls:
 curl -X POST "$APP_ORIGIN/api/internal/assets/worker" \
   -H "Authorization: Bearer $ASSET_DERIVATIVE_WORKER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"batchSize":25}'
+  -d '{"batchSize":10}'
 
 curl -X POST "$APP_ORIGIN/api/internal/assets/repair" \
   -H "Authorization: Bearer $ASSET_DERIVATIVE_REPAIR_TOKEN" \

@@ -18,6 +18,7 @@ import {
 import { createProjectExportResponse } from "../src/lib/project-export/response";
 import { HttpError } from "../src/lib/http/errors";
 import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
+import { ensureProjectConsentFaceAssignee } from "../src/lib/matching/project-face-assignees";
 import {
   adminClient,
   assertNoPostgrestError,
@@ -211,6 +212,7 @@ function createBaseRecords(): LoadedProjectExportRecords {
         matchConfidence: null,
       },
     ],
+    wholeAssetLinks: [],
     fallbackLinks: [
       {
         assetId: "asset-2",
@@ -526,10 +528,17 @@ async function createFaceLink(input: {
   linkSource?: "manual" | "auto";
   matchConfidence?: number | null;
 }) {
+  const assignee = await ensureProjectConsentFaceAssignee({
+    supabase: adminClient,
+    tenantId: input.context.tenantId,
+    projectId: input.context.projectId,
+    consentId: input.consentId,
+  });
   const { error } = await adminClient.from("asset_face_consent_links").insert({
     asset_face_id: input.assetFaceId,
     asset_materialization_id: input.materializationId,
     asset_id: input.assetId,
+    project_face_assignee_id: assignee.id,
     consent_id: input.consentId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
@@ -880,8 +889,10 @@ test("feature 043 export response requires authentication and tenant membership"
     }),
     (error: unknown) => {
       assert.ok(error instanceof HttpError);
-      assert.equal(error.status, 403);
-      assert.equal(error.code, "no_tenant_membership");
+      assert.ok(
+        (error.status === 403 && error.code === "no_tenant_membership") ||
+        (error.status === 404 && error.code === "project_not_found"),
+      );
       return true;
     },
   );

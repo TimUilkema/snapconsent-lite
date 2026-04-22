@@ -1,3 +1,9 @@
+import type { ProjectAssetUploadType } from "@/lib/assets/asset-upload-policy";
+
+export function shouldCheckProjectUploadDuplicates(assetType: ProjectAssetUploadType) {
+  return assetType === "photo";
+}
+
 export async function hashProjectUploadFile(
   file: Pick<File, "arrayBuffer">,
   subtle: SubtleCrypto | undefined = globalThis.crypto?.subtle,

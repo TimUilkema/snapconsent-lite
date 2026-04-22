@@ -9,7 +9,7 @@ import {
   queueAssetImageDerivativesForAssetIds,
 } from "@/lib/assets/asset-image-derivatives";
 
-type UploadedPhotoAssetRow = {
+type UploadedDerivativeSourceAssetRow = {
   id: string;
   tenant_id: string;
   project_id: string;
@@ -43,7 +43,7 @@ export async function runAssetImageDerivativeRepair(input?: {
   let query = supabase
     .from("assets")
     .select("id, tenant_id, project_id")
-    .eq("asset_type", "photo")
+    .in("asset_type", ["photo", "video"])
     .eq("status", "uploaded")
     .is("archived_at", null)
     .order("uploaded_at", { ascending: false, nullsFirst: false })
@@ -62,7 +62,7 @@ export async function runAssetImageDerivativeRepair(input?: {
     throw error;
   }
 
-  const assetRows = (data ?? []) as UploadedPhotoAssetRow[];
+  const assetRows = (data ?? []) as UploadedDerivativeSourceAssetRow[];
   const groupedAssetIds = new Map<string, { tenantId: string; projectId: string; assetIds: string[] }>();
 
   assetRows.forEach((asset) => {

@@ -40,6 +40,17 @@ export type {
   PhotoConsentAssignment,
   RestoreHiddenAssetFaceResult,
 } from "@/lib/matching/photo-face-linking";
+export {
+  manualLinkWholeAssetToConsent,
+  manualLinkWholeAssetToRecurringProjectParticipant,
+  manualUnlinkWholeAssetAssignment,
+  manualUnlinkWholeAssetFromConsent,
+  manualUnlinkWholeAssetFromRecurringProjectParticipant,
+} from "@/lib/matching/whole-asset-linking";
+export type {
+  ManualWholeAssetLinkResult,
+  ManualWholeAssetUnlinkResult,
+} from "@/lib/matching/whole-asset-linking";
 import { HttpError } from "@/lib/http/errors";
 import {
   manualLinkPhotoToConsent,

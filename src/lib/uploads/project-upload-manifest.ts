@@ -1,3 +1,4 @@
+import { resolveProjectAssetUploadType } from "@/lib/assets/asset-upload-policy";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
 
 import {
@@ -41,8 +42,10 @@ export function fingerprintMatches(
 
 export function createProjectUploadItem(file: Pick<File, "name" | "size" | "lastModified" | "type">): ProjectUploadItem {
   const timestamp = nowIso();
+  const assetType = resolveProjectAssetUploadType(file.type, file.name) ?? "photo";
   return {
     clientItemId: crypto.randomUUID(),
+    assetType,
     idempotencyKey: createIdempotencyKey(),
     originalFilename: file.name,
     contentType: file.type || "application/octet-stream",

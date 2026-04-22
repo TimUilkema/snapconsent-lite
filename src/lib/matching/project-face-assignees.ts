@@ -156,6 +156,20 @@ async function loadSingleProjectProfileParticipant(
   return rows[0] ?? null;
 }
 
+export async function loadProjectProfileParticipantById(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  participantId: string;
+}) {
+  return loadSingleProjectProfileParticipant(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.participantId,
+  );
+}
+
 export async function loadProjectRecurringConsentStateByParticipantIds(input: {
   supabase: SupabaseClient;
   tenantId: string;

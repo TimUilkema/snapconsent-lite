@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 
 import { formatDate } from "@/lib/i18n/format";
@@ -19,6 +20,11 @@ export default async function DashboardPage() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
   const tenantId = await resolveTenantId(supabase);
 
   let recentProjects: ProjectRow[] = [];

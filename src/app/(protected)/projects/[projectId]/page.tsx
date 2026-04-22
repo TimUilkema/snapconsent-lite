@@ -140,12 +140,12 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const tenantId = await resolveTenantId(supabase);
 
   if (!user) {
     redirect("/login");
   }
 
+  const tenantId = await resolveTenantId(supabase);
   if (!tenantId) {
     redirect("/projects");
   }

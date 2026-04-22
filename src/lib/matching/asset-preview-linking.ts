@@ -15,13 +15,17 @@ import {
 import {
   listLinkedFaceOverlaysForAssetIds,
   loadCurrentBlockedFacesForAsset,
+  loadCurrentBlockedFacesForAssets,
   loadCurrentHiddenFacesForAsset,
+  loadCurrentHiddenFacesForAssets,
 } from "@/lib/matching/photo-face-linking";
 import {
   loadProjectFaceAssigneeDisplayMap,
   loadProjectRecurringConsentStateByParticipantIds,
+  type ProjectFaceAssigneeDisplaySummary,
 } from "@/lib/matching/project-face-assignees";
 import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
+import { loadCurrentWholeAssetLinksForAsset } from "@/lib/matching/whole-asset-linking";
 import {
   getStructuredFieldsInOrder,
   getStructuredOptionLabel,
@@ -204,6 +208,31 @@ type AssetPreviewFaceCandidate = {
   projectConsentState: "missing" | "pending" | "signed" | "revoked" | null;
 };
 
+type AssetPreviewWholeAssetLink = AssetPreviewCurrentLink & {
+  linkMode: "whole_asset";
+};
+
+type AssetPreviewWholeAssetCandidate = {
+  candidateKey: string;
+  identityKind: CandidateIdentityKind;
+  assignable: boolean;
+  assignmentBlockedReason: null | "project_consent_missing" | "project_consent_pending" | "project_consent_revoked";
+  fullName: string | null;
+  email: string | null;
+  headshotThumbnailUrl: string | null;
+  currentExactFaceLink: {
+    assetFaceId: string;
+    faceRank: number | null;
+  } | null;
+  currentWholeAssetLink: {
+    projectFaceAssigneeId: string;
+  } | null;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  projectConsentState: "missing" | "pending" | "signed" | "revoked" | null;
+};
+
 function buildAssigneeCandidateKey(input: {
   identityKind: CandidateIdentityKind;
   consentId?: string | null;
@@ -305,6 +334,32 @@ async function requirePhotoAsset(input: MatchingScopeInput) {
 
   const asset = (data as AssetRow | null) ?? null;
   if (!asset || asset.asset_type !== "photo" || asset.status !== "uploaded" || asset.archived_at) {
+    throw new HttpError(404, "asset_not_found", "Asset not found.");
+  }
+
+  return asset;
+}
+
+async function requirePreviewableAsset(input: MatchingScopeInput) {
+  const { data, error } = await input.supabase
+    .from("assets")
+    .select("id, status, asset_type, archived_at")
+    .eq("tenant_id", input.tenantId)
+    .eq("project_id", input.projectId)
+    .eq("id", input.assetId)
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, "asset_lookup_failed", "Unable to load asset preview details.");
+  }
+
+  const asset = (data as AssetRow | null) ?? null;
+  if (
+    !asset ||
+    (asset.asset_type !== "photo" && asset.asset_type !== "video") ||
+    asset.status !== "uploaded" ||
+    asset.archived_at
+  ) {
     throw new HttpError(404, "asset_not_found", "Asset not found.");
   }
 
@@ -665,7 +720,9 @@ export type AssetPreviewFacesResponse = {
   materializationId: string | null;
   detectedFaceCount: number;
   activeLinkedFaceCount: number;
+  wholeAssetLinkCount: number;
   hiddenFaceCount: number;
+  wholeAssetLinks: AssetPreviewWholeAssetLink[];
   faces: Array<{
     assetFaceId: string;
     faceRank: number;
@@ -679,6 +736,12 @@ export type AssetPreviewFacesResponse = {
     blockedReason: "no_consent" | null;
     currentLink: AssetPreviewCurrentLink | null;
   }>;
+};
+
+export type AssetPreviewWholeAssetLinksResponse = {
+  assetId: string;
+  wholeAssetLinkCount: number;
+  wholeAssetLinks: AssetPreviewWholeAssetLink[];
 };
 
 export type AssetPreviewLinkCandidatesResponse = {
@@ -701,6 +764,203 @@ export type AssetPreviewFaceCandidatesResponse = {
   assetFaceId: string;
   candidates: AssetPreviewFaceCandidate[];
 };
+
+export type AssetPreviewWholeAssetCandidatesResponse = {
+  assetId: string;
+  candidates: AssetPreviewWholeAssetCandidate[];
+};
+
+export type AssetReviewStatus = "needs_review" | "blocked" | "resolved";
+
+export type AssetReviewSummary = {
+  assetId: string;
+  reviewStatus: AssetReviewStatus;
+  unresolvedFaceCount: number;
+  blockedFaceCount: number;
+  firstNeedsReviewFaceId: string | null;
+};
+
+export function deriveAssetReviewSummaryForFaces(input: {
+  assetId: string;
+  faceIdsInRankOrder: string[];
+  hiddenFaceIds: Set<string>;
+  blockedFaceIds: Set<string>;
+  linkedFaceIds: Set<string>;
+}): AssetReviewSummary {
+  let unresolvedFaceCount = 0;
+  let blockedFaceCount = 0;
+  let firstNeedsReviewFaceId: string | null = null;
+
+  input.faceIdsInRankOrder.forEach((faceId) => {
+    if (input.hiddenFaceIds.has(faceId)) {
+      return;
+    }
+
+    if (input.blockedFaceIds.has(faceId)) {
+      blockedFaceCount += 1;
+      return;
+    }
+
+    if (input.linkedFaceIds.has(faceId)) {
+      return;
+    }
+
+    unresolvedFaceCount += 1;
+    if (!firstNeedsReviewFaceId) {
+      firstNeedsReviewFaceId = faceId;
+    }
+  });
+
+  return {
+    assetId: input.assetId,
+    reviewStatus: unresolvedFaceCount > 0 ? "needs_review" : blockedFaceCount > 0 ? "blocked" : "resolved",
+    unresolvedFaceCount,
+    blockedFaceCount,
+    firstNeedsReviewFaceId,
+  };
+}
+
+type AssetFaceMaterializationSummaryRow = {
+  id: string;
+  asset_id: string;
+  face_count: number;
+  materialized_at: string;
+};
+
+type AssetFaceMaterializationFaceSummaryRow = {
+  id: string;
+  asset_id: string;
+  materialization_id: string;
+  face_rank: number;
+  face_source: "detector" | "manual";
+};
+
+export async function getAssetReviewSummaries(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  assetIds: string[];
+}): Promise<Map<string, AssetReviewSummary>> {
+  const uniqueAssetIds = Array.from(new Set(input.assetIds));
+  const summaryByAssetId = new Map<string, AssetReviewSummary>(
+    uniqueAssetIds.map((assetId) => [
+      assetId,
+      {
+        assetId,
+        reviewStatus: "resolved",
+        unresolvedFaceCount: 0,
+        blockedFaceCount: 0,
+        firstNeedsReviewFaceId: null,
+      },
+    ]),
+  );
+
+  if (uniqueAssetIds.length === 0) {
+    return summaryByAssetId;
+  }
+
+  const materializationRows = await runChunkedRead(uniqueAssetIds, async (assetIdChunk) => {
+    const { data, error } = await input.supabase
+      .from("asset_face_materializations")
+      .select("id, asset_id, face_count, materialized_at")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("materializer_version", getAutoMatchMaterializerVersion())
+      .in("asset_id", assetIdChunk)
+      .order("materialized_at", { ascending: false });
+
+    if (error) {
+      throw new HttpError(500, "asset_review_summary_lookup_failed", "Unable to load asset face materializations.");
+    }
+
+    return (data as AssetFaceMaterializationSummaryRow[] | null) ?? [];
+  });
+
+  const currentMaterializationByAssetId = new Map<string, AssetFaceMaterializationSummaryRow>();
+  materializationRows.forEach((row) => {
+    if (!currentMaterializationByAssetId.has(row.asset_id)) {
+      currentMaterializationByAssetId.set(row.asset_id, row);
+    }
+  });
+
+  const currentMaterializationIdByAssetId = new Map(
+    Array.from(currentMaterializationByAssetId.entries()).map(([assetId, row]) => [assetId, row.id] as const),
+  );
+  const materializationIds = Array.from(currentMaterializationIdByAssetId.values());
+
+  const faceRows =
+    materializationIds.length > 0
+      ? await runChunkedRead(materializationIds, async (materializationIdChunk) => {
+          const { data, error } = await input.supabase
+            .from("asset_face_materialization_faces")
+            .select("id, asset_id, materialization_id, face_rank, face_source")
+            .eq("tenant_id", input.tenantId)
+            .eq("project_id", input.projectId)
+            .in("materialization_id", materializationIdChunk)
+            .order("face_rank", { ascending: true });
+
+          if (error) {
+            throw new HttpError(500, "asset_review_summary_lookup_failed", "Unable to load asset face review state.");
+          }
+
+          return (data as AssetFaceMaterializationFaceSummaryRow[] | null) ?? [];
+        })
+      : [];
+
+  const [hiddenFaces, blockedFaces, overlays] = await Promise.all([
+    loadCurrentHiddenFacesForAssets(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      uniqueAssetIds,
+      currentMaterializationIdByAssetId,
+    ),
+    loadCurrentBlockedFacesForAssets(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      uniqueAssetIds,
+      currentMaterializationIdByAssetId,
+    ),
+    listLinkedFaceOverlaysForAssetIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetIds: uniqueAssetIds,
+    }),
+  ]);
+
+  const hiddenFaceIds = new Set(hiddenFaces.map((row) => row.asset_face_id));
+  const blockedFaceIds = new Set(blockedFaces.map((row) => row.asset_face_id));
+  const linkedFaceIds = new Set(overlays.map((overlay) => overlay.assetFaceId));
+  const facesByAssetId = new Map<string, AssetFaceMaterializationFaceSummaryRow[]>();
+
+  faceRows.forEach((row) => {
+    const currentFaces = facesByAssetId.get(row.asset_id) ?? [];
+    currentFaces.push(row);
+    facesByAssetId.set(row.asset_id, currentFaces);
+  });
+
+  uniqueAssetIds.forEach((assetId) => {
+    const faceIdsInRankOrder = (facesByAssetId.get(assetId) ?? [])
+      .slice()
+      .sort((left, right) => left.face_rank - right.face_rank)
+      .map((face) => face.id);
+
+    summaryByAssetId.set(
+      assetId,
+      deriveAssetReviewSummaryForFaces({
+        assetId,
+        faceIdsInRankOrder,
+        hiddenFaceIds,
+        blockedFaceIds,
+        linkedFaceIds,
+      }),
+    );
+  });
+
+  return summaryByAssetId;
+}
 
 export async function getAssetPreviewLinkedFaces(
   input: MatchingScopeInput,
@@ -726,26 +986,168 @@ export async function getAssetPreviewLinkedFaces(
   };
 }
 
+function buildAssetPreviewCurrentLink(input: {
+  projectId: string;
+  identityKind: "project_consent" | "project_recurring_consent";
+  projectFaceAssigneeId: string;
+  consentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  recurringProfileConsentId: string | null;
+  linkSource: "manual" | "auto";
+  matchConfidence: number | null;
+  assigneeDisplay: ProjectFaceAssigneeDisplaySummary | null;
+  consentSummaryMap: Map<string, ConsentRow>;
+  headshotImageMap: Awaited<ReturnType<typeof loadHeadshotThumbnailMap>>;
+  recurringHeadshotImageMap: Awaited<ReturnType<typeof loadRecurringHeadshotThumbnailMap>>;
+}) {
+  const consent =
+    input.consentId ? input.consentSummaryMap.get(input.consentId) ?? null : null;
+  const subject = firstRelation(consent?.subjects);
+
+  return {
+    projectFaceAssigneeId: input.projectFaceAssigneeId,
+    identityKind: input.identityKind,
+    consentId: input.consentId,
+    projectProfileParticipantId: input.projectProfileParticipantId,
+    profileId: input.profileId,
+    recurringProfileConsentId: input.recurringProfileConsentId,
+    linkSource: input.linkSource,
+    matchConfidence: input.matchConfidence,
+    displayName:
+      input.assigneeDisplay?.fullName ?? subject?.full_name?.trim() ?? input.assigneeDisplay?.email ?? null,
+    email: input.assigneeDisplay?.email ?? subject?.email?.trim() ?? null,
+    ownerState: input.assigneeDisplay?.status ?? "active",
+    consent:
+      input.identityKind === "project_consent" && input.consentId
+        ? {
+            consentId: input.consentId,
+            fullName: subject?.full_name?.trim() ?? null,
+            email: subject?.email?.trim() ?? null,
+            status: consent?.revoked_at ? "revoked" : "active",
+            signedAt: consent?.signed_at ?? null,
+            consentVersion: consent?.consent_version ?? null,
+            faceMatchOptIn:
+              typeof consent?.face_match_opt_in === "boolean" ? consent.face_match_opt_in : null,
+            structuredSnapshotSummary: summarizeStructuredSnapshot(consent?.structured_fields_snapshot ?? null),
+            headshotThumbnailUrl: input.headshotImageMap.thumbnailByConsentId.get(input.consentId) ?? null,
+            headshotPreviewUrl: input.headshotImageMap.previewByConsentId.get(input.consentId) ?? null,
+            goToConsentHref: buildConsentHref(input.projectId, input.consentId),
+          }
+        : null,
+    recurring:
+      input.identityKind === "project_recurring_consent" && input.projectProfileParticipantId
+        ? {
+            projectProfileParticipantId: input.projectProfileParticipantId,
+            profileId: input.profileId,
+            recurringProfileConsentId: input.recurringProfileConsentId,
+            projectConsentState: input.assigneeDisplay?.status === "revoked" ? "revoked" : "signed",
+            signedAt: input.assigneeDisplay?.signedAt ?? null,
+            consentVersion: input.assigneeDisplay?.consentVersion ?? null,
+            faceMatchOptIn: input.assigneeDisplay?.faceMatchOptIn ?? null,
+            headshotThumbnailUrl:
+              input.profileId ? input.recurringHeadshotImageMap.thumbnailByProfileId.get(input.profileId) ?? null : null,
+            headshotPreviewUrl:
+              input.profileId ? input.recurringHeadshotImageMap.previewByProfileId.get(input.profileId) ?? null : null,
+          }
+        : null,
+  } satisfies AssetPreviewCurrentLink;
+}
+
+async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
+  const rows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: input.supabase,
+    tenantId: input.tenantId,
+    projectId: input.projectId,
+    assetId: input.assetId,
+  });
+  const consentIds = Array.from(
+    new Set(rows.map((link) => link.consent_id).filter((value): value is string => Boolean(value))),
+  );
+  const recurringProfileIds = Array.from(
+    new Set(rows.map((link) => link.profile_id).filter((value): value is string => Boolean(value))),
+  );
+  const [assigneeDisplayMap, consentSummaryMap, headshotImageMap, recurringHeadshotImageMap] = await Promise.all([
+    loadProjectFaceAssigneeDisplayMap({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assigneeIds: rows.map((link) => link.project_face_assignee_id),
+    }),
+    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, consentIds),
+    loadHeadshotThumbnailMap(input, consentIds),
+    loadRecurringHeadshotThumbnailMap(input, recurringProfileIds),
+  ]);
+  const wholeAssetLinks = rows
+    .map((link) => {
+      const assigneeDisplay = assigneeDisplayMap.get(link.project_face_assignee_id) ?? null;
+      return {
+        ...buildAssetPreviewCurrentLink({
+          projectId: input.projectId,
+          identityKind: link.identity_kind,
+          projectFaceAssigneeId: link.project_face_assignee_id,
+          consentId: link.consent_id,
+          projectProfileParticipantId: link.project_profile_participant_id,
+          profileId: link.profile_id,
+          recurringProfileConsentId: link.recurring_profile_consent_id,
+          linkSource: "manual",
+          matchConfidence: null,
+          assigneeDisplay,
+          consentSummaryMap,
+          headshotImageMap,
+          recurringHeadshotImageMap,
+        }),
+        linkMode: "whole_asset" as const,
+      };
+    })
+    .sort((left, right) => left.projectFaceAssigneeId.localeCompare(right.projectFaceAssigneeId));
+
+  return {
+    rows,
+    response: {
+      assetId: input.assetId,
+      wholeAssetLinkCount: wholeAssetLinks.length,
+      wholeAssetLinks,
+    } satisfies AssetPreviewWholeAssetLinksResponse,
+  };
+}
+
+export async function getAssetPreviewWholeAssetLinks(
+  input: MatchingScopeInput,
+): Promise<AssetPreviewWholeAssetLinksResponse> {
+  await requirePreviewableAsset(input);
+  const wholeAssetData = await loadAssetPreviewWholeAssetData(input);
+  return wholeAssetData.response;
+}
+
 export async function getAssetPreviewFaces(
   input: MatchingScopeInput,
 ): Promise<AssetPreviewFacesResponse> {
   await requirePhotoAsset(input);
 
-  const current = await loadCurrentAssetFaceMaterialization(
-    input.supabase,
-    input.tenantId,
-    input.projectId,
-    input.assetId,
-    getAutoMatchMaterializerVersion(),
-    { includeFaces: true },
-  );
+  const [current, wholeAssetData] = await Promise.all([
+    loadCurrentAssetFaceMaterialization(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      input.assetId,
+      getAutoMatchMaterializerVersion(),
+      { includeFaces: true },
+    ),
+    loadAssetPreviewWholeAssetData(input),
+  ]);
+  const currentWholeAssetLinks = wholeAssetData.rows;
+  const previewWholeAssetLinks = wholeAssetData.response.wholeAssetLinks;
+
   if (!current) {
     return {
       assetId: input.assetId,
       materializationId: null,
       detectedFaceCount: 0,
       activeLinkedFaceCount: 0,
+      wholeAssetLinkCount: wholeAssetData.response.wholeAssetLinkCount,
       hiddenFaceCount: 0,
+      wholeAssetLinks: previewWholeAssetLinks,
       faces: [],
     };
   }
@@ -773,30 +1175,43 @@ export async function getAssetPreviewFaces(
   const exactLinkedFaces = overlays.filter((overlay) => overlay.assetId === input.assetId);
   const hiddenFaceById = new Map(hiddenFaces.map((row) => [row.asset_face_id, row] as const));
   const blockedFaceById = new Map(blockedFaces.map((row) => [row.asset_face_id, row] as const));
-  const consentIds = Array.from(
-    new Set(exactLinkedFaces.map((overlay) => overlay.consentId).filter((value): value is string => Boolean(value))),
+  const exactConsentIds = Array.from(
+    new Set(
+      [
+        ...exactLinkedFaces.map((overlay) => overlay.consentId),
+        ...currentWholeAssetLinks.map((link) => link.consent_id),
+      ].filter((value): value is string => Boolean(value)),
+    ),
   );
-  const recurringProfileIds = Array.from(
-    new Set(exactLinkedFaces.map((overlay) => overlay.profileId).filter((value): value is string => Boolean(value))),
+  const exactRecurringProfileIds = Array.from(
+    new Set(
+      [
+        ...exactLinkedFaces.map((overlay) => overlay.profileId),
+        ...currentWholeAssetLinks.map((link) => link.profile_id),
+      ].filter((value): value is string => Boolean(value)),
+    ),
   );
   const faceIds = Array.from(new Set(current.faces.map((face) => face.id)));
   const [
-    assigneeDisplayMap,
-    consentSummaryMap,
+    exactAssigneeDisplayMap,
+    exactConsentSummaryMap,
     faceDerivatives,
-    headshotImageMap,
-    recurringHeadshotImageMap,
+    exactHeadshotImageMap,
+    exactRecurringHeadshotImageMap,
   ] = await Promise.all([
     loadProjectFaceAssigneeDisplayMap({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
-      assigneeIds: exactLinkedFaces.map((overlay) => overlay.projectFaceAssigneeId),
+      assigneeIds: [
+        ...exactLinkedFaces.map((overlay) => overlay.projectFaceAssigneeId),
+        ...currentWholeAssetLinks.map((link) => link.project_face_assignee_id),
+      ],
     }),
-    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, consentIds),
+    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, exactConsentIds),
     loadFaceImageDerivativesForFaceIds(input.supabase, input.tenantId, input.projectId, faceIds),
-    loadHeadshotThumbnailMap(input, consentIds),
-    loadRecurringHeadshotThumbnailMap(input, recurringProfileIds),
+    loadHeadshotThumbnailMap(input, exactConsentIds),
+    loadRecurringHeadshotThumbnailMap(input, exactRecurringProfileIds),
   ]);
   const signedFaceDerivativeMap = await signFaceDerivativeUrls(Array.from(faceDerivatives.values()));
   const overlayByFaceId = new Map(exactLinkedFaces.map((overlay) => [overlay.assetFaceId, overlay] as const));
@@ -806,7 +1221,9 @@ export async function getAssetPreviewFaces(
     materializationId: current.materialization.id,
     detectedFaceCount: current.materialization.face_count,
     activeLinkedFaceCount: exactLinkedFaces.length,
+    wholeAssetLinkCount: wholeAssetData.response.wholeAssetLinkCount,
     hiddenFaceCount: hiddenFaces.length,
+    wholeAssetLinks: previewWholeAssetLinks,
     faces: current.faces
       .slice()
       .sort((left, right) => left.face_rank - right.face_rank)
@@ -814,10 +1231,7 @@ export async function getAssetPreviewFaces(
         const hiddenFace = hiddenFaceById.get(face.id) ?? null;
         const blockedFace = hiddenFace ? null : blockedFaceById.get(face.id) ?? null;
         const overlay = hiddenFace ? null : overlayByFaceId.get(face.id) ?? null;
-        const assigneeDisplay = overlay ? assigneeDisplayMap.get(overlay.projectFaceAssigneeId) ?? null : null;
-        const consent =
-          overlay?.consentId ? consentSummaryMap.get(overlay.consentId) ?? null : null;
-        const subject = firstRelation(consent?.subjects);
+        const assigneeDisplay = overlay ? exactAssigneeDisplayMap.get(overlay.projectFaceAssigneeId) ?? null : null;
         const signedFaceUrl = signedFaceDerivativeMap.get(face.id) ?? null;
 
         return {
@@ -842,59 +1256,21 @@ export async function getAssetPreviewFaces(
           blockedAt: blockedFace?.blocked_at ?? null,
           blockedReason: blockedFace?.reason ?? null,
           currentLink: overlay
-            ? {
-                projectFaceAssigneeId: overlay.projectFaceAssigneeId,
+            ? buildAssetPreviewCurrentLink({
+                projectId: input.projectId,
                 identityKind: overlay.identityKind,
+                projectFaceAssigneeId: overlay.projectFaceAssigneeId,
                 consentId: overlay.consentId,
                 projectProfileParticipantId: overlay.projectProfileParticipantId,
                 profileId: overlay.profileId,
                 recurringProfileConsentId: overlay.recurringProfileConsentId,
                 linkSource: overlay.linkSource,
                 matchConfidence: overlay.matchConfidence,
-                displayName:
-                  assigneeDisplay?.fullName ?? subject?.full_name?.trim() ?? assigneeDisplay?.email ?? null,
-                email: assigneeDisplay?.email ?? subject?.email?.trim() ?? null,
-                ownerState: assigneeDisplay?.status ?? "active",
-                consent:
-                  overlay.identityKind === "project_consent" && overlay.consentId
-                    ? {
-                        consentId: overlay.consentId,
-                        fullName: subject?.full_name?.trim() ?? null,
-                        email: subject?.email?.trim() ?? null,
-                        status: consent?.revoked_at ? "revoked" : "active",
-                        signedAt: consent?.signed_at ?? null,
-                        consentVersion: consent?.consent_version ?? null,
-                        faceMatchOptIn:
-                          typeof consent?.face_match_opt_in === "boolean" ? consent.face_match_opt_in : null,
-                        structuredSnapshotSummary: summarizeStructuredSnapshot(
-                          consent?.structured_fields_snapshot ?? null,
-                        ),
-                        headshotThumbnailUrl: headshotImageMap.thumbnailByConsentId.get(overlay.consentId) ?? null,
-                        headshotPreviewUrl: headshotImageMap.previewByConsentId.get(overlay.consentId) ?? null,
-                        goToConsentHref: buildConsentHref(input.projectId, overlay.consentId),
-                      }
-                    : null,
-                recurring:
-                  overlay.identityKind === "project_recurring_consent" && overlay.projectProfileParticipantId
-                    ? {
-                        projectProfileParticipantId: overlay.projectProfileParticipantId,
-                        profileId: overlay.profileId,
-                        recurringProfileConsentId: overlay.recurringProfileConsentId,
-                        projectConsentState: assigneeDisplay?.status === "revoked" ? "revoked" : "signed",
-                        signedAt: assigneeDisplay?.signedAt ?? null,
-                        consentVersion: assigneeDisplay?.consentVersion ?? null,
-                        faceMatchOptIn: assigneeDisplay?.faceMatchOptIn ?? null,
-                        headshotThumbnailUrl:
-                          overlay.profileId
-                            ? recurringHeadshotImageMap.thumbnailByProfileId.get(overlay.profileId) ?? null
-                            : null,
-                        headshotPreviewUrl:
-                          overlay.profileId
-                            ? recurringHeadshotImageMap.previewByProfileId.get(overlay.profileId) ?? null
-                            : null,
-                      }
-                    : null,
-              }
+                assigneeDisplay,
+                consentSummaryMap: exactConsentSummaryMap,
+                headshotImageMap: exactHeadshotImageMap,
+                recurringHeadshotImageMap: exactRecurringHeadshotImageMap,
+              })
             : null,
         };
       }),
@@ -1447,6 +1823,192 @@ export async function getAssetPreviewFaceCandidates(
 
         return left.candidateKey.localeCompare(right.candidateKey);
       }),
+  };
+}
+
+export async function getAssetPreviewWholeAssetCandidates(
+  input: MatchingScopeInput,
+): Promise<AssetPreviewWholeAssetCandidatesResponse> {
+  await requirePreviewableAsset(input);
+
+  const [exactLinkedFaces, currentWholeAssetLinks, projectRecurringParticipants] = await Promise.all([
+    listLinkedFaceOverlaysForAssetIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetIds: [input.assetId],
+    }),
+    loadCurrentWholeAssetLinksForAsset({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+    }),
+    loadProjectRecurringParticipants({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+    }),
+  ]);
+
+  const currentExactFaceLinkByCandidateKey = new Map<string, { assetFaceId: string; faceRank: number | null }>();
+  exactLinkedFaces.forEach((overlay) => {
+    if (overlay.assetId !== input.assetId) {
+      return;
+    }
+
+    if (overlay.identityKind === "project_consent" && overlay.consentId) {
+      currentExactFaceLinkByCandidateKey.set(
+        buildAssigneeCandidateKey({
+          identityKind: "project_consent",
+          consentId: overlay.consentId,
+        }),
+        { assetFaceId: overlay.assetFaceId, faceRank: overlay.faceRank },
+      );
+      return;
+    }
+
+    if (overlay.identityKind === "project_recurring_consent" && overlay.projectProfileParticipantId) {
+      currentExactFaceLinkByCandidateKey.set(
+        buildAssigneeCandidateKey({
+          identityKind: "recurring_profile_match",
+          projectProfileParticipantId: overlay.projectProfileParticipantId,
+        }),
+        { assetFaceId: overlay.assetFaceId, faceRank: overlay.faceRank },
+      );
+    }
+  });
+
+  const currentWholeAssetLinkByCandidateKey = new Map<string, { projectFaceAssigneeId: string }>();
+  currentWholeAssetLinks.forEach((link) => {
+    const candidateKey =
+      link.identity_kind === "project_consent" && link.consent_id
+        ? buildAssigneeCandidateKey({
+            identityKind: "project_consent",
+            consentId: link.consent_id,
+          })
+        : link.project_profile_participant_id
+          ? buildAssigneeCandidateKey({
+              identityKind: "recurring_profile_match",
+              projectProfileParticipantId: link.project_profile_participant_id,
+            })
+          : null;
+
+    if (candidateKey) {
+      currentWholeAssetLinkByCandidateKey.set(candidateKey, {
+        projectFaceAssigneeId: link.project_face_assignee_id,
+      });
+    }
+  });
+
+  const [recurringConsentStateByParticipantId, consentRowsResponse] = await Promise.all([
+    loadProjectRecurringConsentStateByParticipantIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      participantIds: projectRecurringParticipants.map((row) => row.id),
+    }),
+    input.supabase
+      .from("consents")
+      .select("id, signed_at, revoked_at, subjects(email, full_name)")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .not("signed_at", "is", null)
+      .is("revoked_at", null)
+      .order("signed_at", { ascending: false })
+      .order("id", { ascending: true }),
+  ]);
+
+  if (consentRowsResponse.error) {
+    throw new HttpError(500, "preview_candidate_lookup_failed", "Unable to load preview whole-asset candidates.");
+  }
+
+  const activeConsents = ((consentRowsResponse.data ?? []) as Array<{
+    id: string;
+    signed_at: string | null;
+    revoked_at: string | null;
+    subjects: ConsentRelation | ConsentRelation[] | null;
+  }>).filter((row) => Boolean(row.signed_at) && !row.revoked_at);
+  const recurringProfileSummaryMap = await loadRecurringProfileSummaryMap(
+    input.supabase,
+    input.tenantId,
+    projectRecurringParticipants.map((row) => row.recurring_profile_id),
+  );
+  const headshotImageMap = await loadHeadshotThumbnailMap(
+    input,
+    activeConsents.map((row) => row.id),
+  );
+  const recurringHeadshotImageMap = await loadRecurringHeadshotThumbnailMap(
+    input,
+    projectRecurringParticipants.map((row) => row.recurring_profile_id),
+  );
+
+  const candidates: AssetPreviewWholeAssetCandidate[] = [
+    ...activeConsents.map((consent) => {
+      const subject = firstRelation(consent.subjects);
+      const candidateKey = buildAssigneeCandidateKey({
+        identityKind: "project_consent",
+        consentId: consent.id,
+      });
+
+      return {
+        candidateKey,
+        identityKind: "project_consent" as const,
+        assignable: true,
+        assignmentBlockedReason: null,
+        fullName: subject?.full_name?.trim() ?? null,
+        email: subject?.email?.trim() ?? null,
+        headshotThumbnailUrl: headshotImageMap.thumbnailByConsentId.get(consent.id) ?? null,
+        currentExactFaceLink: currentExactFaceLinkByCandidateKey.get(candidateKey) ?? null,
+        currentWholeAssetLink: currentWholeAssetLinkByCandidateKey.get(candidateKey) ?? null,
+        consentId: consent.id,
+        projectProfileParticipantId: null,
+        profileId: null,
+        projectConsentState: null,
+      };
+    }),
+    ...projectRecurringParticipants.map((participant) => {
+      const candidateKey = buildAssigneeCandidateKey({
+        identityKind: "recurring_profile_match",
+        projectProfileParticipantId: participant.id,
+      });
+      const consentState = recurringConsentStateByParticipantId.get(participant.id) ?? null;
+      const profile = recurringProfileSummaryMap.get(participant.recurring_profile_id) ?? null;
+
+      return {
+        candidateKey,
+        identityKind: "recurring_profile_match" as const,
+        assignable:
+          consentState?.state === "signed" &&
+          !currentExactFaceLinkByCandidateKey.has(candidateKey),
+        assignmentBlockedReason: consentState ? toRecurringBlockedReason(consentState.state) : "project_consent_missing",
+        fullName: profile?.full_name?.trim() ?? null,
+        email: profile?.email?.trim() ?? null,
+        headshotThumbnailUrl:
+          recurringHeadshotImageMap.thumbnailByProfileId.get(participant.recurring_profile_id) ?? null,
+        currentExactFaceLink: currentExactFaceLinkByCandidateKey.get(candidateKey) ?? null,
+        currentWholeAssetLink: currentWholeAssetLinkByCandidateKey.get(candidateKey) ?? null,
+        consentId: null,
+        projectProfileParticipantId: participant.id,
+        profileId: participant.recurring_profile_id,
+        projectConsentState: consentState?.state ?? "missing",
+      };
+    }),
+  ];
+
+  return {
+    assetId: input.assetId,
+    candidates: candidates.sort((left, right) => {
+      const leftLinked = left.currentWholeAssetLink ? 0 : 1;
+      const rightLinked = right.currentWholeAssetLink ? 0 : 1;
+      if (leftLinked !== rightLinked) {
+        return leftLinked - rightLinked;
+      }
+
+      const leftName = left.fullName ?? left.email ?? "";
+      const rightName = right.fullName ?? right.email ?? "";
+      return leftName.localeCompare(rightName);
+    }),
   };
 }
 

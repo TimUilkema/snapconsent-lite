@@ -24,6 +24,7 @@ import {
   getAutoMatchMaterializerVersion,
 } from "../src/lib/matching/auto-match-config";
 import { ensureAssetFaceMaterialization } from "../src/lib/matching/face-materialization";
+import { manualLinkWholeAssetToConsent } from "../src/lib/matching/whole-asset-linking";
 
 type ProjectContext = {
   tenantId: string;
@@ -855,4 +856,49 @@ test("preview faces expose blocked state while keeping the blocked face visible"
   assert.ok(blockedFace?.blockedAt);
   assert.equal(blockedFace?.currentLink, null);
   assert.equal(unlinkedFace?.faceState, "unlinked");
+});
+
+test("whole-asset links can coexist with blocked faces without clearing the blocked state", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, { assetType: "photo" });
+  const photo = await materializePhotoAsset(admin, context, photoAssetId, [{ faceRank: 0 }]);
+  const blockedFaceId = photo.faces[0]?.id ?? null;
+  assert.ok(blockedFaceId);
+  const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+  await blockAssetFace({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    assetFaceId: blockedFaceId,
+    actorUserId: context.userId,
+  });
+
+  const linkResult = await manualLinkWholeAssetToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    consentId: consent.consentId,
+    actorUserId: context.userId,
+  });
+  assert.equal(linkResult.kind, "linked");
+
+  const preview = await getAssetPreviewFaces({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    requestHostHeader: "localhost",
+  });
+
+  assert.equal(preview.wholeAssetLinkCount, 1);
+  assert.equal(preview.wholeAssetLinks.length, 1);
+  assert.equal(preview.wholeAssetLinks[0]?.consent?.consentId, consent.consentId);
+
+  const blockedFace = preview.faces.find((face) => face.assetFaceId === blockedFaceId) ?? null;
+  assert.ok(blockedFace);
+  assert.equal(blockedFace?.faceState, "blocked");
+  assert.equal(blockedFace?.currentLink, null);
 });

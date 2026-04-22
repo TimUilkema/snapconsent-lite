@@ -7,7 +7,7 @@ type WorkerRequestBody = {
   workerId?: string;
 };
 
-const DEFAULT_BATCH_SIZE = 25;
+const DEFAULT_BATCH_SIZE = 10;
 
 function getWorkerToken() {
   const token = process.env.ASSET_DERIVATIVE_WORKER_TOKEN;

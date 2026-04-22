@@ -14,7 +14,7 @@ type PrepareProjectAssetBatchInput = {
   tenantId: string;
   projectId: string;
   userId: string;
-  assetType: "photo";
+  assetType: "photo" | "video";
   duplicatePolicy: "upload_anyway" | "overwrite" | "ignore";
   items: ProjectUploadPrepareItemInput[];
 };
@@ -60,6 +60,8 @@ export async function prepareProjectAssetBatch(
 
   const results: ProjectUploadPrepareItemResult[] = [];
   const requestDuplicateHashes = new Set<string>();
+  const shouldApplyDuplicateSuppression =
+    input.assetType === "photo" && input.duplicatePolicy !== "upload_anyway";
   for (const item of items) {
     if (!item.clientItemId) {
       results.push(invalidItemResult("", "invalid_client_item_id", "Client item ID is required."));
@@ -79,7 +81,7 @@ export async function prepareProjectAssetBatch(
     const normalizedContentHash = normalizeBatchContentHash(item.contentHash);
     if (
       normalizedContentHash &&
-      input.duplicatePolicy !== "upload_anyway" &&
+      shouldApplyDuplicateSuppression &&
       requestDuplicateHashes.has(normalizedContentHash)
     ) {
       results.push({
@@ -90,7 +92,7 @@ export async function prepareProjectAssetBatch(
       continue;
     }
 
-    if (normalizedContentHash && input.duplicatePolicy !== "upload_anyway") {
+    if (normalizedContentHash && shouldApplyDuplicateSuppression) {
       requestDuplicateHashes.add(normalizedContentHash);
     }
 

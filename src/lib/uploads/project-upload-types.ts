@@ -1,10 +1,16 @@
-export const PROJECT_UPLOAD_MANIFEST_VERSION = 1;
+import type { ProjectAssetUploadType } from "@/lib/assets/asset-upload-policy";
+
+export const PROJECT_UPLOAD_MANIFEST_VERSION = 2;
 
 export const PROJECT_UPLOAD_PREFLIGHT_BATCH_SIZE = 250;
 export const PROJECT_UPLOAD_PREPARE_BATCH_SIZE = 50;
 export const PROJECT_UPLOAD_FINALIZE_BATCH_SIZE = 50;
 export const PROJECT_UPLOAD_PUT_CONCURRENCY = 4;
 export const PROJECT_UPLOAD_HASH_CONCURRENCY = 2;
+export const PROJECT_VIDEO_UPLOAD_PREPARE_BATCH_SIZE = 10;
+export const PROJECT_VIDEO_UPLOAD_FINALIZE_BATCH_SIZE = 10;
+export const PROJECT_VIDEO_UPLOAD_PUT_CONCURRENCY = 1;
+export const PROJECT_VIDEO_UPLOAD_HASH_CONCURRENCY = 1;
 
 export type DuplicatePolicy = "upload_anyway" | "overwrite" | "ignore";
 
@@ -41,6 +47,7 @@ export type FileFingerprint = {
 
 export type ProjectUploadItem = {
   clientItemId: string;
+  assetType: ProjectAssetUploadType;
   idempotencyKey: string;
   originalFilename: string;
   contentType: string;

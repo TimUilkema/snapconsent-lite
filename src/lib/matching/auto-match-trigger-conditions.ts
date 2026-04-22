@@ -1,4 +1,4 @@
-export function shouldEnqueuePhotoUploadedOnFinalize(assetType: "photo" | "headshot") {
+export function shouldEnqueuePhotoUploadedOnFinalize(assetType: "photo" | "headshot" | "video") {
   return assetType === "photo";
 }
 

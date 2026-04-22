@@ -478,6 +478,88 @@ test("prepareProjectAssetBatch keeps same-request same-size non-duplicates ready
   assert.equal(results[1]?.status, "ready");
 });
 
+test("prepareProjectAssetBatch allows video items without content hashes under ignore", async () => {
+  const context = await createProjectContext(admin);
+
+  const results = await prepareProjectAssetBatch({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    userId: context.userId,
+    assetType: "video",
+    duplicatePolicy: "ignore",
+    items: [
+      {
+        clientItemId: "first-video",
+        idempotencyKey: `feature024-video-null-first-${randomUUID()}`,
+        originalFilename: "first.mp4",
+        contentType: "video/mp4",
+        fileSizeBytes: 4096,
+        contentHash: null,
+        contentHashAlgo: null,
+      },
+      {
+        clientItemId: "second-video",
+        idempotencyKey: `feature024-video-null-second-${randomUUID()}`,
+        originalFilename: "second.mp4",
+        contentType: "video/mp4",
+        fileSizeBytes: 4096,
+        contentHash: null,
+        contentHashAlgo: null,
+      },
+    ],
+  });
+
+  assert.equal(results[0]?.status, "ready");
+  assert.equal(results[1]?.status, "ready");
+});
+
+test("prepareProjectAssetBatch does not skip video duplicates when hashes are present", async () => {
+  const context = await createProjectContext(admin);
+
+  const results = await prepareProjectAssetBatch({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    userId: context.userId,
+    assetType: "video",
+    duplicatePolicy: "ignore",
+    items: [
+      {
+        clientItemId: "first-video",
+        idempotencyKey: `feature024-video-hash-first-${randomUUID()}`,
+        originalFilename: "first.mp4",
+        contentType: "video/mp4",
+        fileSizeBytes: 4096,
+        contentHash: HASH_A,
+        contentHashAlgo: "sha256",
+      },
+      {
+        clientItemId: "second-video",
+        idempotencyKey: `feature024-video-hash-second-${randomUUID()}`,
+        originalFilename: "second.mp4",
+        contentType: "video/mp4",
+        fileSizeBytes: 4096,
+        contentHash: HASH_A,
+        contentHashAlgo: "sha256",
+      },
+    ],
+  });
+
+  assert.equal(results[0]?.status, "ready");
+  assert.equal(results[1]?.status, "ready");
+
+  const { data: assets, error } = await admin
+    .from("assets")
+    .select("id")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId)
+    .eq("asset_type", "video")
+    .eq("content_hash", HASH_A);
+  assertNoError(error, "select video duplicate assets");
+  assert.equal((assets ?? []).length, 2);
+});
+
 test("prepareProjectAssetBatch skips duplicates against existing DB assets", async () => {
   const context = await createProjectContext(admin);
 
@@ -736,6 +818,49 @@ test("single-item create/finalize helpers still work for unchanged upload flows"
 
   assert.equal(finalized.assetId, created.payload.assetId);
   assert.equal(finalized.assetType, "photo");
+});
+
+test("single-item video create/finalize helpers remain retry-safe without photo matching enqueue", async () => {
+  const context = await createProjectContext(admin);
+  const idempotencyKey = `feature024-video-single-${randomUUID()}`;
+
+  const created = await createAssetWithIdempotency({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    userId: context.userId,
+    idempotencyKey,
+    originalFilename: "single.mp4",
+    contentType: "video/mp4",
+    fileSizeBytes: 1024,
+    consentIds: [],
+    assetType: "video",
+    duplicatePolicy: "upload_anyway",
+  });
+
+  assert.equal(created.status, 201);
+  if ("skipUpload" in created.payload) {
+    assert.fail("single-item video create unexpectedly skipped upload");
+  }
+
+  const finalized = await finalizeAsset({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: created.payload.assetId,
+    consentIds: [],
+  });
+
+  assert.equal(finalized.assetId, created.payload.assetId);
+  assert.equal(finalized.assetType, "video");
+
+  const { data: jobs, error: jobsError } = await admin
+    .from("face_match_jobs")
+    .select("id")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId);
+  assertNoError(jobsError, "select video face match jobs");
+  assert.equal((jobs ?? []).length, 0);
 });
 
 test("project upload manifest round-trips through storage and recovers unfinished items", () => {

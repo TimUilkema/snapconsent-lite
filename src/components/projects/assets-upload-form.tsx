@@ -2,8 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
-import { getAcceptedImageUploadAcceptValue } from "@/lib/assets/asset-image-policy";
+import {
+  getAcceptedProjectAssetUploadAcceptValue,
+  getAssetUploadMaxFileSizeBytes,
+  resolveProjectAssetUploadType,
+  type ProjectAssetUploadType,
+} from "@/lib/assets/asset-upload-policy";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
 import {
   clearProjectUploadManifest,
@@ -25,6 +31,11 @@ import {
   applyFinalizeResults,
   applyPrepareResults,
   chunkProjectUploadItems,
+  getProjectUploadFinalizeBatchSizeForAssetType,
+  getProjectUploadHashConcurrencyForAssetType,
+  getProjectUploadPrepareBatchSizeForAssetType,
+  getProjectUploadPutConcurrencyForAssetType,
+  groupProjectUploadItemsByAssetType,
   isAuthBlockedStatus,
   mapWithConcurrency,
   markProjectUploadManifestBlockedAuth,
@@ -33,6 +44,7 @@ import {
 import {
   collectDuplicateContentHashes,
   hashProjectUploadFile,
+  shouldCheckProjectUploadDuplicates,
 } from "@/lib/uploads/project-upload-duplicate-detection";
 import type {
   DuplicatePolicy,
@@ -42,11 +54,7 @@ import type {
   ProjectUploadStorageLike,
 } from "@/lib/uploads/project-upload-types";
 import {
-  PROJECT_UPLOAD_FINALIZE_BATCH_SIZE,
-  PROJECT_UPLOAD_HASH_CONCURRENCY,
   PROJECT_UPLOAD_PREFLIGHT_BATCH_SIZE,
-  PROJECT_UPLOAD_PREPARE_BATCH_SIZE,
-  PROJECT_UPLOAD_PUT_CONCURRENCY,
 } from "@/lib/uploads/project-upload-types";
 
 type AssetsUploadFormProps = {
@@ -71,6 +79,18 @@ type BatchFinalizeResponse = {
 type UploadFailure = Error & {
   status?: number | null;
   code?: string;
+};
+
+type SelectedFileValidation = {
+  acceptedItems: Array<{
+    file: File;
+    assetType: ProjectAssetUploadType;
+  }>;
+  rejectedCount: number;
+  rejectedItems: Array<{
+    filename: string;
+    reason: "unsupported_type" | "file_too_large";
+  }>;
 };
 
 function getBrowserStorage(): ProjectUploadStorageLike | null {
@@ -111,8 +131,44 @@ function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: 
   });
 }
 
+function validateSelectedFiles(selectedFiles: File[]): SelectedFileValidation {
+  const acceptedItems: SelectedFileValidation["acceptedItems"] = [];
+  const rejectedItems: SelectedFileValidation["rejectedItems"] = [];
+  let rejectedCount = 0;
+
+  selectedFiles.forEach((file) => {
+    const assetType = resolveProjectAssetUploadType(file.type, file.name);
+    if (!assetType) {
+      rejectedCount += 1;
+      rejectedItems.push({
+        filename: file.name,
+        reason: "unsupported_type",
+      });
+      return;
+    }
+
+    if (file.size > getAssetUploadMaxFileSizeBytes(assetType)) {
+      rejectedCount += 1;
+      rejectedItems.push({
+        filename: file.name,
+        reason: "file_too_large",
+      });
+      return;
+    }
+
+    acceptedItems.push({ file, assetType });
+  });
+
+  return {
+    acceptedItems,
+    rejectedCount,
+    rejectedItems,
+  };
+}
+
 export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const router = useRouter();
+  const t = useTranslations("projects.assetsUploadForm");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const manifestRef = useRef<ProjectUploadManifest | null>(null);
   const fileBindingsRef = useRef(new Map<string, File>());
@@ -129,7 +185,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("upload_anyway");
 
-  const acceptValue = useMemo(() => getAcceptedImageUploadAcceptValue(), []);
+  const acceptValue = useMemo(() => getAcceptedProjectAssetUploadAcceptValue(), []);
 
   function setManifest(next: ProjectUploadManifest | null) {
     manifestRef.current = next;
@@ -180,7 +236,27 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     setManifest(nextManifest);
   }
 
+  function pickNextAssetTypeItems(items: ProjectUploadManifest["items"]) {
+    const groupedItems = groupProjectUploadItemsByAssetType(items);
+    if (groupedItems.photo.length > 0) {
+      return {
+        assetType: "photo" as const,
+        items: groupedItems.photo,
+      };
+    }
+
+    if (groupedItems.video.length > 0) {
+      return {
+        assetType: "video" as const,
+        items: groupedItems.video,
+      };
+    }
+
+    return null;
+  }
+
   async function preflightForItems(
+    assetType: ProjectAssetUploadType,
     targetIds: string[],
     includeHashes: boolean,
   ): Promise<PreflightResponse> {
@@ -195,7 +271,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        assetType: "photo",
+        assetType,
         files: targetItems.map((item) => ({
           name: item.originalFilename,
           size: item.fileSizeBytes,
@@ -224,7 +300,10 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       return true;
     }
 
-    setIsPreparing(true);
+    const photoItems = newItems.filter((item) => shouldCheckProjectUploadDuplicates(item.assetType));
+    const hasPhotoDuplicateChecks = photoItems.length > 0;
+
+    setIsPreparing(hasPhotoDuplicateChecks);
     setError(null);
     setWarning(null);
 
@@ -232,56 +311,77 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       updateManifest((manifestValue) =>
         replaceManifestItems(
           manifestValue,
-          manifestValue.items.map((item) =>
-            targetSet.has(item.clientItemId) && !item.assetId
-              ? {
-                  ...item,
-                  needsHash: true,
-                  hashStatus: "pending",
-                  status: "needs_hash",
-                  updatedAt: new Date().toISOString(),
-                }
-              : item,
-          ),
-          "preflighting",
+          manifestValue.items.map((item) => {
+            if (!targetSet.has(item.clientItemId) || item.assetId) {
+              return item;
+            }
+
+            const shouldCheckDuplicates = shouldCheckProjectUploadDuplicates(item.assetType);
+            return {
+              ...item,
+              contentHash: shouldCheckDuplicates ? item.contentHash : null,
+              contentHashAlgo: shouldCheckDuplicates ? item.contentHashAlgo : null,
+              needsHash: shouldCheckDuplicates,
+              hashStatus: shouldCheckDuplicates ? "pending" : "not_needed",
+              isDuplicate: false,
+              status: shouldCheckDuplicates ? "needs_hash" : "ready_to_prepare",
+              updatedAt: new Date().toISOString(),
+            };
+          }),
+          hasPhotoDuplicateChecks ? "preflighting" : "idle",
         ),
       );
 
+      if (!hasPhotoDuplicateChecks) {
+        return true;
+      }
+
       const hashTargetItems = (manifestRef.current?.items ?? []).filter(
-        (item) => targetSet.has(item.clientItemId) && !item.assetId,
+        (item) =>
+          targetSet.has(item.clientItemId) &&
+          !item.assetId &&
+          shouldCheckProjectUploadDuplicates(item.assetType),
       );
 
       let hashUnavailableCount = 0;
-      await mapWithConcurrency(hashTargetItems, PROJECT_UPLOAD_HASH_CONCURRENCY, async (item) => {
-        const file = fileBindingsRef.current.get(item.clientItemId);
-        const contentHash = file ? await hashProjectUploadFile(file) : null;
-        if (!contentHash) {
-          hashUnavailableCount += 1;
-        }
+      await mapWithConcurrency(
+        hashTargetItems,
+        getProjectUploadHashConcurrencyForAssetType("photo"),
+        async (item) => {
+          const file = fileBindingsRef.current.get(item.clientItemId);
+          const contentHash = file ? await hashProjectUploadFile(file) : null;
+          if (!contentHash) {
+            hashUnavailableCount += 1;
+          }
 
-        updateManifest((manifestValue) =>
-          updateManifestItem(manifestValue, item.clientItemId, {
-            contentHash,
-            contentHashAlgo: contentHash ? "sha256" : null,
-            needsHash: true,
-            hashStatus: contentHash ? "ready" : "unavailable",
-            status: "ready_to_prepare",
-          }),
-        );
-        return null;
-      });
+          updateManifest((manifestValue) =>
+            updateManifestItem(manifestValue, item.clientItemId, {
+              contentHash,
+              contentHashAlgo: contentHash ? "sha256" : null,
+              needsHash: true,
+              hashStatus: contentHash ? "ready" : "unavailable",
+              status: "ready_to_prepare",
+            }),
+          );
+          return null;
+        },
+      );
 
       const duplicateHashesFromDb = new Set<string>();
-      const targetChunks = chunkProjectUploadItems(Array.from(targetSet), PROJECT_UPLOAD_PREFLIGHT_BATCH_SIZE);
+      const photoTargetIds = hashTargetItems.map((item) => item.clientItemId);
+      const targetChunks = chunkProjectUploadItems(photoTargetIds, PROJECT_UPLOAD_PREFLIGHT_BATCH_SIZE);
       for (const chunkIds of targetChunks) {
-        const duplicatePreflight = await preflightForItems(chunkIds, true);
+        const duplicatePreflight = await preflightForItems("photo", chunkIds, true);
         (duplicatePreflight.duplicateHashes ?? []).forEach((contentHash) =>
           duplicateHashesFromDb.add(contentHash),
         );
       }
 
       const hashedTargetItems = (manifestRef.current?.items ?? []).filter(
-        (item) => targetSet.has(item.clientItemId) && !item.assetId,
+        (item) =>
+          targetSet.has(item.clientItemId) &&
+          !item.assetId &&
+          shouldCheckProjectUploadDuplicates(item.assetType),
       );
       const duplicateHashesInRequest = collectDuplicateContentHashes(hashedTargetItems);
 
@@ -323,14 +423,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       }
 
       if (hashUnavailableCount > 0) {
-        setWarning(
-          "Hash-based duplicate checks are unavailable for some files. Upload continues, but some duplicates may be missed.",
-        );
+        setWarning(t("hashUnavailableWarning"));
       }
 
       return true;
     } catch {
-      setError("Unable to prepare uploads right now.");
+      setError(t("prepareError"));
       return false;
     } finally {
       setIsPreparing(false);
@@ -338,11 +436,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   }
 
   async function runPrepareBatch(itemsToPrepare: ProjectUploadManifest["items"]) {
+    const assetType = itemsToPrepare[0]?.assetType ?? "photo";
     const response = await fetch(`/api/projects/${projectId}/assets/batch/prepare`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        assetType: "photo",
+        assetType,
         duplicatePolicy,
         items: itemsToPrepare.map((item) => ({
           clientItemId: item.clientItemId,
@@ -358,7 +457,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
     if (isAuthBlockedStatus(response.status)) {
       updateManifest((manifestValue) => markProjectUploadManifestBlockedAuth(manifestValue));
-      setError("Your session expired. Sign in again to continue this upload.");
+      setError(t("authExpired"));
       return false;
     }
 
@@ -373,7 +472,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
                   ...item,
                   status: "failed",
                   lastErrorCode: "batch_prepare_failed",
-                  lastErrorMessage: payload?.message ?? "Unable to prepare upload item.",
+                  lastErrorMessage: payload?.message ?? t("prepareItemError"),
                   updatedAt: new Date().toISOString(),
                 }
               : item,
@@ -381,7 +480,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           "recoverable",
         ),
       );
-      setError(payload?.message ?? "Unable to prepare uploads right now.");
+      setError(payload?.message ?? t("prepareError"));
       return false;
     }
 
@@ -399,7 +498,11 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   }
 
   async function runUploadBatch(itemsToUpload: ProjectUploadManifest["items"]) {
-    await mapWithConcurrency(itemsToUpload, PROJECT_UPLOAD_PUT_CONCURRENCY, async (item) => {
+    const assetType = itemsToUpload[0]?.assetType ?? "photo";
+    await mapWithConcurrency(
+      itemsToUpload,
+      getProjectUploadPutConcurrencyForAssetType(assetType),
+      async (item) => {
       const file = fileBindingsRef.current.get(item.clientItemId);
       const signedUrl = signedUrlRef.current.get(item.clientItemId);
 
@@ -408,7 +511,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           updateManifestItem(manifestValue, item.clientItemId, {
             status: "needs_file",
             lastErrorCode: "reselect_file_required",
-            lastErrorMessage: "Select the original file again to continue this upload.",
+            lastErrorMessage: t("reselectFileRequired"),
           }),
         );
         return;
@@ -419,7 +522,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           updateManifestItem(manifestValue, item.clientItemId, {
             status: "ready_to_prepare",
             lastErrorCode: "signed_url_missing",
-            lastErrorMessage: "The upload URL expired. Retry to continue this upload.",
+            lastErrorMessage: t("signedUrlExpired"),
           }),
         );
         return;
@@ -464,7 +567,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               status: "ready_to_prepare",
               uploadedBytes: 0,
               lastErrorCode: "signed_url_invalid",
-              lastErrorMessage: "The upload URL expired. Retry to continue this upload.",
+              lastErrorMessage: t("signedUrlExpired"),
             }),
           );
           return;
@@ -475,11 +578,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             status: "failed",
             uploadedBytes: 0,
             lastErrorCode: "upload_failed",
-            lastErrorMessage: "Unable to upload this file right now.",
+            lastErrorMessage: t("uploadFailed"),
           }),
         );
       }
-    });
+    },
+    );
   }
 
   async function runFinalizeBatch(itemsToFinalize: ProjectUploadManifest["items"]) {
@@ -498,7 +602,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
 
     if (isAuthBlockedStatus(response.status)) {
       updateManifest((manifestValue) => markProjectUploadManifestBlockedAuth(manifestValue));
-      setError("Your session expired. Sign in again to continue this upload.");
+      setError(t("authExpired"));
       return false;
     }
 
@@ -513,7 +617,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
                   ...item,
                   status: "failed",
                   lastErrorCode: "batch_finalize_failed",
-                  lastErrorMessage: payload?.message ?? "Unable to finalize upload item.",
+                  lastErrorMessage: payload?.message ?? t("finalizeItemError"),
                   updatedAt: new Date().toISOString(),
                 }
               : item,
@@ -521,7 +625,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           "recoverable",
         ),
       );
-      setError(payload?.message ?? "Unable to finalize uploads right now.");
+      setError(payload?.message ?? t("finalizeError"));
       return false;
     }
 
@@ -562,21 +666,33 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           break;
         }
 
-        const uploadedItems = loopManifest.items.filter((item) => item.status === "uploaded");
-        if (uploadedItems.length > 0) {
-          const finalizeChunks = chunkProjectUploadItems(uploadedItems, PROJECT_UPLOAD_FINALIZE_BATCH_SIZE);
-          const finalized = await runFinalizeBatch(finalizeChunks[0]);
+        const nextUploadedGroup = pickNextAssetTypeItems(
+          loopManifest.items.filter((item) => item.status === "uploaded"),
+        );
+        if (nextUploadedGroup) {
+          const finalizeChunks = chunkProjectUploadItems(
+            nextUploadedGroup.items,
+            getProjectUploadFinalizeBatchSizeForAssetType(nextUploadedGroup.assetType),
+          );
+          const finalized = await runFinalizeBatch(finalizeChunks[0] ?? []);
           if (!finalized) {
             break;
           }
           continue;
         }
 
-        const preparedItems = loopManifest.items.filter(
-          (item) => item.status === "prepared" && fileBindingsRef.current.has(item.clientItemId),
+        const nextPreparedGroup = pickNextAssetTypeItems(
+          loopManifest.items.filter(
+            (item) => item.status === "prepared" && fileBindingsRef.current.has(item.clientItemId),
+          ),
         );
-        if (preparedItems.length > 0) {
-          await runUploadBatch(preparedItems.slice(0, PROJECT_UPLOAD_PUT_CONCURRENCY));
+        if (nextPreparedGroup) {
+          await runUploadBatch(
+            nextPreparedGroup.items.slice(
+              0,
+              getProjectUploadPutConcurrencyForAssetType(nextPreparedGroup.assetType),
+            ),
+          );
           continue;
         }
 
@@ -595,7 +711,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
                         ...item,
                         status: "needs_file",
                         lastErrorCode: "reselect_file_required",
-                        lastErrorMessage: "Select the original file again to continue this upload.",
+                        lastErrorMessage: t("reselectFileRequired"),
                         updatedAt: new Date().toISOString(),
                       }
                     : item,
@@ -605,12 +721,15 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             );
           }
 
-          const prepareChunks = chunkProjectUploadItems(
+          const nextReadyGroup = pickNextAssetTypeItems(
             readyItems.filter((item) => fileBindingsRef.current.has(item.clientItemId)),
-            PROJECT_UPLOAD_PREPARE_BATCH_SIZE,
           );
-          if (prepareChunks.length > 0) {
-            const prepared = await runPrepareBatch(prepareChunks[0]);
+          if (nextReadyGroup) {
+            const prepareChunks = chunkProjectUploadItems(
+              nextReadyGroup.items,
+              getProjectUploadPrepareBatchSizeForAssetType(nextReadyGroup.assetType),
+            );
+            const prepared = await runPrepareBatch(prepareChunks[0] ?? []);
             if (!prepared) {
               break;
             }
@@ -640,8 +759,13 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
         clearCurrentQueue();
         setSuccess(
           skippedCount > 0
-            ? `Upload complete (${uploadedCount} uploaded, ${skippedCount} skipped).`
-            : `Upload complete (${uploadedCount}).`,
+            ? t("uploadCompleteWithSkipped", {
+                uploadedCount,
+                skippedCount,
+              })
+            : t("uploadComplete", {
+                uploadedCount,
+              }),
         );
         router.refresh();
         return;
@@ -663,15 +787,37 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     setWarning(null);
     setSuccess(null);
 
+    const validatedSelection = validateSelectedFiles(selectedFiles);
+    if (validatedSelection.rejectedCount > 0) {
+      const firstRejected = validatedSelection.rejectedItems[0] ?? null;
+      setWarning(
+        firstRejected
+          ? firstRejected.reason === "file_too_large"
+            ? t("fileTooLargeWarning", { filename: firstRejected.filename })
+            : t("unsupportedTypeWarning", { filename: firstRejected.filename })
+          : t("filesSkippedWarning", { count: validatedSelection.rejectedCount }),
+      );
+    }
+    if (validatedSelection.acceptedItems.length === 0) {
+      return;
+    }
+
     const current = manifestRef.current;
     const workingItems = current ? [...current.items] : [];
     const selectedByIndex = new Set<number>();
+    const acceptedFiles = validatedSelection.acceptedItems.map((entry) => entry.file);
+    const acceptedAssetTypeByFingerprint = new Map(
+      validatedSelection.acceptedItems.map((entry) => [
+        JSON.stringify(createFileFingerprint(entry.file)),
+        entry.assetType,
+      ] as const),
+    );
     const recoveryMatches = current
       ? current.items.filter((item) => item.status === "needs_file" || item.status === "blocked_auth" || item.status === "failed")
       : [];
 
     recoveryMatches.forEach((item) => {
-      const fileIndex = selectedFiles.findIndex((file, index) => {
+      const fileIndex = acceptedFiles.findIndex((file, index) => {
         if (selectedByIndex.has(index)) {
           return false;
         }
@@ -683,7 +829,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       }
 
       selectedByIndex.add(fileIndex);
-      fileBindingsRef.current.set(item.clientItemId, selectedFiles[fileIndex]);
+      fileBindingsRef.current.set(item.clientItemId, acceptedFiles[fileIndex]);
       const nextStatus = item.assetId ? "ready_to_prepare" : "selected";
       const itemIndex = workingItems.findIndex((candidate) => candidate.clientItemId === item.clientItemId);
       if (itemIndex >= 0) {
@@ -698,13 +844,18 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       }
     });
 
-    selectedFiles.forEach((file, index) => {
+    acceptedFiles.forEach((file, index) => {
       if (selectedByIndex.has(index)) {
         return;
       }
       const item = createProjectUploadItem(file);
+      const inferredAssetType =
+        acceptedAssetTypeByFingerprint.get(JSON.stringify(item.selectionFingerprint)) ?? item.assetType;
       fileBindingsRef.current.set(item.clientItemId, file);
-      workingItems.push(item);
+      workingItems.push({
+        ...item,
+        assetType: inferredAssetType,
+      });
     });
 
     const nextManifest = createProjectUploadManifest(
@@ -828,9 +979,9 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     setManifestState(recovered);
     setDuplicatePolicy(recovered.duplicatePolicy);
     if (hasUnfinishedProjectUploadItems(recovered)) {
-      setWarning("Recovered an unfinished upload. Reselect missing files to continue.");
+      setWarning(t("recoveredUploadWarning"));
     }
-  }, [projectId]);
+  }, [projectId, t]);
 
   useEffect(() => {
     const storage = storageRef.current;
@@ -858,11 +1009,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const failedCount =
     manifest?.items.filter((item) => item.status === "failed" || item.status === "blocked_auth").length ?? 0;
   const queueCount = manifest?.items.filter((item) => !isTerminalProjectUploadStatus(item.status)).length ?? 0;
+  const queueStateLabel = manifest ? t(`queueStateValue.${manifest.queueState}`) : null;
 
   return (
     <form className="space-y-3">
       <label className="block text-sm">
-        <span className="mb-1 block font-medium">Upload project photos</span>
+        <span className="mb-1 block font-medium">{t("label")}</span>
         <input
           type="file"
           accept={acceptValue}
@@ -884,7 +1036,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
           disabled={isBusy}
           className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
         >
-          {needsFileCount > 0 ? "Select files to continue" : "Upload images"}
+          {needsFileCount > 0 ? t("selectFilesToContinue") : t("uploadAssets")}
         </button>
 
         {manifest && manifest.queueState === "running" ? (
@@ -893,7 +1045,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             onClick={pauseQueue}
             className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white"
           >
-            Pause
+            {t("pause")}
           </button>
         ) : null}
 
@@ -904,7 +1056,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             disabled={isBusy}
             className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
           >
-            Resume
+            {t("resume")}
           </button>
         ) : null}
 
@@ -915,7 +1067,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             disabled={isBusy}
             className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
           >
-            Retry failed
+            {t("retryFailed")}
           </button>
         ) : null}
 
@@ -926,7 +1078,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
             disabled={isBusy}
             className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
           >
-            Clear queue
+            {t("clearQueue")}
           </button>
         ) : null}
       </div>
@@ -934,20 +1086,24 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       {manifest ? (
         <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
           <p>
-            Queue: {queueCount} item{queueCount === 1 ? "" : "s"}
-            {failedCount > 0 ? `, ${failedCount} failed` : ""}
-            {needsFileCount > 0 ? `, ${needsFileCount} need file re-selection` : ""}
+            {t("queueSummary", {
+              queueCount,
+              failedCount,
+              needsFileCount,
+            })}
           </p>
-          <p className="text-xs text-zinc-500">State: {manifest.queueState}</p>
+          <p className="text-xs text-zinc-500">{t("queueState", { state: queueStateLabel ?? manifest.queueState })}</p>
         </div>
       ) : null}
 
       {needsPolicyChoice ? (
         <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
-          <p className="font-medium">Duplicates detected for this batch.</p>
+          <p className="font-medium">{t("duplicatesDetectedTitle")}</p>
           <p className="text-xs text-zinc-600">
-            {duplicateCount} duplicate file{duplicateCount === 1 ? "" : "s"} out of{" "}
-            {manifest?.items.length ?? 0} total.
+            {t("duplicatesDetectedBody", {
+              duplicateCount,
+              totalCount: manifest?.items.length ?? 0,
+            })}
           </p>
           <label className="flex items-center gap-2">
             <input
@@ -956,7 +1112,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               checked={duplicatePolicy === "upload_anyway"}
               onChange={() => setDuplicatePolicy("upload_anyway")}
             />
-            <span>Upload anyway</span>
+            <span>{t("duplicatePolicyUploadAnyway")}</span>
           </label>
           <label className="flex items-center gap-2">
             <input
@@ -965,7 +1121,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               checked={duplicatePolicy === "overwrite"}
               onChange={() => setDuplicatePolicy("overwrite")}
             />
-            <span>Overwrite duplicates (archive existing)</span>
+            <span>{t("duplicatePolicyOverwrite")}</span>
           </label>
           <label className="flex items-center gap-2">
             <input
@@ -974,7 +1130,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               checked={duplicatePolicy === "ignore"}
               onChange={() => setDuplicatePolicy("ignore")}
             />
-            <span>Ignore duplicates</span>
+            <span>{t("duplicatePolicyIgnore")}</span>
           </label>
           <div className="flex gap-2">
             <button
@@ -983,7 +1139,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               onClick={() => void continueWithDuplicatePolicy()}
               className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
             >
-              Continue upload
+              {t("continueUpload")}
             </button>
             <button
               type="button"
@@ -991,17 +1147,17 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
               onClick={() => clearCurrentQueue(true)}
               className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white disabled:opacity-60"
             >
-              Cancel
+              {t("cancel")}
             </button>
           </div>
         </div>
       ) : null}
 
       <p className="text-sm text-zinc-600">
-        Headshots are managed per consent record in the invite consent details.
+        {t("headshotsManagedNote")}
       </p>
 
-      {isPreparing ? <p className="text-xs text-zinc-600">Checking for duplicates...</p> : null}
+      {isPreparing ? <p className="text-xs text-zinc-600">{t("checkingDuplicates")}</p> : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {warning ? <p className="text-sm text-amber-700">{warning}</p> : null}
       {success ? <p className="text-sm text-emerald-700">{success}</p> : null}

@@ -16,6 +16,19 @@ type PrepareBatchBody = {
   items?: ProjectUploadPrepareItemInput[];
 };
 
+function normalizeAssetType(value: unknown): "photo" | "video" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized || normalized === "photo") {
+    return "photo";
+  }
+
+  if (normalized === "video") {
+    return "video";
+  }
+
+  throw new HttpError(400, "invalid_asset_type", "Invalid asset type.");
+}
+
 function parseDuplicatePolicy(value: unknown): "upload_anyway" | "overwrite" | "ignore" {
   if (value === "overwrite" || value === "ignore") {
     return value;
@@ -44,16 +57,14 @@ export async function POST(request: Request, context: RouteContext) {
     if (!body) {
       throw new HttpError(400, "invalid_body", "Invalid request body.");
     }
-    if (body.assetType && body.assetType !== "photo") {
-      throw new HttpError(400, "invalid_asset_type", "Invalid asset type.");
-    }
+    const assetType = normalizeAssetType(body.assetType);
 
     const results = await prepareProjectAssetBatch({
       supabase,
       tenantId,
       projectId,
       userId: user.id,
-      assetType: "photo",
+      assetType,
       duplicatePolicy: parseDuplicatePolicy(body.duplicatePolicy),
       items: Array.isArray(body.items) ? body.items : [],
     });

@@ -5,9 +5,18 @@ import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
-import { getAssetPreviewFaceCandidates, getAssetPreviewFaces } from "../src/lib/matching/asset-preview-linking";
+import {
+  getAssetPreviewFaceCandidates,
+  getAssetPreviewFaces,
+  getAssetPreviewWholeAssetLinks,
+  getAssetPreviewWholeAssetCandidates,
+} from "../src/lib/matching/asset-preview-linking";
 import type { AutoMatcher } from "../src/lib/matching/auto-matcher";
-import { blockAssetFace, manualLinkPhotoToRecurringProjectParticipant, manualUnlinkPhotoFaceAssignment } from "../src/lib/matching/consent-photo-matching";
+import {
+  blockAssetFace,
+  manualLinkPhotoToRecurringProjectParticipant,
+  manualUnlinkPhotoFaceAssignment,
+} from "../src/lib/matching/consent-photo-matching";
 import { ensureRecurringProfileMaterializedFaceCompare } from "../src/lib/matching/recurring-materialized-face-compare";
 import { buildPreparedProjectExport, loadProjectExportRecords } from "../src/lib/project-export/project-export";
 import { createBaselineConsentRequest } from "../src/lib/profiles/profile-consent-service";
@@ -26,6 +35,13 @@ import {
   createAuthUserWithRetry,
   signInClient,
 } from "./helpers/supabase-test-client";
+import {
+  loadCurrentWholeAssetLinksForAsset,
+  manualLinkWholeAssetToConsent,
+  manualLinkWholeAssetToRecurringProjectParticipant,
+  manualUnlinkWholeAssetFromConsent,
+  manualUnlinkWholeAssetFromRecurringProjectParticipant,
+} from "../src/lib/matching/whole-asset-linking";
 
 type TenantContext = {
   tenantId: string;
@@ -292,6 +308,93 @@ async function createUploadedPhotoAsset(input: {
   assertNoPostgrestError(error, "insert photo asset");
   assert.ok(data);
   return data.id as string;
+}
+
+async function createUploadedVideoAsset(input: {
+  tenantId: string;
+  projectId: string;
+  userId: string;
+  client: SupabaseClient;
+}) {
+  const uploadedAt = new Date().toISOString();
+  const { data, error } = await input.client
+    .from("assets")
+    .insert({
+      tenant_id: input.tenantId,
+      project_id: input.projectId,
+      asset_type: "video",
+      storage_bucket: "project-assets",
+      storage_path: `tenant/${input.tenantId}/project/${input.projectId}/video/${randomUUID()}.mp4`,
+      original_filename: "feature064-video.mp4",
+      content_type: "video/mp4",
+      file_size_bytes: 4096,
+      status: "uploaded",
+      uploaded_at: uploadedAt,
+      created_by: input.userId,
+    })
+    .select("id")
+    .single();
+
+  assertNoPostgrestError(error, "insert video asset");
+  assert.ok(data);
+  return data.id as string;
+}
+
+async function createProjectConsent(input: {
+  tenantId: string;
+  projectId: string;
+  ownerUserId: string;
+  consentTemplateId: string;
+  fullName: string;
+  email: string;
+}) {
+  const { data: invite, error: inviteError } = await adminClient
+    .from("subject_invites")
+    .insert({
+      tenant_id: input.tenantId,
+      project_id: input.projectId,
+      created_by: input.ownerUserId,
+      token_hash: randomUUID().replaceAll("-", "").padEnd(64, "0").slice(0, 64),
+      status: "active",
+      max_uses: 1,
+      consent_template_id: input.consentTemplateId,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(inviteError, "insert project consent invite");
+  assert.ok(invite);
+
+  const { data: subject, error: subjectError } = await adminClient
+    .from("subjects")
+    .insert({
+      tenant_id: input.tenantId,
+      project_id: input.projectId,
+      email: input.email,
+      full_name: input.fullName,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(subjectError, "insert project consent subject");
+  assert.ok(subject);
+
+  const consentId = randomUUID();
+  const { error: consentError } = await adminClient.from("consents").insert({
+    id: consentId,
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    subject_id: subject.id,
+    invite_id: invite.id,
+    consent_text: "I consent to project media usage.",
+    consent_version: "v1",
+    signed_at: new Date().toISOString(),
+    revoked_at: null,
+    revoke_reason: null,
+    face_match_opt_in: true,
+    structured_fields_snapshot: null,
+  });
+  assertNoPostgrestError(consentError, "insert project consent");
+
+  return consentId;
 }
 
 async function createPhotoMaterialization(input: {
@@ -719,4 +822,453 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
     assetFaceId: photoMaterialization.faceId,
   });
   assert.equal(suppressions.length, 1);
+});
+
+test("feature 061 recurring whole-asset links export as whole_asset and are superseded by later exact-face links", async () => {
+  const context = await createTenantContext();
+  const anonClient = createAnonClient();
+  const { projectId, projectName } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const photoAssetId = await createUploadedPhotoAsset({
+    tenantId: context.tenantId,
+    projectId,
+    userId: context.ownerUserId,
+    client: context.ownerClient,
+  });
+  const photoMaterialization = await createPhotoMaterialization({
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+
+  const baselineRequest = await createBaselineConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature061-recurring-baseline-${randomUUID()}`,
+  });
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: tokenFromConsentPath(baselineRequest.payload.request.consentPath),
+    fullName: "Jordan Miles",
+    email: `feature061-recurring-baseline-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature061-recurring-baseline",
+  });
+
+  await createReadyRecurringHeadshot({
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+  });
+  const participant = await addProjectProfileParticipant({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    recurringProfileId: profileId,
+  });
+  const participantId = participant.payload.participant.id;
+
+  const projectConsentRequest = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature061-recurring-project-${randomUUID()}`,
+  });
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: tokenFromConsentPath(projectConsentRequest.payload.request.consentPath),
+    fullName: "Jordan Miles",
+    email: `feature061-recurring-project-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature061-recurring-project",
+  });
+
+  const linkResult = await manualLinkWholeAssetToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(linkResult.kind, "linked");
+
+  const linkedWholeAssetRows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(linkedWholeAssetRows.length, 1);
+  assert.equal(linkedWholeAssetRows[0]?.project_profile_participant_id, participantId);
+
+  const linkedPreview = await getAssetPreviewFaces({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(linkedPreview.wholeAssetLinkCount, 1);
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.recurring?.projectProfileParticipantId, participantId);
+
+  const wholeAssetCandidates = await getAssetPreviewWholeAssetCandidates({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  const recurringCandidate = wholeAssetCandidates.candidates.find(
+    (candidate) => candidate.projectProfileParticipantId === participantId,
+  );
+  assert.ok(recurringCandidate?.currentWholeAssetLink);
+  assert.equal(recurringCandidate?.currentExactFaceLink, null);
+
+  const exportRecords = await loadProjectExportRecords({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+  });
+  const preparedWholeAssetExport = buildPreparedProjectExport({
+    projectId,
+    projectName,
+    records: exportRecords,
+  });
+  const wholeAssetExport = preparedWholeAssetExport.assets.find((asset) => asset.assetId === photoAssetId);
+  assert.ok(wholeAssetExport);
+  assert.ok(
+    wholeAssetExport.metadata.linkedAssignees.some(
+      (assignee) =>
+        assignee.projectProfileParticipantId === participantId &&
+        assignee.linkMode === "whole_asset" &&
+        assignee.assetFaceId === null,
+    ),
+  );
+
+  const unlinkResult = await manualUnlinkWholeAssetFromRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+    projectProfileParticipantId: participantId,
+  });
+  assert.equal(unlinkResult.kind, "unlinked");
+
+  const clearedWholeAssetRows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(clearedWholeAssetRows.length, 0);
+
+  const relinkResult = await manualLinkWholeAssetToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(relinkResult.kind, "linked");
+
+  const exactFaceLinkResult = await manualLinkPhotoToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+    assetFaceId: photoMaterialization.faceId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(exactFaceLinkResult.kind, "linked");
+
+  const supersededWholeAssetRows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(supersededWholeAssetRows.length, 0);
+
+  const exactPreview = await getAssetPreviewFaces({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(exactPreview.wholeAssetLinkCount, 0);
+  const exactFace = exactPreview.faces.find((face) => face.assetFaceId === photoMaterialization.faceId) ?? null;
+  assert.ok(exactFace?.currentLink);
+  assert.equal(exactFace.currentLink.projectProfileParticipantId, participantId);
+
+  const exactExportRecords = await loadProjectExportRecords({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+  });
+  const preparedExactExport = buildPreparedProjectExport({
+    projectId,
+    projectName,
+    records: exactExportRecords,
+  });
+  const exactExport = preparedExactExport.assets.find((asset) => asset.assetId === photoAssetId);
+  assert.ok(exactExport);
+  assert.equal(
+    exactExport.metadata.linkedAssignees.some((assignee) => assignee.linkMode === "whole_asset"),
+    false,
+  );
+  assert.ok(
+    exactExport.metadata.linkedAssignees.some(
+      (assignee) =>
+        assignee.projectProfileParticipantId === participantId &&
+        assignee.linkMode === "face" &&
+        assignee.assetFaceId === photoMaterialization.faceId,
+    ),
+  );
+});
+
+test("feature 064 whole-asset video links support one-off and recurring assignees, idempotency, and revoked owners", async () => {
+  const context = await createTenantContext();
+  const anonClient = createAnonClient();
+  const { projectId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const videoAssetId = await createUploadedVideoAsset({
+    tenantId: context.tenantId,
+    projectId,
+    userId: context.ownerUserId,
+    client: context.ownerClient,
+  });
+  const consentId = await createProjectConsent({
+    tenantId: context.tenantId,
+    projectId,
+    ownerUserId: context.ownerUserId,
+    consentTemplateId: templateId,
+    fullName: "Alex Rivera",
+    email: `feature064-oneoff-${randomUUID()}@example.com`,
+  });
+
+  const baselineRequest = await createBaselineConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature064-recurring-baseline-${randomUUID()}`,
+  });
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: tokenFromConsentPath(baselineRequest.payload.request.consentPath),
+    fullName: "Jordan Miles",
+    email: `feature064-recurring-baseline-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature064-recurring-baseline",
+  });
+
+  await createReadyRecurringHeadshot({
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+  });
+  const participant = await addProjectProfileParticipant({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    recurringProfileId: profileId,
+  });
+  const participantId = participant.payload.participant.id;
+
+  const projectConsentRequest = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature064-recurring-project-${randomUUID()}`,
+  });
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: tokenFromConsentPath(projectConsentRequest.payload.request.consentPath),
+    fullName: "Jordan Miles",
+    email: `feature064-recurring-project-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature064-recurring-project",
+  });
+
+  const oneOffLinkResult = await manualLinkWholeAssetToConsent({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    consentId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(oneOffLinkResult.kind, "linked");
+
+  const duplicateOneOffLinkResult = await manualLinkWholeAssetToConsent({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    consentId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(duplicateOneOffLinkResult.kind, "already_linked");
+
+  const recurringLinkResult = await manualLinkWholeAssetToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(recurringLinkResult.kind, "linked");
+
+  const duplicateRecurringLinkResult = await manualLinkWholeAssetToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(duplicateRecurringLinkResult.kind, "already_linked");
+
+  const currentRows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+  });
+  assert.equal(currentRows.length, 2);
+
+  const linkedPreview = await getAssetPreviewWholeAssetLinks({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+  });
+  assert.equal(linkedPreview.wholeAssetLinkCount, 2);
+  assert.ok(linkedPreview.wholeAssetLinks.some((link) => link.consent?.consentId === consentId));
+  assert.ok(
+    linkedPreview.wholeAssetLinks.some(
+      (link) => link.recurring?.projectProfileParticipantId === participantId,
+    ),
+  );
+
+  const wholeAssetCandidates = await getAssetPreviewWholeAssetCandidates({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+  });
+  const oneOffCandidate = wholeAssetCandidates.candidates.find((candidate) => candidate.consentId === consentId);
+  assert.ok(oneOffCandidate?.currentWholeAssetLink);
+  assert.equal(oneOffCandidate?.currentExactFaceLink, null);
+
+  const recurringCandidate = wholeAssetCandidates.candidates.find(
+    (candidate) => candidate.projectProfileParticipantId === participantId,
+  );
+  assert.ok(recurringCandidate?.currentWholeAssetLink);
+  assert.equal(recurringCandidate?.currentExactFaceLink, null);
+
+  const revokedAt = new Date().toISOString();
+  const { error: revokeConsentError } = await adminClient
+    .from("consents")
+    .update({
+      revoked_at: revokedAt,
+      revoke_reason: "feature064-test",
+    })
+    .eq("id", consentId);
+  assertNoPostgrestError(revokeConsentError, "revoke video whole-asset consent");
+
+  const revokedPreview = await getAssetPreviewWholeAssetLinks({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+  });
+  const revokedLink = revokedPreview.wholeAssetLinks.find((link) => link.consent?.consentId === consentId) ?? null;
+  assert.ok(revokedLink);
+  assert.equal(revokedLink?.ownerState, "revoked");
+  assert.equal(revokedLink?.consent?.status, "revoked");
+
+  const unlinkOneOffResult = await manualUnlinkWholeAssetFromConsent({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    consentId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(unlinkOneOffResult.kind, "unlinked");
+
+  const duplicateUnlinkOneOffResult = await manualUnlinkWholeAssetFromConsent({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    consentId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(duplicateUnlinkOneOffResult.kind, "already_unlinked");
+
+  const unlinkRecurringResult = await manualUnlinkWholeAssetFromRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(unlinkRecurringResult.kind, "unlinked");
+
+  const duplicateUnlinkRecurringResult = await manualUnlinkWholeAssetFromRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+  assert.equal(duplicateUnlinkRecurringResult.kind, "already_unlinked");
+
+  const clearedRows = await loadCurrentWholeAssetLinksForAsset({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: videoAssetId,
+  });
+  assert.equal(clearedRows.length, 0);
 });

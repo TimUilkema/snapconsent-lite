@@ -96,12 +96,27 @@ export type ProjectExportFallbackRecord = {
   consentId: string;
 };
 
+export type ProjectExportWholeAssetLinkRecord = {
+  assetId: string;
+  projectFaceAssigneeId: string;
+  identityKind: "project_consent" | "project_recurring_consent";
+  consentId: string | null;
+  recurringProfileConsentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  displayName: string | null;
+  email: string | null;
+  currentStatus: "active" | "revoked";
+  linkSource: "manual";
+};
+
 export type LoadedProjectExportRecords = {
   assets: ProjectExportAssetRecord[];
   consents: ProjectExportConsentRecord[];
   materializations: ProjectExportMaterializationRecord[];
   faces: ProjectExportFaceRecord[];
   faceLinks: ProjectExportFaceLinkRecord[];
+  wholeAssetLinks: ProjectExportWholeAssetLinkRecord[];
   fallbackLinks: ProjectExportFallbackRecord[];
 };
 
@@ -159,7 +174,7 @@ export type ProjectExportAssetJson = {
     currentStatus: "active" | "revoked";
     revokedAt: string | null;
     revokeReason: string | null;
-    linkMode: "face" | "asset_fallback";
+    linkMode: "face" | "asset_fallback" | "whole_asset";
     linkSource: "manual" | "auto";
     assetFaceId: string | null;
     faceRank: number | null;
@@ -175,7 +190,7 @@ export type ProjectExportAssetJson = {
     displayName: string | null;
     email: string | null;
     currentStatus: "active" | "revoked";
-    linkMode: "face" | "asset_fallback";
+    linkMode: "face" | "asset_fallback" | "whole_asset";
     linkSource: "manual" | "auto";
     assetFaceId: string | null;
     faceRank: number | null;
@@ -213,7 +228,7 @@ export type ProjectExportConsentJson = {
     assetId: string;
     originalFilename: string;
     exportedFilename: string;
-    linkMode: "face" | "asset_fallback";
+    linkMode: "face" | "asset_fallback" | "whole_asset";
     linkSource: "manual" | "auto";
     assetFaceId: string | null;
     faceRank: number | null;
@@ -401,6 +416,7 @@ export async function loadProjectExportRecords(input: {
       materializations: [],
       faces: [],
       faceLinks: [],
+      wholeAssetLinks: [],
       fallbackLinks: [],
     } satisfies LoadedProjectExportRecords;
   }
@@ -529,6 +545,52 @@ export async function loadProjectExportRecords(input: {
     }) satisfies ProjectExportFaceLinkRecord[];
   });
 
+  const wholeAssetLinks = await runChunkedRead(assetIds, async (assetIdChunk) => {
+    const { data, error } = await input.supabase
+      .from("asset_assignee_links")
+      .select("asset_id, project_face_assignee_id, link_source")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .in("asset_id", assetIdChunk);
+
+    if (error) {
+      throw new HttpError(500, "project_export_failed", "Unable to load project export data.");
+    }
+
+    const rawLinks = (data ?? []) as Array<{
+      asset_id: string;
+      project_face_assignee_id: string;
+      link_source: "manual";
+    }>;
+    const assigneeDisplayMap = await loadProjectFaceAssigneeDisplayMap({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assigneeIds: rawLinks.map((link) => link.project_face_assignee_id),
+    });
+
+    return rawLinks.map((link) => {
+      const assignee = assigneeDisplayMap.get(link.project_face_assignee_id) ?? null;
+      if (!assignee) {
+        throw new HttpError(500, "project_export_failed", "Unable to load project export assignee data.");
+      }
+
+      return {
+        assetId: link.asset_id,
+        projectFaceAssigneeId: assignee.projectFaceAssigneeId,
+        identityKind: assignee.identityKind,
+        consentId: assignee.consentId,
+        recurringProfileConsentId: assignee.recurringProfileConsentId,
+        projectProfileParticipantId: assignee.projectProfileParticipantId,
+        profileId: assignee.profileId,
+        displayName: assignee.fullName,
+        email: assignee.email,
+        currentStatus: assignee.status,
+        linkSource: link.link_source,
+      };
+    }) satisfies ProjectExportWholeAssetLinkRecord[];
+  });
+
   const fallbackLinks = await runChunkedRead(assetIds, async (assetIdChunk) => {
     const { data, error } = await input.supabase
       .from("asset_consent_manual_photo_fallbacks")
@@ -556,6 +618,7 @@ export async function loadProjectExportRecords(input: {
     materializations,
     faces,
     faceLinks,
+    wholeAssetLinks,
     fallbackLinks,
   } satisfies LoadedProjectExportRecords;
 }
@@ -605,6 +668,7 @@ export function buildPreparedProjectExport(input: {
     const materialization = materializationByAssetId.get(link.assetId);
     return materialization?.id === link.assetMaterializationId;
   });
+  const currentWholeAssetLinks = input.records.wholeAssetLinks;
   const currentFallbackLinks = input.records.fallbackLinks.filter((link) => {
     const materialization = materializationByAssetId.get(link.assetId);
     return materialization?.faceCount === 0;
@@ -612,6 +676,7 @@ export function buildPreparedProjectExport(input: {
 
   const faceLinkByFaceId = new Map(currentFaceLinks.map((link) => [link.assetFaceId, link]));
   const faceLinksByAssetId = new Map<string, ProjectExportFaceLinkRecord[]>();
+  const wholeAssetLinksByAssetId = new Map<string, ProjectExportWholeAssetLinkRecord[]>();
   const fallbackLinksByAssetId = new Map<string, ProjectExportFallbackRecord[]>();
   const linksByConsentId = new Map<
     string,
@@ -619,6 +684,10 @@ export function buildPreparedProjectExport(input: {
       | {
           kind: "face";
           link: ProjectExportFaceLinkRecord;
+        }
+      | {
+          kind: "whole_asset";
+          link: ProjectExportWholeAssetLinkRecord;
         }
       | {
           kind: "asset_fallback";
@@ -639,7 +708,29 @@ export function buildPreparedProjectExport(input: {
     }
   });
 
+  currentWholeAssetLinks.forEach((link) => {
+    const assetLinks = wholeAssetLinksByAssetId.get(link.assetId) ?? [];
+    assetLinks.push(link);
+    wholeAssetLinksByAssetId.set(link.assetId, assetLinks);
+
+    if (link.consentId) {
+      const consentLinks = linksByConsentId.get(link.consentId) ?? [];
+      consentLinks.push({ kind: "whole_asset", link });
+      linksByConsentId.set(link.consentId, consentLinks);
+    }
+  });
+
+  const canonicalWholeAssetConsentKeys = new Set(
+    currentWholeAssetLinks
+      .filter((link): link is ProjectExportWholeAssetLinkRecord & { consentId: string } => typeof link.consentId === "string")
+      .map((link) => `${link.assetId}:${link.consentId}`),
+  );
+
   currentFallbackLinks.forEach((link) => {
+    if (canonicalWholeAssetConsentKeys.has(`${link.assetId}:${link.consentId}`)) {
+      return;
+    }
+
     const assetLinks = fallbackLinksByAssetId.get(link.assetId) ?? [];
     assetLinks.push(link);
     fallbackLinksByAssetId.set(link.assetId, assetLinks);
@@ -708,6 +799,26 @@ export function buildPreparedProjectExport(input: {
           matchConfidence: link.matchConfidence,
         };
       }),
+      ...(wholeAssetLinksByAssetId.get(asset.id) ?? [])
+        .filter((link): link is ProjectExportWholeAssetLinkRecord & { consentId: string } => typeof link.consentId === "string")
+        .map((link) => {
+          const consent = consentById.get(link.consentId);
+
+          return {
+            consentId: link.consentId,
+            subjectId: consent?.subjectId ?? "",
+            fullName: consent?.subjectFullName ?? null,
+            email: consent?.subjectEmail ?? null,
+            currentStatus: consent ? consentState(consent) : "active",
+            revokedAt: consent?.revokedAt ?? null,
+            revokeReason: consent?.revokeReason ?? null,
+            linkMode: "whole_asset" as const,
+            linkSource: link.linkSource,
+            assetFaceId: null,
+            faceRank: null,
+            matchConfidence: null,
+          };
+        }),
       ...(fallbackLinksByAssetId.get(asset.id) ?? []).map((link) => {
         const consent = consentById.get(link.consentId);
 
@@ -748,6 +859,22 @@ export function buildPreparedProjectExport(input: {
           matchConfidence: link.matchConfidence,
         };
       }),
+      ...(wholeAssetLinksByAssetId.get(asset.id) ?? []).map((link) => ({
+        projectFaceAssigneeId: link.projectFaceAssigneeId,
+        identityKind: link.identityKind,
+        consentId: link.consentId,
+        recurringProfileConsentId: link.recurringProfileConsentId,
+        projectProfileParticipantId: link.projectProfileParticipantId,
+        profileId: link.profileId,
+        displayName: link.displayName,
+        email: link.email,
+        currentStatus: link.currentStatus,
+        linkMode: "whole_asset" as const,
+        linkSource: link.linkSource,
+        assetFaceId: null,
+        faceRank: null,
+        matchConfidence: null,
+      })),
       ...(fallbackLinksByAssetId.get(asset.id) ?? []).map((link) => {
         const consent = consentById.get(link.consentId);
 
@@ -850,7 +977,10 @@ export function buildPreparedProjectExport(input: {
         originalFilename: asset?.originalFilename ?? "",
         exportedFilename: assetFileName?.exportedFilename ?? "",
         linkMode: entry.kind,
-        linkSource: entry.kind === "face" ? entry.link.linkSource : ("manual" as const),
+        linkSource:
+          entry.kind === "face" || entry.kind === "whole_asset"
+            ? entry.link.linkSource
+            : ("manual" as const),
         assetFaceId: entry.kind === "face" ? entry.link.assetFaceId : null,
         faceRank: entry.kind === "face" ? detectedFaceRankById.get(entry.link.assetFaceId) ?? null : null,
         matchConfidence: entry.kind === "face" ? entry.link.matchConfidence : null,

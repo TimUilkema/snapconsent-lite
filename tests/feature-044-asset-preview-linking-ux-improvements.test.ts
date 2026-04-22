@@ -16,13 +16,19 @@ import {
 } from "../src/components/projects/project-asset-preview-lightbox";
 import { submitConsent } from "../src/lib/consent/submit-consent";
 import {
+  getAssetPreviewFaces,
   getAssetPreviewLinkCandidates,
   getAssetPreviewLinkedFaces,
+  getAssetPreviewWholeAssetCandidates,
 } from "../src/lib/matching/asset-preview-linking";
 import type { AutoMatcher, AutoMatcherMaterializedFace } from "../src/lib/matching/auto-matcher";
 import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
 import { ensureAssetFaceMaterialization } from "../src/lib/matching/face-materialization";
 import { manualLinkPhotoToConsent } from "../src/lib/matching/photo-face-linking";
+import {
+  manualLinkWholeAssetToConsent,
+  manualUnlinkWholeAssetFromConsent,
+} from "../src/lib/matching/whole-asset-linking";
 import type { StructuredFieldsSnapshot } from "../src/lib/templates/structured-fields";
 
 type ProjectContext = {
@@ -861,4 +867,60 @@ test("change person picker rows show names without email lines", () => {
 
   assert.match(markup, /Kim Example/);
   assert.doesNotMatch(markup, /kim@example\.com/);
+});
+
+test("whole-asset links appear on zero-face previews and candidate rows for one-off consents", async () => {
+  const context = await createProjectContext(admin);
+  const photoAssetId = await createAsset(admin, context, { assetType: "photo" });
+  const consent = await createOptedInConsentWithHeadshot(admin, context);
+
+  const linkResult = await manualLinkWholeAssetToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    consentId: consent.consentId,
+    actorUserId: context.userId,
+  });
+  assert.equal(linkResult.kind, "linked");
+
+  const preview = await getAssetPreviewFaces({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(preview.detectedFaceCount, 0);
+  assert.equal(preview.wholeAssetLinkCount, 1);
+  assert.equal(preview.wholeAssetLinks.length, 1);
+  assert.equal(preview.wholeAssetLinks[0]?.linkMode, "whole_asset");
+  assert.equal(preview.wholeAssetLinks[0]?.consent?.consentId, consent.consentId);
+
+  const candidates = await getAssetPreviewWholeAssetCandidates({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+  });
+  const linkedCandidate = candidates.candidates.find((candidate) => candidate.consentId === consent.consentId) ?? null;
+  assert.ok(linkedCandidate);
+  assert.equal(linkedCandidate.currentExactFaceLink, null);
+  assert.equal(typeof linkedCandidate.currentWholeAssetLink?.projectFaceAssigneeId, "string");
+
+  const unlinkResult = await manualUnlinkWholeAssetFromConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+    consentId: consent.consentId,
+  });
+  assert.equal(unlinkResult.kind, "unlinked");
+
+  const clearedPreview = await getAssetPreviewFaces({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: photoAssetId,
+  });
+  assert.equal(clearedPreview.wholeAssetLinkCount, 0);
 });

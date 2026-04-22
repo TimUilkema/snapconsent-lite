@@ -4,12 +4,21 @@ import {
   resolveSignedAssetDisplayUrlsForAssets,
   signThumbnailUrlsForAssets,
 } from "@/lib/assets/sign-asset-thumbnails";
+import { signVideoPlaybackUrlsForAssets } from "@/lib/assets/sign-asset-playback";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { getAssetReviewSummaries } from "@/lib/matching/asset-preview-linking";
 import {
   listLinkedFaceOverlaysForAssetIds,
   listPhotoConsentAssignmentsForAssetIds,
 } from "@/lib/matching/consent-photo-matching";
 import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
+import {
+  buildProjectAssetReviewSummary,
+  filterProjectAssetsByReview,
+  sortProjectAssetsForList,
+  type ProjectAssetListSort,
+  type ProjectAssetReviewFilter,
+} from "@/lib/projects/project-asset-review-list";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -32,16 +41,15 @@ type CreateAssetBody = {
   duplicatePolicy?: string;
 };
 
-type AssetListSort =
-  | "created_at_desc"
-  | "created_at_asc"
-  | "file_size_desc"
-  | "file_size_asc";
+type AssetListSort = ProjectAssetListSort;
+
+type AssetReviewFilter = ProjectAssetReviewFilter;
 
 type DuplicatePolicy = "upload_anyway" | "overwrite" | "ignore";
 
 type AssetRow = {
   id: string;
+  asset_type: "photo" | "video";
   original_filename: string;
   status: string;
   file_size_bytes: number;
@@ -128,10 +136,24 @@ function parseSort(searchParams: URLSearchParams): AssetListSort {
     case "created_at_asc":
     case "file_size_desc":
     case "file_size_asc":
+    case "needs_review_first":
       return raw;
     case "created_at_desc":
     default:
       return "created_at_desc";
+  }
+}
+
+function parseReviewFilter(searchParams: URLSearchParams): AssetReviewFilter {
+  const raw = searchParams.get("review");
+  switch (raw) {
+    case "needs_review":
+    case "blocked":
+    case "resolved":
+      return raw;
+    case "all":
+    default:
+      return "all";
   }
 }
 
@@ -164,6 +186,7 @@ function parseDuplicatePolicy(value: unknown): DuplicatePolicy {
   return "upload_anyway";
 }
 
+
 async function requireAuthAndScope(context: RouteContext) {
   const authSupabase = await createClient();
   const {
@@ -190,6 +213,7 @@ export async function GET(request: Request, context: RouteContext) {
     const limit = parseLimit(url.searchParams);
     const offset = parseOffset(url.searchParams);
     const sort = parseSort(url.searchParams);
+    const reviewFilter = parseReviewFilter(url.searchParams);
     const queryText = parseSearchQuery(url.searchParams);
     const selectedConsentIds = parseConsentFilterIds(url.searchParams);
 
@@ -259,6 +283,12 @@ export async function GET(request: Request, context: RouteContext) {
             assets: [],
             totalCount: 0,
             people,
+            reviewSummary: {
+              totalAssetCount: 0,
+              needsReviewAssetCount: 0,
+              blockedAssetCount: 0,
+              resolvedAssetCount: 0,
+            },
           },
           { status: 200 },
         );
@@ -267,13 +297,10 @@ export async function GET(request: Request, context: RouteContext) {
 
     let query = supabase
       .from("assets")
-      .select(
-        "id, original_filename, status, file_size_bytes, created_at, uploaded_at, storage_bucket, storage_path",
-        { count: "exact" },
-      )
+      .select("id, asset_type, original_filename, status, file_size_bytes, created_at, uploaded_at, storage_bucket, storage_path")
       .eq("project_id", projectId)
       .eq("tenant_id", tenantId)
-      .eq("asset_type", "photo")
+      .in("asset_type", ["photo", "video"])
       .eq("status", "uploaded");
 
     if (queryText) {
@@ -284,46 +311,72 @@ export async function GET(request: Request, context: RouteContext) {
       query = query.in("id", filteredAssetIds);
     }
 
-    switch (sort) {
-      case "created_at_asc":
-        query = query.order("created_at", { ascending: true });
-        break;
-      case "file_size_desc":
-        query = query.order("file_size_bytes", { ascending: false }).order("created_at", { ascending: false });
-        break;
-      case "file_size_asc":
-        query = query.order("file_size_bytes", { ascending: true }).order("created_at", { ascending: false });
-        break;
-      case "created_at_desc":
-      default:
-        query = query.order("created_at", { ascending: false });
-        break;
-    }
-
-    query = query.range(offset, offset + limit - 1);
-
-    const { data: assets, error: assetsError, count } = await query;
+    const { data: assets, error: assetsError } = await query;
     if (assetsError) {
       throw new HttpError(500, "asset_lookup_failed", "Unable to load assets.");
     }
 
-    const assetRows = (assets as AssetRow[] | null) ?? [];
-    const assetIds = assetRows.map((asset) => asset.id);
+    const candidateAssetRows = (assets as AssetRow[] | null) ?? [];
+    const candidatePhotoAssetIds = candidateAssetRows
+      .filter((asset) => asset.asset_type === "photo")
+      .map((asset) => asset.id);
+    const reviewSummaryByAssetId = await getAssetReviewSummaries({
+      supabase,
+      tenantId,
+      projectId,
+      assetIds: candidatePhotoAssetIds,
+    });
+
+    const candidateAssets = candidateAssetRows.map((asset) => ({
+      asset,
+      review:
+        reviewSummaryByAssetId.get(asset.id) ?? {
+          assetId: asset.id,
+          reviewStatus: "resolved" as const,
+          unresolvedFaceCount: 0,
+          blockedFaceCount: 0,
+          firstNeedsReviewFaceId: null,
+        },
+    }));
+
+    const reviewSummary = buildProjectAssetReviewSummary(candidateAssets);
+    const filteredAssets = filterProjectAssetsByReview(candidateAssets, reviewFilter);
+    const sortedAssets = sortProjectAssetsForList(filteredAssets, sort);
+
+    const pagedAssets = sortedAssets.slice(offset, offset + limit);
+    const assetRows = pagedAssets.map((entry) => entry.asset);
+    const photoAssetRows = assetRows.filter((asset) => asset.asset_type === "photo");
+    const videoAssetRows = assetRows.filter((asset) => asset.asset_type === "video");
+    const photoAssetIds = photoAssetRows.map((asset) => asset.id);
+    const reviewByAssetId = new Map(pagedAssets.map((entry) => [entry.asset.id, entry.review] as const));
 
     const requestHostHeader = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-    const thumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assetRows, {
+    const photoThumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, photoAssetRows, {
       tenantId,
       projectId,
       use: "thumbnail",
       fallback: "original",
       enqueueMissingDerivative: true,
     });
-    const previewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, assetRows, {
+    const photoPreviewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, photoAssetRows, {
       tenantId,
       projectId,
       use: "preview",
       fallback: "original",
     });
+    const videoThumbnailMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, videoAssetRows, {
+      tenantId,
+      projectId,
+      use: "thumbnail",
+      fallback: "none",
+    });
+    const videoPreviewMap = await resolveSignedAssetDisplayUrlsForAssets(supabase, videoAssetRows, {
+      tenantId,
+      projectId,
+      use: "preview",
+      fallback: "none",
+    });
+    const videoPlaybackMap = await signVideoPlaybackUrlsForAssets(videoAssetRows);
 
     const assetLinkCountMap = new Map<string, number>();
     const assetImageSizeMap = new Map<string, { width: number | null; height: number | null }>();
@@ -349,13 +402,13 @@ export async function GET(request: Request, context: RouteContext) {
       }>
     >();
 
-    if (assetIds.length > 0) {
+    if (photoAssetIds.length > 0) {
       const { data: materializations, error: materializationsError } = await supabase
         .from("asset_face_materializations")
         .select("asset_id, source_image_width, source_image_height, materialized_at")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
-        .in("asset_id", assetIds)
+        .in("asset_id", photoAssetIds)
         .order("materialized_at", { ascending: false });
 
       if (materializationsError) {
@@ -377,13 +430,13 @@ export async function GET(request: Request, context: RouteContext) {
         supabase,
         tenantId,
         projectId,
-        assetIds,
+        assetIds: photoAssetIds,
       });
       const linkedFaceOverlays = await listLinkedFaceOverlaysForAssetIds({
         supabase,
         tenantId,
         projectId,
-        assetIds,
+        assetIds: photoAssetIds,
       });
       const consentIdsForLookup = Array.from(
         new Set([
@@ -594,10 +647,24 @@ export async function GET(request: Request, context: RouteContext) {
     return Response.json(
       {
         assets: assetRows.map((asset) => {
-          const thumbnail = thumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
-          const preview = previewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const thumbnail =
+            asset.asset_type === "photo"
+              ? photoThumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const }
+              : videoThumbnailMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const preview =
+            asset.asset_type === "photo"
+              ? photoPreviewMap.get(asset.id) ?? { url: null, state: "unavailable" as const }
+              : videoPreviewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
+          const review = reviewByAssetId.get(asset.id) ?? {
+            assetId: asset.id,
+            reviewStatus: "resolved" as const,
+            unresolvedFaceCount: 0,
+            blockedFaceCount: 0,
+            firstNeedsReviewFaceId: null,
+          };
           return {
             id: asset.id,
+            assetType: asset.asset_type,
             originalFilename: asset.original_filename,
             status: asset.status,
             fileSizeBytes: asset.file_size_bytes,
@@ -613,13 +680,27 @@ export async function GET(request: Request, context: RouteContext) {
               ? resolveLoopbackStorageUrlForHostHeader(preview.url, requestHostHeader)
               : null,
             previewState: preview.state,
+            playbackUrl:
+              asset.asset_type === "video"
+                ? (() => {
+                    const playbackUrl = videoPlaybackMap.get(asset.id) ?? null;
+                    return playbackUrl
+                      ? resolveLoopbackStorageUrlForHostHeader(playbackUrl, requestHostHeader)
+                      : null;
+                  })()
+                : null,
             linkedConsentCount: assetLinkCountMap.get(asset.id) ?? 0,
             linkedPeople: assetLinkedPeopleMap.get(asset.id) ?? [],
             linkedFaceOverlays: assetLinkedFaceOverlayMap.get(asset.id) ?? [],
+            reviewStatus: asset.asset_type === "photo" ? review.reviewStatus : null,
+            unresolvedFaceCount: asset.asset_type === "photo" ? review.unresolvedFaceCount : 0,
+            blockedFaceCount: asset.asset_type === "photo" ? review.blockedFaceCount : 0,
+            firstNeedsReviewFaceId: asset.asset_type === "photo" ? review.firstNeedsReviewFaceId : null,
           };
         }),
-        totalCount: count ?? 0,
+        totalCount: filteredAssets.length,
         people,
+        reviewSummary,
       },
       { status: 200 },
     );

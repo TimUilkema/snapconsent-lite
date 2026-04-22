@@ -1,9 +1,17 @@
 import {
   type ProjectUploadFinalizeItemResult,
+  PROJECT_UPLOAD_FINALIZE_BATCH_SIZE,
+  PROJECT_UPLOAD_HASH_CONCURRENCY,
   type ProjectUploadItem,
   type ProjectUploadManifest,
+  PROJECT_UPLOAD_PREPARE_BATCH_SIZE,
   type ProjectUploadPrepareItemResult,
+  PROJECT_UPLOAD_PUT_CONCURRENCY,
   type ProjectUploadQueueState,
+  PROJECT_VIDEO_UPLOAD_FINALIZE_BATCH_SIZE,
+  PROJECT_VIDEO_UPLOAD_HASH_CONCURRENCY,
+  PROJECT_VIDEO_UPLOAD_PREPARE_BATCH_SIZE,
+  PROJECT_VIDEO_UPLOAD_PUT_CONCURRENCY,
 } from "@/lib/uploads/project-upload-types";
 
 function nowIso() {
@@ -181,4 +189,27 @@ export function chunkProjectUploadItems<T>(values: T[], size: number) {
     result.push(values.slice(index, index + chunkSize));
   }
   return result;
+}
+
+export function groupProjectUploadItemsByAssetType<T extends Pick<ProjectUploadItem, "assetType">>(items: T[]) {
+  return {
+    photo: items.filter((item) => item.assetType === "photo"),
+    video: items.filter((item) => item.assetType === "video"),
+  };
+}
+
+export function getProjectUploadHashConcurrencyForAssetType(assetType: ProjectUploadItem["assetType"]) {
+  return assetType === "video" ? PROJECT_VIDEO_UPLOAD_HASH_CONCURRENCY : PROJECT_UPLOAD_HASH_CONCURRENCY;
+}
+
+export function getProjectUploadPrepareBatchSizeForAssetType(assetType: ProjectUploadItem["assetType"]) {
+  return assetType === "video" ? PROJECT_VIDEO_UPLOAD_PREPARE_BATCH_SIZE : PROJECT_UPLOAD_PREPARE_BATCH_SIZE;
+}
+
+export function getProjectUploadFinalizeBatchSizeForAssetType(assetType: ProjectUploadItem["assetType"]) {
+  return assetType === "video" ? PROJECT_VIDEO_UPLOAD_FINALIZE_BATCH_SIZE : PROJECT_UPLOAD_FINALIZE_BATCH_SIZE;
+}
+
+export function getProjectUploadPutConcurrencyForAssetType(assetType: ProjectUploadItem["assetType"]) {
+  return assetType === "video" ? PROJECT_VIDEO_UPLOAD_PUT_CONCURRENCY : PROJECT_UPLOAD_PUT_CONCURRENCY;
 }
