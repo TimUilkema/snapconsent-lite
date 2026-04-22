@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 
 import { ConsentFormLayoutRenderer } from "@/components/consent/consent-form-layout-renderer";
 import { createIdempotencyKey } from "@/lib/client/idempotency-key";
+import type { PublicConsentInitialValues } from "@/lib/consent/public-consent-prefill";
 import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-url";
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 import type { ConsentFormLayoutDefinition } from "@/lib/templates/form-layout";
@@ -15,6 +16,8 @@ type PublicConsentFormProps = {
   consentText: string | null;
   structuredFieldsDefinition: StructuredFieldsDefinition | null;
   formLayoutDefinition: ConsentFormLayoutDefinition;
+  initialValues?: PublicConsentInitialValues | null;
+  upgradeMode?: boolean;
 };
 
 type CreateHeadshotResponse =
@@ -68,18 +71,19 @@ export function PublicConsentForm({
   consentText,
   structuredFieldsDefinition,
   formLayoutDefinition,
+  initialValues,
 }: PublicConsentFormProps) {
   const t = useTranslations("publicInvite.form");
   const tErrors = useTranslations("errors");
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [subjectName, setSubjectName] = useState("");
-  const [subjectEmail, setSubjectEmail] = useState("");
+  const [subjectName, setSubjectName] = useState(initialValues?.subjectName ?? "");
+  const [subjectEmail, setSubjectEmail] = useState(initialValues?.subjectEmail ?? "");
   const [consentAcknowledged, setConsentAcknowledged] = useState(false);
   const [structuredFieldValues, setStructuredFieldValues] = useState<
     Record<string, string | string[] | null | undefined>
-  >({});
-  const [faceMatchOptIn, setFaceMatchOptIn] = useState(false);
+  >(() => ({ ...(initialValues?.structuredFieldValues ?? {}) }));
+  const [faceMatchOptIn, setFaceMatchOptIn] = useState(initialValues?.faceMatchOptIn ?? false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [headshotAssetId, setHeadshotAssetId] = useState<string | null>(null);

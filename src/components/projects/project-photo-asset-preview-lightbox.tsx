@@ -30,6 +30,7 @@ type LinkedFacePreview = {
     headshotThumbnailUrl: string | null;
     headshotPreviewUrl: string | null;
     goToConsentHref: string;
+    scopeStates: PreviewScopeState[];
   };
   recurring: null | {
     projectProfileParticipantId: string;
@@ -41,7 +42,16 @@ type LinkedFacePreview = {
     faceMatchOptIn: boolean | null;
     headshotThumbnailUrl: string | null;
     headshotPreviewUrl: string | null;
+    scopeStates: PreviewScopeState[];
   };
+};
+
+type PreviewScopeState = {
+  scopeOptionKey: string;
+  scopeLabel: string;
+  effectiveStatus: "granted" | "not_granted" | "revoked" | "not_collected";
+  governingTemplateVersion: string;
+  governingSignedAt: string | null;
 };
 
 type WholeAssetLinkPreview = {
@@ -280,6 +290,92 @@ function getWholeAssetLinkDisplayName(link: WholeAssetLinkPreview, unknownPerson
   return link.displayName || link.email || unknownPersonLabel;
 }
 
+function getPreviewScopeStatusTone(status: PreviewScopeState["effectiveStatus"]) {
+  switch (status) {
+    case "granted":
+      return "border-emerald-200 bg-emerald-50 text-emerald-800";
+    case "revoked":
+      return "border-red-200 bg-red-50 text-red-800";
+    case "not_collected":
+      return "border-amber-200 bg-amber-50 text-amber-900";
+    default:
+      return "border-zinc-200 bg-zinc-100 text-zinc-700";
+  }
+}
+
+function getPreviewScopeStatusLabel(
+  status: PreviewScopeState["effectiveStatus"],
+  labels: {
+    granted: string;
+    notGranted: string;
+    revoked: string;
+    notCollected: string;
+  },
+) {
+  switch (status) {
+    case "granted":
+      return labels.granted;
+    case "revoked":
+      return labels.revoked;
+    case "not_collected":
+      return labels.notCollected;
+    default:
+      return labels.notGranted;
+  }
+}
+
+function renderPreviewScopeStates(input: {
+  scopeStates: PreviewScopeState[];
+  locale: string;
+  sectionLabel: string;
+  provenanceWithDateLabel: (version: string, date: string) => string;
+  provenanceWithoutDateLabel: (version: string) => string;
+  statusLabels: {
+    granted: string;
+    notGranted: string;
+    revoked: string;
+    notCollected: string;
+  };
+}) {
+  if (input.scopeStates.length === 0) {
+    return null;
+  }
+
+  const governingState = input.scopeStates[0] ?? null;
+  const provenanceLabel = governingState
+    ? governingState.governingSignedAt
+      ? input.provenanceWithDateLabel(
+          governingState.governingTemplateVersion,
+          formatDate(governingState.governingSignedAt, input.locale),
+        )
+      : input.provenanceWithoutDateLabel(governingState.governingTemplateVersion)
+    : null;
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <div className="space-y-1">
+        <p className="text-xs text-zinc-500">{input.sectionLabel}</p>
+        {provenanceLabel ? <p className="text-xs text-zinc-500">{provenanceLabel}</p> : null}
+      </div>
+      <ul className="mt-3 space-y-2">
+        {input.scopeStates.map((scopeState) => (
+          <li
+            key={scopeState.scopeOptionKey}
+            className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2"
+          >
+            <span className="text-sm text-zinc-900">{scopeState.scopeLabel}</span>
+            <span
+              className={`inline-flex rounded-md border px-2 py-1 text-xs font-medium ${getPreviewScopeStatusTone(scopeState.effectiveStatus)}`}
+            >
+              {getPreviewScopeStatusLabel(scopeState.effectiveStatus, input.statusLabels)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function getCandidateIdentityLabel(
   candidate: AssetPreviewCandidate,
   consentIdentityLabel: string,
@@ -482,6 +578,13 @@ export function AssetPreviewConsentPanel({
   noEmailLabel,
   unknownPersonLabel,
   unknownValueLabel,
+  scopeStatusLabel,
+  scopeStatusGrantedLabel,
+  scopeStatusNotGrantedLabel,
+  scopeStatusRevokedLabel,
+  scopeStatusNotCollectedLabel,
+  scopeProvenanceWithDateLabel,
+  scopeProvenanceWithoutDateLabel,
   activeLabel,
   revokedLabel,
   consentIdentityLabel,
@@ -526,6 +629,13 @@ export function AssetPreviewConsentPanel({
   noEmailLabel: string;
   unknownPersonLabel: string;
   unknownValueLabel: string;
+  scopeStatusLabel: string;
+  scopeStatusGrantedLabel: string;
+  scopeStatusNotGrantedLabel: string;
+  scopeStatusRevokedLabel: string;
+  scopeStatusNotCollectedLabel: string;
+  scopeProvenanceWithDateLabel: (version: string, date: string) => string;
+  scopeProvenanceWithoutDateLabel: (version: string) => string;
   activeLabel: string;
   revokedLabel: string;
   consentIdentityLabel: string;
@@ -586,6 +696,7 @@ export function AssetPreviewConsentPanel({
     linkedFace.consent?.headshotThumbnailUrl ?? linkedFace.recurring?.headshotThumbnailUrl ?? null;
   const linkedFaceHeadshotPreviewUrl =
     linkedFace.consent?.headshotPreviewUrl ?? linkedFace.recurring?.headshotPreviewUrl ?? null;
+  const linkedFaceScopeStates = linkedFace.consent?.scopeStates ?? linkedFace.recurring?.scopeStates ?? [];
 
   return (
     <div className="h-full rounded-xl border border-zinc-200 bg-white p-4">
@@ -644,6 +755,20 @@ export function AssetPreviewConsentPanel({
             </ul>
           </div>
         ) : null}
+
+          {renderPreviewScopeStates({
+            scopeStates: linkedFaceScopeStates,
+            locale,
+            sectionLabel: scopeStatusLabel,
+            provenanceWithDateLabel: scopeProvenanceWithDateLabel,
+            provenanceWithoutDateLabel: scopeProvenanceWithoutDateLabel,
+            statusLabels: {
+              granted: scopeStatusGrantedLabel,
+              notGranted: scopeStatusNotGrantedLabel,
+              revoked: scopeStatusRevokedLabel,
+              notCollected: scopeStatusNotCollectedLabel,
+            },
+          })}
 
           {linkedFaceHeadshotThumbnailUrl ? (
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
@@ -1019,6 +1144,13 @@ export function AssetPreviewWholeAssetPanel({
   unknownValueLabel,
   activeLabel,
   revokedLabel,
+  scopeStatusLabel,
+  scopeStatusGrantedLabel,
+  scopeStatusNotGrantedLabel,
+  scopeStatusRevokedLabel,
+  scopeStatusNotCollectedLabel,
+  scopeProvenanceWithDateLabel,
+  scopeProvenanceWithoutDateLabel,
   consentIdentityLabel,
   recurringIdentityLabel,
   wholeAssetLabel,
@@ -1060,6 +1192,13 @@ export function AssetPreviewWholeAssetPanel({
   unknownValueLabel: string;
   activeLabel: string;
   revokedLabel: string;
+  scopeStatusLabel: string;
+  scopeStatusGrantedLabel: string;
+  scopeStatusNotGrantedLabel: string;
+  scopeStatusRevokedLabel: string;
+  scopeStatusNotCollectedLabel: string;
+  scopeProvenanceWithDateLabel: (version: string, date: string) => string;
+  scopeProvenanceWithoutDateLabel: (version: string) => string;
   consentIdentityLabel: string;
   recurringIdentityLabel: string;
   wholeAssetLabel: string;
@@ -1094,6 +1233,7 @@ export function AssetPreviewWholeAssetPanel({
     wholeAssetLink?.consent?.headshotPreviewUrl
     ?? wholeAssetLink?.recurring?.headshotPreviewUrl
     ?? null;
+  const wholeAssetScopeStates = wholeAssetLink?.consent?.scopeStates ?? wholeAssetLink?.recurring?.scopeStates ?? [];
 
   return (
     <div className="h-full rounded-xl border border-zinc-200 bg-white p-4">
@@ -1155,6 +1295,19 @@ export function AssetPreviewWholeAssetPanel({
                 </div>
               </div>
             ) : null}
+            {renderPreviewScopeStates({
+              scopeStates: wholeAssetScopeStates,
+              locale,
+              sectionLabel: scopeStatusLabel,
+              provenanceWithDateLabel: scopeProvenanceWithDateLabel,
+              provenanceWithoutDateLabel: scopeProvenanceWithoutDateLabel,
+              statusLabels: {
+                granted: scopeStatusGrantedLabel,
+                notGranted: scopeStatusNotGrantedLabel,
+                revoked: scopeStatusRevokedLabel,
+                notCollected: scopeStatusNotCollectedLabel,
+              },
+            })}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -3242,6 +3395,17 @@ export function ProjectPhotoAssetPreviewLightbox({
             unknownValueLabel={t("previewUnknownValue")}
             activeLabel={t("previewStatusActive")}
             revokedLabel={t("previewStatusRevoked")}
+            scopeStatusLabel={t("previewScopeStatusLabel")}
+            scopeStatusGrantedLabel={t("previewScopeStatusGranted")}
+            scopeStatusNotGrantedLabel={t("previewScopeStatusNotGranted")}
+            scopeStatusRevokedLabel={t("previewScopeStatusRevoked")}
+            scopeStatusNotCollectedLabel={t("previewScopeStatusNotCollected")}
+            scopeProvenanceWithDateLabel={(version, date) =>
+              t("previewScopeProvenanceWithDate", { version, date })
+            }
+            scopeProvenanceWithoutDateLabel={(version) =>
+              t("previewScopeProvenanceWithoutDate", { version })
+            }
             consentIdentityLabel={t("previewIdentityProjectConsent")}
             recurringIdentityLabel={t("previewIdentityRecurringProfile")}
             wholeAssetLabel={t("previewWholeAssetBadge")}
@@ -3293,6 +3457,17 @@ export function ProjectPhotoAssetPreviewLightbox({
             noEmailLabel={t("previewNoEmail")}
             unknownPersonLabel={unknownPersonLabel}
             unknownValueLabel={t("previewUnknownValue")}
+            scopeStatusLabel={t("previewScopeStatusLabel")}
+            scopeStatusGrantedLabel={t("previewScopeStatusGranted")}
+            scopeStatusNotGrantedLabel={t("previewScopeStatusNotGranted")}
+            scopeStatusRevokedLabel={t("previewScopeStatusRevoked")}
+            scopeStatusNotCollectedLabel={t("previewScopeStatusNotCollected")}
+            scopeProvenanceWithDateLabel={(version, date) =>
+              t("previewScopeProvenanceWithDate", { version, date })
+            }
+            scopeProvenanceWithoutDateLabel={(version) =>
+              t("previewScopeProvenanceWithoutDate", { version })
+            }
             activeLabel={t("previewStatusActive")}
             revokedLabel={t("previewStatusRevoked")}
             consentIdentityLabel={t("previewIdentityProjectConsent")}

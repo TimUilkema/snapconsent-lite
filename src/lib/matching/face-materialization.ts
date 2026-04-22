@@ -1172,6 +1172,7 @@ export async function loadEligibleConsentsForHeadshotAsset(
       .eq("project_id", projectId)
       .eq("face_match_opt_in", true)
       .is("revoked_at", null)
+      .is("superseded_at", null)
       // safe-in-filter: consent validation is request-bounded and chunked by shared helper.
       .in("id", consentIdChunk);
 

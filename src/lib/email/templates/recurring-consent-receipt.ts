@@ -1,3 +1,5 @@
+import { escapeEmailHtml, formatOutboundEmailTimestampUtc } from "@/lib/email/templates/shared";
+
 type BuildRecurringConsentReceiptInput = {
   subjectName: string;
   subjectEmail: string;
@@ -9,7 +11,7 @@ type BuildRecurringConsentReceiptInput = {
 };
 
 export function buildRecurringConsentReceipt(input: BuildRecurringConsentReceiptInput) {
-  const signedAt = new Date(input.signedAtIso).toLocaleString();
+  const signedAt = formatOutboundEmailTimestampUtc(input.signedAtIso);
   const subject = `SnapConsent receipt for ${input.tenantLabel}`;
 
   const text = [
@@ -31,28 +33,19 @@ export function buildRecurringConsentReceipt(input: BuildRecurringConsentReceipt
   ].join("\n");
 
   const html = `
-    <p>Hi ${escapeHtml(input.subjectName)},</p>
+    <p>Hi ${escapeEmailHtml(input.subjectName)},</p>
     <p>This email confirms your submitted recurring consent.</p>
     <ul>
-      <li><strong>Organization:</strong> ${escapeHtml(input.tenantLabel)}</li>
-      <li><strong>Email:</strong> ${escapeHtml(input.subjectEmail)}</li>
-      <li><strong>Signed at:</strong> ${escapeHtml(signedAt)}</li>
-      <li><strong>Consent version:</strong> ${escapeHtml(input.consentVersion)}</li>
+      <li><strong>Organization:</strong> ${escapeEmailHtml(input.tenantLabel)}</li>
+      <li><strong>Email:</strong> ${escapeEmailHtml(input.subjectEmail)}</li>
+      <li><strong>Signed at:</strong> ${escapeEmailHtml(signedAt)}</li>
+      <li><strong>Consent version:</strong> ${escapeEmailHtml(input.consentVersion)}</li>
     </ul>
     <p><strong>Consent text:</strong></p>
-    <p>${escapeHtml(input.consentText)}</p>
-    <p><a href="${escapeHtml(input.revokeUrl)}">Revoke your consent</a></p>
+    <p>${escapeEmailHtml(input.consentText)}</p>
+    <p><a href="${escapeEmailHtml(input.revokeUrl)}">Revoke your consent</a></p>
     <p>If you did not submit this form, contact the organization immediately.</p>
   `;
 
   return { subject, text, html };
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }

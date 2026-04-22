@@ -24,6 +24,11 @@ import {
   loadProjectRecurringConsentStateByParticipantIds,
   type ProjectFaceAssigneeDisplaySummary,
 } from "@/lib/matching/project-face-assignees";
+import {
+  loadProjectConsentScopeStatesByConsentIds,
+  loadProjectConsentScopeStatesByParticipantIds,
+  type ProjectConsentScopeState,
+} from "@/lib/consent/project-consent-scope-state";
 import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
 import { loadCurrentWholeAssetLinksForAsset } from "@/lib/matching/whole-asset-linking";
 import {
@@ -155,6 +160,7 @@ type AssetPreviewOwnerRecurringSummary = {
   faceMatchOptIn: boolean | null;
   headshotThumbnailUrl: string | null;
   headshotPreviewUrl: string | null;
+  scopeStates: ProjectConsentScopeState[];
 };
 
 type AssetPreviewOwnerConsentSummary = {
@@ -169,6 +175,7 @@ type AssetPreviewOwnerConsentSummary = {
   headshotThumbnailUrl: string | null;
   headshotPreviewUrl: string | null;
   goToConsentHref: string;
+  scopeStates: ProjectConsentScopeState[];
 };
 
 type AssetPreviewCurrentLink = {
@@ -770,7 +777,7 @@ export type AssetPreviewWholeAssetCandidatesResponse = {
   candidates: AssetPreviewWholeAssetCandidate[];
 };
 
-export type AssetReviewStatus = "needs_review" | "blocked" | "resolved";
+export type AssetReviewStatus = "pending" | "needs_review" | "blocked" | "resolved";
 
 export type AssetReviewSummary = {
   assetId: string;
@@ -779,6 +786,16 @@ export type AssetReviewSummary = {
   blockedFaceCount: number;
   firstNeedsReviewFaceId: string | null;
 };
+
+export function buildPendingAssetReviewSummary(assetId: string): AssetReviewSummary {
+  return {
+    assetId,
+    reviewStatus: "pending",
+    unresolvedFaceCount: 0,
+    blockedFaceCount: 0,
+    firstNeedsReviewFaceId: null,
+  };
+}
 
 export function deriveAssetReviewSummaryForFaces(input: {
   assetId: string;
@@ -843,16 +860,7 @@ export async function getAssetReviewSummaries(input: {
 }): Promise<Map<string, AssetReviewSummary>> {
   const uniqueAssetIds = Array.from(new Set(input.assetIds));
   const summaryByAssetId = new Map<string, AssetReviewSummary>(
-    uniqueAssetIds.map((assetId) => [
-      assetId,
-      {
-        assetId,
-        reviewStatus: "resolved",
-        unresolvedFaceCount: 0,
-        blockedFaceCount: 0,
-        firstNeedsReviewFaceId: null,
-      },
-    ]),
+    uniqueAssetIds.map((assetId) => [assetId, buildPendingAssetReviewSummary(assetId)]),
   );
 
   if (uniqueAssetIds.length === 0) {
@@ -942,6 +950,10 @@ export async function getAssetReviewSummaries(input: {
   });
 
   uniqueAssetIds.forEach((assetId) => {
+    if (!currentMaterializationIdByAssetId.has(assetId)) {
+      return;
+    }
+
     const faceIdsInRankOrder = (facesByAssetId.get(assetId) ?? [])
       .slice()
       .sort((left, right) => left.face_rank - right.face_rank)
@@ -1000,6 +1012,8 @@ function buildAssetPreviewCurrentLink(input: {
   consentSummaryMap: Map<string, ConsentRow>;
   headshotImageMap: Awaited<ReturnType<typeof loadHeadshotThumbnailMap>>;
   recurringHeadshotImageMap: Awaited<ReturnType<typeof loadRecurringHeadshotThumbnailMap>>;
+  scopeStatesByConsentId: Map<string, ProjectConsentScopeState[]>;
+  scopeStatesByParticipantId: Map<string, ProjectConsentScopeState[]>;
 }) {
   const consent =
     input.consentId ? input.consentSummaryMap.get(input.consentId) ?? null : null;
@@ -1033,6 +1047,7 @@ function buildAssetPreviewCurrentLink(input: {
             headshotThumbnailUrl: input.headshotImageMap.thumbnailByConsentId.get(input.consentId) ?? null,
             headshotPreviewUrl: input.headshotImageMap.previewByConsentId.get(input.consentId) ?? null,
             goToConsentHref: buildConsentHref(input.projectId, input.consentId),
+            scopeStates: input.scopeStatesByConsentId.get(input.consentId) ?? [],
           }
         : null,
     recurring:
@@ -1049,6 +1064,8 @@ function buildAssetPreviewCurrentLink(input: {
               input.profileId ? input.recurringHeadshotImageMap.thumbnailByProfileId.get(input.profileId) ?? null : null,
             headshotPreviewUrl:
               input.profileId ? input.recurringHeadshotImageMap.previewByProfileId.get(input.profileId) ?? null : null,
+            scopeStates:
+              input.scopeStatesByParticipantId.get(input.projectProfileParticipantId) ?? [],
           }
         : null,
   } satisfies AssetPreviewCurrentLink;
@@ -1067,7 +1084,21 @@ async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
   const recurringProfileIds = Array.from(
     new Set(rows.map((link) => link.profile_id).filter((value): value is string => Boolean(value))),
   );
-  const [assigneeDisplayMap, consentSummaryMap, headshotImageMap, recurringHeadshotImageMap] = await Promise.all([
+  const recurringParticipantIds = Array.from(
+    new Set(
+      rows
+        .map((link) => link.project_profile_participant_id)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const [
+    assigneeDisplayMap,
+    consentSummaryMap,
+    headshotImageMap,
+    recurringHeadshotImageMap,
+    scopeStatesByConsentId,
+    scopeStatesByParticipantId,
+  ] = await Promise.all([
     loadProjectFaceAssigneeDisplayMap({
       supabase: input.supabase,
       tenantId: input.tenantId,
@@ -1077,6 +1108,18 @@ async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
     loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, consentIds),
     loadHeadshotThumbnailMap(input, consentIds),
     loadRecurringHeadshotThumbnailMap(input, recurringProfileIds),
+    loadProjectConsentScopeStatesByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds,
+    }),
+    loadProjectConsentScopeStatesByParticipantIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      participantIds: recurringParticipantIds,
+    }),
   ]);
   const wholeAssetLinks = rows
     .map((link) => {
@@ -1096,6 +1139,8 @@ async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
           consentSummaryMap,
           headshotImageMap,
           recurringHeadshotImageMap,
+          scopeStatesByConsentId,
+          scopeStatesByParticipantId,
         }),
         linkMode: "whole_asset" as const,
       };
@@ -1191,6 +1236,14 @@ export async function getAssetPreviewFaces(
       ].filter((value): value is string => Boolean(value)),
     ),
   );
+  const exactParticipantIds = Array.from(
+    new Set(
+      [
+        ...exactLinkedFaces.map((overlay) => overlay.projectProfileParticipantId),
+        ...currentWholeAssetLinks.map((link) => link.project_profile_participant_id),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
   const faceIds = Array.from(new Set(current.faces.map((face) => face.id)));
   const [
     exactAssigneeDisplayMap,
@@ -1198,6 +1251,8 @@ export async function getAssetPreviewFaces(
     faceDerivatives,
     exactHeadshotImageMap,
     exactRecurringHeadshotImageMap,
+    scopeStatesByConsentId,
+    scopeStatesByParticipantId,
   ] = await Promise.all([
     loadProjectFaceAssigneeDisplayMap({
       supabase: input.supabase,
@@ -1212,6 +1267,18 @@ export async function getAssetPreviewFaces(
     loadFaceImageDerivativesForFaceIds(input.supabase, input.tenantId, input.projectId, faceIds),
     loadHeadshotThumbnailMap(input, exactConsentIds),
     loadRecurringHeadshotThumbnailMap(input, exactRecurringProfileIds),
+    loadProjectConsentScopeStatesByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: exactConsentIds,
+    }),
+    loadProjectConsentScopeStatesByParticipantIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      participantIds: exactParticipantIds,
+    }),
   ]);
   const signedFaceDerivativeMap = await signFaceDerivativeUrls(Array.from(faceDerivatives.values()));
   const overlayByFaceId = new Map(exactLinkedFaces.map((overlay) => [overlay.assetFaceId, overlay] as const));
@@ -1270,6 +1337,8 @@ export async function getAssetPreviewFaces(
                 consentSummaryMap: exactConsentSummaryMap,
                 headshotImageMap: exactHeadshotImageMap,
                 recurringHeadshotImageMap: exactRecurringHeadshotImageMap,
+                scopeStatesByConsentId,
+                scopeStatesByParticipantId,
               })
             : null,
         };
@@ -1533,6 +1602,7 @@ export async function getAssetPreviewFaceCandidates(
     .eq("project_id", input.projectId)
     .not("signed_at", "is", null)
     .is("revoked_at", null)
+    .is("superseded_at", null)
     .order("signed_at", { ascending: false })
     .order("id", { ascending: true });
 
@@ -1915,6 +1985,7 @@ export async function getAssetPreviewWholeAssetCandidates(
       .eq("project_id", input.projectId)
       .not("signed_at", "is", null)
       .is("revoked_at", null)
+      .is("superseded_at", null)
       .order("signed_at", { ascending: false })
       .order("id", { ascending: true }),
   ]);
@@ -2039,6 +2110,7 @@ export async function getAssetPreviewLinkCandidates(
     .eq("project_id", input.projectId)
     .not("signed_at", "is", null)
     .is("revoked_at", null)
+    .is("superseded_at", null)
     .order("signed_at", { ascending: false });
 
   if (error) {

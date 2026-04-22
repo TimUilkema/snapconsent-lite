@@ -1,3 +1,5 @@
+import { escapeEmailHtml, formatOutboundEmailTimestampUtc } from "@/lib/email/templates/shared";
+
 type ConsentReceiptInput = {
   subjectName: string;
   subjectEmail: string;
@@ -9,7 +11,7 @@ type ConsentReceiptInput = {
 };
 
 export function buildConsentReceipt(input: ConsentReceiptInput) {
-  const signedAt = new Date(input.signedAtIso).toLocaleString();
+  const signedAt = formatOutboundEmailTimestampUtc(input.signedAtIso);
   const subject = `SnapConsent receipt for ${input.projectName}`;
 
   const text = [
@@ -31,28 +33,19 @@ export function buildConsentReceipt(input: ConsentReceiptInput) {
   ].join("\n");
 
   const html = `
-    <p>Hi ${escapeHtml(input.subjectName)},</p>
+    <p>Hi ${escapeEmailHtml(input.subjectName)},</p>
     <p>This email confirms your submitted consent.</p>
     <ul>
-      <li><strong>Project:</strong> ${escapeHtml(input.projectName)}</li>
-      <li><strong>Email:</strong> ${escapeHtml(input.subjectEmail)}</li>
-      <li><strong>Signed at:</strong> ${escapeHtml(signedAt)}</li>
-      <li><strong>Consent version:</strong> ${escapeHtml(input.consentVersion)}</li>
+      <li><strong>Project:</strong> ${escapeEmailHtml(input.projectName)}</li>
+      <li><strong>Email:</strong> ${escapeEmailHtml(input.subjectEmail)}</li>
+      <li><strong>Signed at:</strong> ${escapeEmailHtml(signedAt)}</li>
+      <li><strong>Consent version:</strong> ${escapeEmailHtml(input.consentVersion)}</li>
     </ul>
     <p><strong>Consent text:</strong></p>
-    <p>${escapeHtml(input.consentText)}</p>
-    <p><a href="${escapeHtml(input.revokeUrl)}">Revoke your consent</a></p>
+    <p>${escapeEmailHtml(input.consentText)}</p>
+    <p><a href="${escapeEmailHtml(input.revokeUrl)}">Revoke your consent</a></p>
     <p>If you did not submit this form, contact the photographer immediately.</p>
   `;
 
   return { subject, text, html };
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }

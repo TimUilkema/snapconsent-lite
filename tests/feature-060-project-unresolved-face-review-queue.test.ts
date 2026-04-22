@@ -8,7 +8,10 @@ import {
   sortProjectAssetsForList,
   type ProjectAssetReviewListEntry as ProjectAssetListEntry,
 } from "../src/lib/projects/project-asset-review-list";
-import { deriveAssetReviewSummaryForFaces } from "../src/lib/matching/asset-preview-linking";
+import {
+  buildPendingAssetReviewSummary,
+  deriveAssetReviewSummaryForFaces,
+} from "../src/lib/matching/asset-preview-linking";
 
 function createAssetEntry(
   id: string,
@@ -84,24 +87,43 @@ test("feature 060 review derivation treats linked and hidden faces as resolved a
   assert.equal(zeroFace.blockedFaceCount, 0);
 });
 
+test("feature 060 keeps non-materialized assets pending instead of resolved", () => {
+  assert.deepEqual(buildPendingAssetReviewSummary("asset-pending"), {
+    assetId: "asset-pending",
+    reviewStatus: "pending",
+    unresolvedFaceCount: 0,
+    blockedFaceCount: 0,
+    firstNeedsReviewFaceId: null,
+  });
+});
+
 test("feature 060 review summary counts and strict filters stay mutually exclusive", () => {
   const entries = [
     createAssetEntry("asset-needs-review", "needs_review", "2026-04-20T12:00:00.000Z", 20),
+    {
+      asset: {
+        id: "asset-pending",
+        created_at: "2026-04-20T11:30:00.000Z",
+        file_size_bytes: 15,
+      },
+      review: buildPendingAssetReviewSummary("asset-pending"),
+    },
     createAssetEntry("asset-blocked", "blocked", "2026-04-20T11:00:00.000Z", 10),
     createAssetEntry("asset-resolved", "resolved", "2026-04-20T10:00:00.000Z", 30),
     createAssetEntry("asset-needs-review-2", "needs_review", "2026-04-20T09:00:00.000Z", 40),
   ];
 
   assert.deepEqual(buildProjectAssetReviewSummary(entries), {
-    totalAssetCount: 4,
+    totalAssetCount: 5,
     needsReviewAssetCount: 2,
+    pendingAssetCount: 1,
     blockedAssetCount: 1,
     resolvedAssetCount: 1,
   });
 
   assert.deepEqual(
     filterProjectAssetsByReview(entries, "all").map((entry) => entry.asset.id),
-    ["asset-needs-review", "asset-blocked", "asset-resolved", "asset-needs-review-2"],
+    ["asset-needs-review", "asset-pending", "asset-blocked", "asset-resolved", "asset-needs-review-2"],
   );
   assert.deepEqual(
     filterProjectAssetsByReview(entries, "needs_review").map((entry) => entry.asset.id),
@@ -120,6 +142,14 @@ test("feature 060 review summary counts and strict filters stay mutually exclusi
 test("feature 060 needs-review-first sorting prioritizes bucket order, then newest first", () => {
   const entries = [
     createAssetEntry("resolved-new", "resolved", "2026-04-20T14:00:00.000Z", 100),
+    {
+      asset: {
+        id: "pending-between",
+        created_at: "2026-04-20T13:30:00.000Z",
+        file_size_bytes: 95,
+      },
+      review: buildPendingAssetReviewSummary("pending-between"),
+    },
     createAssetEntry("blocked-mid", "blocked", "2026-04-20T13:00:00.000Z", 90),
     createAssetEntry("needs-review-old", "needs_review", "2026-04-20T12:00:00.000Z", 80),
     createAssetEntry("needs-review-new", "needs_review", "2026-04-20T15:00:00.000Z", 70),
@@ -127,7 +157,7 @@ test("feature 060 needs-review-first sorting prioritizes bucket order, then newe
 
   assert.deepEqual(
     sortProjectAssetsForList(entries, "needs_review_first").map((entry) => entry.asset.id),
-    ["needs-review-new", "needs-review-old", "blocked-mid", "resolved-new"],
+    ["needs-review-new", "needs-review-old", "blocked-mid", "pending-between", "resolved-new"],
   );
 });
 

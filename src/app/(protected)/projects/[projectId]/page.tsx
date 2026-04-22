@@ -9,6 +9,7 @@ import { ConsentAssetMatchingPanel } from "@/components/projects/consent-asset-m
 import { ConsentHeadshotReplaceControl } from "@/components/projects/consent-headshot-replace-control";
 import { ConsentStructuredSnapshot } from "@/components/projects/consent-structured-snapshot";
 import { CreateInviteForm } from "@/components/projects/create-invite-form";
+import { OneOffConsentUpgradeForm } from "@/components/projects/one-off-consent-upgrade-form";
 import { PreviewableImage } from "@/components/projects/previewable-image";
 import { ProjectParticipantsPanel } from "@/components/projects/project-participants-panel";
 import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
@@ -44,8 +45,11 @@ type InviteRow = {
   max_uses: number;
   created_at: string;
   consent_template?: {
+    id: string;
+    template_key: string;
     name: string;
     version: string;
+    version_number: number;
   } | null;
   consents?: Array<{
     id: string;
@@ -70,12 +74,18 @@ type RawInviteRow = {
   created_at: string;
   consent_template?:
     | {
+        id: string;
+        template_key: string;
         name: string;
         version: string;
+        version_number: number;
       }
     | Array<{
+        id: string;
+        template_key: string;
         name: string;
         version: string;
+        version_number: number;
       }>
     | null;
   consents?: Array<{
@@ -110,7 +120,44 @@ type ConsentTemplateOption = {
   id: string;
   name: string;
   version: string;
+  versionNumber: number;
+  templateKey: string;
   scope: "app" | "tenant";
+};
+
+type PendingUpgradeRequestRow = {
+  id: string;
+  prior_consent_id: string;
+  target_template_id: string;
+  invite_id: string | null;
+  target_template?:
+    | {
+        id: string;
+        name: string;
+        version: string;
+      }
+    | Array<{
+        id: string;
+        name: string;
+        version: string;
+      }>
+    | null;
+  invite?:
+    | {
+        id: string;
+        status: string;
+        expires_at: string | null;
+        used_count: number;
+        max_uses: number;
+      }
+    | Array<{
+        id: string;
+        status: string;
+        expires_at: string | null;
+        used_count: number;
+        max_uses: number;
+      }>
+    | null;
 };
 
 type HeadshotAssetRow = {
@@ -179,13 +226,15 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     id: template.id,
     name: template.name,
     version: template.version,
+    versionNumber: template.versionNumber,
+    templateKey: template.templateKey,
     scope: template.scope,
   }));
 
   const { data: invites } = await supabase
     .from("subject_invites")
     .select(
-      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(name, version), consents(id, signed_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
+      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(id, template_key, name, version, version_number), consents(id, signed_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
     )
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId)
@@ -212,6 +261,62 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
         }))
       : null,
   }));
+
+  const signedConsentIds = inviteRows
+    .flatMap((invite) => invite.consents?.map((consent) => consent.id) ?? [])
+    .filter((consentId) => consentId.length > 0);
+
+  const pendingUpgradeRequestMap = new Map<
+    string,
+    {
+      id: string;
+      targetTemplateId: string;
+      targetTemplateName: string;
+      targetTemplateVersion: string;
+      invitePath: string;
+      expiresAt: string | null;
+    }
+  >();
+
+  if (signedConsentIds.length > 0) {
+    const { data: pendingUpgradeRequests } = await supabase
+      .from("project_consent_upgrade_requests")
+      .select(
+        "id, prior_consent_id, target_template_id, invite_id, target_template:consent_templates(id, name, version), invite:subject_invites(id, status, expires_at, used_count, max_uses)",
+      )
+      .eq("tenant_id", tenantId)
+      .eq("project_id", project.id)
+      .eq("status", "pending")
+      .in("prior_consent_id", signedConsentIds);
+
+    ((pendingUpgradeRequests as PendingUpgradeRequestRow[] | null) ?? []).forEach((request) => {
+      const invite = firstRelation(request.invite);
+      const targetTemplate = firstRelation(request.target_template);
+      if (
+        !invite
+        || invite.status !== "active"
+        || invite.used_count >= invite.max_uses
+        || !targetTemplate
+      ) {
+        return;
+      }
+
+      pendingUpgradeRequestMap.set(request.prior_consent_id, {
+        id: request.id,
+        targetTemplateId: request.target_template_id,
+        targetTemplateName: targetTemplate.name,
+        targetTemplateVersion: targetTemplate.version,
+        invitePath: buildInvitePath(
+          deriveInviteToken({
+            tenantId,
+            projectId: project.id,
+            idempotencyKey: request.id,
+          }),
+        ),
+        expiresAt: invite.expires_at ?? null,
+      });
+    });
+  }
 
   const { data: idempotencyRows } = await supabase
     .from("idempotency_keys")
@@ -594,6 +699,20 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                           </p>
                                         </div>
                                       )}
+
+                                      {consent && invite.consent_template ? (
+                                        <OneOffConsentUpgradeForm
+                                          projectId={project.id}
+                                          consentId={consent.id}
+                                          currentTemplateId={invite.consent_template.id}
+                                          currentTemplateKey={invite.consent_template.template_key}
+                                          currentTemplateVersionNumber={invite.consent_template.version_number}
+                                          templates={templateOptions}
+                                          initialPendingRequest={
+                                            pendingUpgradeRequestMap.get(consent.id) ?? null
+                                          }
+                                        />
+                                      ) : null}
                                     </section>
 
                                     <section className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">

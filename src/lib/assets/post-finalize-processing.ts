@@ -1,6 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { queueAssetImageDerivativesForAssetIds } from "@/lib/assets/asset-image-derivatives";
+import { HttpError } from "@/lib/http/errors";
 import { getCurrentConsentHeadshotFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueuePhotoUploadedJob } from "@/lib/matching/auto-match-jobs";
 import { getCurrentProjectRecurringSourceBoundary } from "@/lib/matching/project-recurring-sources";
@@ -15,6 +16,22 @@ type QueueProjectAssetPostFinalizeProcessingInput = {
   consentIds: string[];
   source: "photo_finalize" | "photo_finalize_batch";
 };
+
+function createMatchingAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) {
+    throw new HttpError(500, "supabase_admin_not_configured", "Missing Supabase service role configuration.");
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
 
 export async function queueProjectAssetPostFinalizeProcessing(
   input: QueueProjectAssetPostFinalizeProcessingInput,
@@ -42,12 +59,13 @@ export async function queueProjectAssetPostFinalizeProcessing(
   }
 
   try {
+    const matchingSupabase = createMatchingAdminClient();
     const boundary = await getCurrentConsentHeadshotFanoutBoundary(
-      input.supabase,
+      matchingSupabase,
       input.tenantId,
       input.projectId,
     );
-    const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(input.supabase, {
+    const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(matchingSupabase, {
       tenantId: input.tenantId,
       projectId: input.projectId,
     });
@@ -65,8 +83,17 @@ export async function queueProjectAssetPostFinalizeProcessing(
         recurringBoundaryParticipantCreatedAt: recurringBoundary.boundaryParticipantCreatedAt,
         recurringBoundaryParticipantId: recurringBoundary.boundaryProjectProfileParticipantId,
       },
+      supabase: matchingSupabase,
     });
-  } catch {
+  } catch (error) {
+    console.error("[assets][post-finalize] matching_enqueue_failed", {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      assetId: input.assetId,
+      assetType: input.assetType,
+      source: input.source,
+      message: error instanceof Error ? error.message : String(error),
+    });
     // Primary finalize flow must still succeed; reconcile backfills missed jobs.
   }
 }

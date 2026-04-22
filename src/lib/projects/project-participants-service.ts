@@ -83,6 +83,7 @@ type RecurringProfileConsentRow = {
   profile_email_snapshot: string;
   signed_at: string;
   revoked_at: string | null;
+  superseded_at: string | null;
   created_at: string;
 };
 
@@ -538,11 +539,12 @@ export async function getProjectParticipantsPanelData(
       input.supabase
         .from("recurring_profile_consents")
         .select(
-          "id, tenant_id, profile_id, project_id, consent_kind, request_id, consent_template_id, profile_name_snapshot, profile_email_snapshot, signed_at, revoked_at, created_at",
+          "id, tenant_id, profile_id, project_id, consent_kind, request_id, consent_template_id, profile_name_snapshot, profile_email_snapshot, signed_at, revoked_at, superseded_at, created_at",
         )
         .eq("tenant_id", input.tenantId)
         .eq("consent_kind", "baseline")
         .is("revoked_at", null)
+        .is("superseded_at", null)
         .in("profile_id", participantProfileIds),
       input.supabase
         .from("recurring_profile_consents")
@@ -567,12 +569,13 @@ export async function getProjectParticipantsPanelData(
       input.supabase
         .from("recurring_profile_consents")
         .select(
-          "id, tenant_id, profile_id, project_id, consent_kind, request_id, consent_template_id, profile_name_snapshot, profile_email_snapshot, signed_at, revoked_at, created_at",
+          "id, tenant_id, profile_id, project_id, consent_kind, request_id, consent_template_id, profile_name_snapshot, profile_email_snapshot, signed_at, revoked_at, superseded_at, created_at",
         )
         .eq("tenant_id", input.tenantId)
         .eq("project_id", projectId)
         .eq("consent_kind", "project")
         .is("revoked_at", null)
+        .is("superseded_at", null)
         .in("profile_id", participantProfileIds),
       input.supabase
         .from("recurring_profile_consents")
@@ -705,7 +708,11 @@ export async function getProjectParticipantsPanelData(
       },
       projectConsent: {
         state: projectConsentState,
-        latestActivityAt: activeProjectConsent?.signed_at ?? pendingProjectRequest?.expires_at ?? revokedProjectConsent?.revoked_at ?? null,
+        latestActivityAt:
+          pendingProjectRequest?.updated_at
+          ?? activeProjectConsent?.signed_at
+          ?? revokedProjectConsent?.revoked_at
+          ?? null,
         pendingRequest: pendingProjectRequest
           ? {
               id: pendingProjectRequest.id,
@@ -738,9 +745,7 @@ export async function getProjectParticipantsPanelData(
           : null,
       },
       actions: {
-        canCreateRequest:
-          profile.status === "active" &&
-          (projectConsentState === "missing" || projectConsentState === "revoked"),
+        canCreateRequest: profile.status === "active" && !pendingProjectRequest,
         canCopyLink: Boolean(pendingProjectRequest),
         canOpenLink: Boolean(pendingProjectRequest),
       },

@@ -19,6 +19,11 @@
 - Use parameterized queries only.
 - Prefer idempotent writes (retry-safe).
 
+## Outbound email rules
+- Outbound email is server-side only and must go through the central foundation in `src/lib/email/outbound/`.
+- New email features should enqueue typed jobs and add centralized renderer/registry entries instead of calling SMTP or provider code directly.
+- Email links sent outside the app must reuse the existing `APP_ORIGIN` and `src/lib/url/external-origin.ts` pattern.
+
 ## Output expectations
 - Small PR-sized changes.
 - Add/update tests when behavior changes.

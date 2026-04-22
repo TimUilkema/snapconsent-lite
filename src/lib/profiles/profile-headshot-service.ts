@@ -13,16 +13,15 @@ import {
   shouldReplayRecurringProfileReadinessChange,
 } from "@/lib/matching/project-recurring-sources";
 import { resolveProfilesAccess } from "@/lib/profiles/profile-access";
+import {
+  RECURRING_PROFILE_MIN_FACE_AREA_RATIO,
+  RECURRING_PROFILE_MIN_FACE_CONFIDENCE,
+} from "@/lib/profiles/profile-headshot-thresholds";
 
 const RECURRING_PROFILE_HEADSHOT_BUCKET = "recurring-profile-headshots";
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const REPAIR_JOB_MAX_ATTEMPTS = 5;
 const MATERIALIZER_VERSION = getAutoMatchMaterializerVersion();
-const MIN_FACE_CONFIDENCE = 0.8;
-const MIN_FACE_AREA_RATIO = 0.05;
-const DOMINANT_AREA_RATIO = 2;
-const SECONDARY_DOMINANCE_AREA_RATIO = 1.5;
-const CENTRALITY_MARGIN = 0.15;
 
 type RecurringProfileRow = {
   id: string;
@@ -521,7 +520,9 @@ export function selectRecurringProfileCanonicalFace(input: {
     };
   }
 
-  const meetsMinimum = top.detectionProbability >= MIN_FACE_CONFIDENCE && top.areaRatio >= MIN_FACE_AREA_RATIO;
+  const meetsMinimum =
+    top.detectionProbability >= RECURRING_PROFILE_MIN_FACE_CONFIDENCE
+    && top.areaRatio >= RECURRING_PROFILE_MIN_FACE_AREA_RATIO;
   if (rankedFaces.length === 1) {
     if (!meetsMinimum) {
       return {
@@ -543,26 +544,8 @@ export function selectRecurringProfileCanonicalFace(input: {
   if (!meetsMinimum) {
     return {
       selectionFaceId: null,
-      selectionStatus: "unusable_headshot" as const,
-      selectionReason: "top_face_below_threshold",
-      candidateFaces: rankedFaces,
-    };
-  }
-
-  const second = rankedFaces[1] ?? null;
-  const dominantByArea = second === null || top.areaRatio >= second.areaRatio * DOMINANT_AREA_RATIO;
-  const dominantByAreaAndCenter =
-    second === null
-    || (
-      top.areaRatio >= second.areaRatio * SECONDARY_DOMINANCE_AREA_RATIO
-      && top.centerDistance + CENTRALITY_MARGIN <= second.centerDistance
-    );
-
-  if (dominantByArea || dominantByAreaAndCenter) {
-    return {
-      selectionFaceId: top.id,
-      selectionStatus: "auto_selected" as const,
-      selectionReason: second ? "dominant_face_clear" : "single_face_clear",
+      selectionStatus: "needs_face_selection" as const,
+      selectionReason: "multiple_faces_low_quality",
       candidateFaces: rankedFaces,
     };
   }
@@ -570,7 +553,7 @@ export function selectRecurringProfileCanonicalFace(input: {
   return {
     selectionFaceId: null,
     selectionStatus: "needs_face_selection" as const,
-    selectionReason: "ambiguous_multiple_faces",
+    selectionReason: "multiple_faces_require_manual_selection",
     candidateFaces: rankedFaces,
   };
 }

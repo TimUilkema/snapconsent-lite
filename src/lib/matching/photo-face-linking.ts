@@ -77,6 +77,7 @@ type ManualPhotoUnlinkInput = PhotoAssetInput & {
 type ConsentRow = {
   id: string;
   revoked_at: string | null;
+  superseded_at: string | null;
   face_match_opt_in: boolean;
 };
 
@@ -1379,7 +1380,7 @@ async function validatePhotoAssetInProject(
 export async function assertConsentInProject(input: MatchingScopeInput, options?: { requireNotRevoked?: boolean }) {
   const { data: consent, error } = await input.supabase
     .from("consents")
-    .select("id, revoked_at, face_match_opt_in")
+    .select("id, revoked_at, superseded_at, face_match_opt_in")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("id", input.consentId)
@@ -1395,6 +1396,10 @@ export async function assertConsentInProject(input: MatchingScopeInput, options?
 
   if (options?.requireNotRevoked && consent.revoked_at) {
     throw new HttpError(409, "consent_revoked", "Revoked consents cannot receive new photo assignments.");
+  }
+
+  if (options?.requireNotRevoked && consent.superseded_at) {
+    throw new HttpError(409, "consent_revoked", "Inactive consents cannot receive new photo assignments.");
   }
 
   return consent as ConsentRow;
@@ -2203,7 +2208,7 @@ async function loadConsentStateMap(
   const rows = await runChunkedRead(consentIds, async (consentIdChunk) => {
     const { data, error } = await supabase
       .from("consents")
-      .select("id, revoked_at, face_match_opt_in")
+      .select("id, revoked_at, superseded_at, face_match_opt_in")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("id", consentIdChunk);
@@ -3325,13 +3330,6 @@ export async function manualLinkPhotoToProjectFaceAssignee(
 export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Promise<ManualPhotoLinkResult> {
   await assertConsentInProject(input, { requireNotRevoked: true });
   const state = await resolvePhotoState(input);
-  const assignments = await loadCurrentAssignmentsForAsset(
-    input.supabase,
-    input.tenantId,
-    input.projectId,
-    input.assetId,
-    state.materialization?.id ?? null,
-  );
   const requested = resolveRequestedFace(
     normalizeManualMode(input.mode),
     state.faces,
@@ -3850,7 +3848,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       continue;
     }
 
-    if (consentState.revoked_at || !consentState.face_match_opt_in) {
+    if (consentState.revoked_at || consentState.superseded_at || !consentState.face_match_opt_in) {
       continue;
     }
 
@@ -4122,7 +4120,10 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
 
       if (existingAssignee.assignee_kind === "project_consent" && existingAssignee.consent_id) {
         const existingConsentState = consentStateById.get(existingAssignee.consent_id) ?? null;
-        return Boolean(existingConsentState && (existingConsentState.revoked_at || !existingConsentState.face_match_opt_in));
+        return Boolean(
+          existingConsentState &&
+          (existingConsentState.revoked_at || existingConsentState.superseded_at || !existingConsentState.face_match_opt_in),
+        );
       }
 
       if (

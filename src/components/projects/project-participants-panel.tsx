@@ -349,12 +349,12 @@ function renderProjectConsentActivity(
   locale: string,
   t: (key: string, values?: Record<string, string>) => string,
 ) {
-  if (participant.projectConsent.state === "pending" && participant.projectConsent.pendingRequest) {
-    return t("pendingUntil", { date: formatDateTime(participant.projectConsent.pendingRequest.expiresAt, locale) });
+  if (participant.projectConsent.activeConsent) {
+    return t("signedAt", { date: formatDateTime(participant.projectConsent.activeConsent.signedAt, locale) });
   }
 
-  if (participant.projectConsent.state === "signed" && participant.projectConsent.activeConsent) {
-    return t("signedAt", { date: formatDateTime(participant.projectConsent.activeConsent.signedAt, locale) });
+  if (participant.projectConsent.state === "pending" && participant.projectConsent.pendingRequest) {
+    return t("pendingUntil", { date: formatDateTime(participant.projectConsent.pendingRequest.expiresAt, locale) });
   }
 
   if (participant.projectConsent.state === "revoked" && participant.projectConsent.latestRevokedConsent) {
@@ -441,15 +441,7 @@ export function ProjectParticipantsPanelView({
                     ) : null}
                   </div>
 
-                  {participant.projectConsent.pendingRequest?.template ? (
-                    <p className="text-sm text-zinc-700">
-                      {t("templateLine", {
-                        name: participant.projectConsent.pendingRequest.template.name,
-                        version: participant.projectConsent.pendingRequest.template.version,
-                      })}
-                    </p>
-                  ) : null}
-                  {!participant.projectConsent.pendingRequest && participant.projectConsent.activeConsent?.template ? (
+                  {participant.projectConsent.activeConsent?.template ? (
                     <p className="text-sm text-zinc-700">
                       {t("templateLine", {
                         name: participant.projectConsent.activeConsent.template.name,
@@ -457,7 +449,15 @@ export function ProjectParticipantsPanelView({
                       })}
                     </p>
                   ) : null}
-                  {!participant.projectConsent.pendingRequest && !participant.projectConsent.activeConsent && participant.projectConsent.latestRevokedConsent?.template ? (
+                  {!participant.projectConsent.activeConsent && participant.projectConsent.pendingRequest?.template ? (
+                    <p className="text-sm text-zinc-700">
+                      {t("templateLine", {
+                        name: participant.projectConsent.pendingRequest.template.name,
+                        version: participant.projectConsent.pendingRequest.template.version,
+                      })}
+                    </p>
+                  ) : null}
+                  {!participant.projectConsent.activeConsent && !participant.projectConsent.pendingRequest && participant.projectConsent.latestRevokedConsent?.template ? (
                     <p className="text-sm text-zinc-700">
                       {t("templateLine", {
                         name: participant.projectConsent.latestRevokedConsent.template.name,

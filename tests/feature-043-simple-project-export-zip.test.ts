@@ -94,6 +94,36 @@ function createBaseRecords(): LoadedProjectExportRecords {
         },
         subjectFullName: "Tim Uilkema",
         subjectEmail: "tim@example.com",
+        effectiveScopes: [
+          {
+            templateKey: "media-use",
+            scopeKey: "published_media",
+            label: "Published media",
+            status: "granted",
+            signedValueGranted: true,
+            governingSourceKind: "project_consent",
+            governingConsentId: "consent-1",
+            governingRecurringProfileConsentId: null,
+            governingTemplateId: "template-1",
+            governingTemplateVersion: "v1",
+            governingTemplateVersionNumber: 1,
+            governingSignedAt: "2026-04-07T12:20:00Z",
+            governingRevokedAt: null,
+            derivedFrom: "effective_view",
+          },
+        ],
+        signedScopes: [
+          {
+            templateKey: "media-use",
+            scopeKey: "published_media",
+            label: "Published media",
+            granted: true,
+            templateId: "template-1",
+            templateVersion: "v1",
+            templateVersionNumber: 1,
+            signedAt: "2026-04-07T12:20:00Z",
+          },
+        ],
       },
       {
         id: "consent-2",
@@ -109,6 +139,8 @@ function createBaseRecords(): LoadedProjectExportRecords {
         structuredFieldsSnapshot: null,
         subjectFullName: "Tim Uilkema",
         subjectEmail: "tim+revoked@example.com",
+        effectiveScopes: [],
+        signedScopes: [],
       },
       {
         id: "consent-3",
@@ -124,6 +156,8 @@ function createBaseRecords(): LoadedProjectExportRecords {
         structuredFieldsSnapshot: null,
         subjectFullName: null,
         subjectEmail: null,
+        effectiveScopes: [],
+        signedScopes: [],
       },
     ],
     materializations: [
@@ -210,6 +244,24 @@ function createBaseRecords(): LoadedProjectExportRecords {
         assetMaterializationId: "mat-1",
         linkSource: "manual",
         matchConfidence: null,
+        effectiveScopes: [
+          {
+            templateKey: "media-use",
+            scopeKey: "published_media",
+            label: "Published media",
+            status: "granted",
+            signedValueGranted: true,
+            governingSourceKind: "project_consent",
+            governingConsentId: "consent-1",
+            governingRecurringProfileConsentId: null,
+            governingTemplateId: "template-1",
+            governingTemplateVersion: "v1",
+            governingTemplateVersionNumber: 1,
+            governingSignedAt: "2026-04-07T12:20:00Z",
+            governingRevokedAt: null,
+            derivedFrom: "effective_view",
+          },
+        ],
       },
     ],
     wholeAssetLinks: [],
@@ -704,6 +756,34 @@ test("feature 043 prepared export keeps canonical face links, fallback links, an
       matchConfidence: null,
     },
   ]);
+  assert.deepEqual(assetOne.metadata.linkedOwnerScopeStates, [
+    {
+      projectFaceAssigneeId: "assignee-consent-1",
+      identityKind: "project_consent",
+      consentId: "consent-1",
+      recurringProfileConsentId: null,
+      projectProfileParticipantId: null,
+      profileId: null,
+      effectiveScopes: [
+        {
+          templateKey: "media-use",
+          scopeKey: "published_media",
+          label: "Published media",
+          status: "granted",
+          signedValueGranted: true,
+          governingSourceKind: "project_consent",
+          governingConsentId: "consent-1",
+          governingRecurringProfileConsentId: null,
+          governingTemplateId: "template-1",
+          governingTemplateVersion: "v1",
+          governingTemplateVersionNumber: 1,
+          governingSignedAt: "2026-04-07T12:20:00Z",
+          governingRevokedAt: null,
+          derivedFrom: "effective_view",
+        },
+      ],
+    },
+  ]);
 
   const assetTwo = prepared.assets.find((asset) => asset.assetId === "asset-2");
   assert.ok(assetTwo);
@@ -755,6 +835,8 @@ test("feature 043 prepared export keeps canonical face links, fallback links, an
   assert.ok(revokedConsent);
   assert.equal(revokedConsent.data.currentStatus.state, "revoked");
   assert.equal(revokedConsent.data.signedSnapshot.structuredFieldsSnapshot, null);
+  assert.deepEqual(revokedConsent.data.effectiveScopes, []);
+  assert.deepEqual(revokedConsent.data.signedScopes, []);
   assert.deepEqual(revokedConsent.data.linkedAssets, [
     {
       assetId: "asset-2",

@@ -47,7 +47,7 @@ function buildParticipantsData(): ProjectParticipantsPanelData {
           materializationStatus: "completed",
         },
         projectConsent: {
-          state: "pending",
+          state: "signed",
           latestActivityAt: new Date().toISOString(),
           pendingRequest: {
             id: randomUUID(),
@@ -60,7 +60,17 @@ function buildParticipantsData(): ProjectParticipantsPanelData {
             },
             consentPath: "/rp/project-token",
           },
-          activeConsent: null,
+          activeConsent: {
+            id: randomUUID(),
+            signedAt: new Date().toISOString(),
+            emailSnapshot: "jordan@example.com",
+            fullNameSnapshot: "Jordan Miles",
+            template: {
+              id: randomUUID(),
+              name: "Project Consent",
+              version: "v1",
+            },
+          },
           latestRevokedConsent: null,
         },
         actions: {
@@ -157,7 +167,8 @@ test("project participants panel renders known profiles, baseline context, and p
   assert.match(markup, /Copy link/);
   assert.match(markup, /Open link/);
   assert.match(markup, /Archived profile/);
-  assert.match(markup, /Project Consent v2/);
+  assert.match(markup, /Project Consent v1/);
+  assert.match(markup, /Signed /);
   assert.match(markup, /Headshot of Jordan Miles/);
   assert.doesNotMatch(markup, /Match source/);
   assert.doesNotMatch(markup, /Added to project/);

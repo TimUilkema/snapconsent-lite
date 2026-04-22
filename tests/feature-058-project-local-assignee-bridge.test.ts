@@ -11,6 +11,10 @@ import {
   getAssetPreviewWholeAssetLinks,
   getAssetPreviewWholeAssetCandidates,
 } from "../src/lib/matching/asset-preview-linking";
+import {
+  loadProjectConsentScopeFilterFamilies,
+  resolveProjectAssetIdsByConsentScopeFilter,
+} from "../src/lib/consent/project-consent-scope-filter";
 import type { AutoMatcher } from "../src/lib/matching/auto-matcher";
 import {
   blockAssetFace,
@@ -768,6 +772,14 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
         && assignee.assetFaceId === photoMaterialization.faceId,
     ),
   );
+  assert.ok(
+    exportedAsset.metadata.linkedOwnerScopeStates.some(
+      (scopeState) =>
+        scopeState.identityKind === "project_recurring_consent"
+        && scopeState.projectProfileParticipantId === participantId
+        && scopeState.effectiveScopes.some((effectiveScope) => effectiveScope.scopeKey === "photos" && effectiveScope.status === "granted"),
+    ),
+  );
 
   const revokeContext = await getPublicRecurringRevokeToken(anonClient, signedProjectConsent.revokeToken ?? "");
   assert.ok(revokeContext);
@@ -961,6 +973,13 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
         assignee.assetFaceId === null,
     ),
   );
+  assert.ok(
+    wholeAssetExport.metadata.linkedOwnerScopeStates.some(
+      (scopeState) =>
+        scopeState.projectProfileParticipantId === participantId
+        && scopeState.effectiveScopes.some((effectiveScope) => effectiveScope.scopeKey === "photos" && effectiveScope.status === "granted"),
+    ),
+  );
 
   const unlinkResult = await manualUnlinkWholeAssetFromRecurringProjectParticipant({
     supabase: adminClient,
@@ -1043,6 +1062,80 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
         assignee.assetFaceId === photoMaterialization.faceId,
     ),
   );
+});
+
+test("feature 067 recurring project assignees participate in asset scope filtering", async () => {
+  const context = await createTenantContext();
+  const anonClient = createAnonClient();
+  const { projectId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const photoAssetId = await createUploadedPhotoAsset({
+    tenantId: context.tenantId,
+    projectId,
+    userId: context.ownerUserId,
+    client: context.ownerClient,
+  });
+
+  const participant = await addProjectProfileParticipant({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    recurringProfileId: profileId,
+  });
+  const participantId = participant.payload.participant.id;
+  const projectConsentRequest = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature067-project-${randomUUID()}`,
+  });
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: tokenFromConsentPath(projectConsentRequest.payload.request.consentPath),
+    fullName: "Jordan Miles",
+    email: `feature067-project-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature067-project",
+  });
+  await manualLinkWholeAssetToRecurringProjectParticipant({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetId: photoAssetId,
+    projectProfileParticipantId: participantId,
+    actorUserId: context.ownerUserId,
+  });
+
+  const scopeFamilies = await loadProjectConsentScopeFilterFamilies({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+  });
+  assert.equal(scopeFamilies.length, 1);
+  const scopeFamily = scopeFamilies[0] ?? null;
+  assert.ok(scopeFamily);
+  assert.deepEqual(scopeFamily?.scopes.map((scope) => scope.scopeKey), ["photos"]);
+
+  const matchedAssetIds = await resolveProjectAssetIdsByConsentScopeFilter({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId,
+    assetIds: [photoAssetId],
+    scopeTemplateKey: scopeFamily?.templateKey ?? "",
+    scopeKey: "photos",
+    scopeStatus: "granted",
+  });
+  assert.deepEqual(matchedAssetIds, [photoAssetId]);
 });
 
 test("feature 064 whole-asset video links support one-off and recurring assignees, idempotency, and revoked owners", async () => {

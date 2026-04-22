@@ -57,6 +57,17 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(500, "invite_revoke_failed", "Unable to remove invite.");
     }
 
+    const { error: upgradeRequestError } = await supabase
+      .from("project_consent_upgrade_requests")
+      .update({ status: "cancelled" })
+      .eq("tenant_id", tenantId)
+      .eq("invite_id", inviteId)
+      .eq("status", "pending");
+
+    if (upgradeRequestError) {
+      throw new HttpError(500, "invite_revoke_failed", "Unable to remove invite.");
+    }
+
     return Response.json({ ok: true });
   } catch (error) {
     return jsonError(error);

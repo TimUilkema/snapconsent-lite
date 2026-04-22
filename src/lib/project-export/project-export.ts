@@ -1,9 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import {
+  loadProjectConsentScopeStatesByConsentIds,
+  loadProjectConsentScopeStatesByParticipantIds,
+  type ProjectConsentScopeState,
+} from "@/lib/consent/project-consent-scope-state";
 import { HttpError } from "@/lib/http/errors";
 import { getAutoMatchMaterializerVersion } from "@/lib/matching/auto-match-config";
 import { loadProjectFaceAssigneeDisplayMap } from "@/lib/matching/project-face-assignees";
 import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
+import type { StructuredFieldsSnapshot } from "@/lib/templates/structured-fields";
 
 import {
   assignAssetExportFilenames,
@@ -50,6 +56,8 @@ export type ProjectExportConsentRecord = {
   structuredFieldsSnapshot: Record<string, unknown> | null;
   subjectFullName: string | null;
   subjectEmail: string | null;
+  effectiveScopes: ProjectExportScopeStateJson[];
+  signedScopes: ProjectExportSignedScopeJson[];
 };
 
 export type ProjectExportMaterializationRecord = {
@@ -89,6 +97,7 @@ export type ProjectExportFaceLinkRecord = {
   assetMaterializationId: string;
   linkSource: "manual" | "auto";
   matchConfidence: number | null;
+  effectiveScopes: ProjectExportScopeStateJson[];
 };
 
 export type ProjectExportFallbackRecord = {
@@ -108,6 +117,45 @@ export type ProjectExportWholeAssetLinkRecord = {
   email: string | null;
   currentStatus: "active" | "revoked";
   linkSource: "manual";
+  effectiveScopes: ProjectExportScopeStateJson[];
+};
+
+export type ProjectExportScopeStateJson = {
+  templateKey: string;
+  scopeKey: string;
+  label: string;
+  status: "granted" | "not_granted" | "revoked" | "not_collected";
+  signedValueGranted: boolean | null;
+  governingSourceKind: "project_consent" | "project_recurring_consent";
+  governingConsentId: string | null;
+  governingRecurringProfileConsentId: string | null;
+  governingTemplateId: string;
+  governingTemplateVersion: string;
+  governingTemplateVersionNumber: number;
+  governingSignedAt: string | null;
+  governingRevokedAt: string | null;
+  derivedFrom: "effective_view" | "snapshot_fallback";
+};
+
+export type ProjectExportSignedScopeJson = {
+  templateKey: string;
+  scopeKey: string;
+  label: string;
+  granted: boolean;
+  templateId: string;
+  templateVersion: string;
+  templateVersionNumber: number;
+  signedAt: string | null;
+};
+
+export type ProjectExportLinkedOwnerScopeJson = {
+  projectFaceAssigneeId: string;
+  identityKind: "project_consent" | "project_recurring_consent";
+  consentId: string | null;
+  recurringProfileConsentId: string | null;
+  projectProfileParticipantId: string | null;
+  profileId: string | null;
+  effectiveScopes: ProjectExportScopeStateJson[];
 };
 
 export type LoadedProjectExportRecords = {
@@ -196,6 +244,7 @@ export type ProjectExportAssetJson = {
     faceRank: number | null;
     matchConfidence: number | null;
   }>;
+  linkedOwnerScopeStates: ProjectExportLinkedOwnerScopeJson[];
 };
 
 export type ProjectExportConsentJson = {
@@ -224,6 +273,8 @@ export type ProjectExportConsentJson = {
     revokedAt: string | null;
     revokeReason: string | null;
   };
+  effectiveScopes: ProjectExportScopeStateJson[];
+  signedScopes: ProjectExportSignedScopeJson[];
   linkedAssets: Array<{
     assetId: string;
     originalFilename: string;
@@ -289,6 +340,72 @@ function normalizeFaceBox(value: unknown) {
 
 function consentState(consent: ProjectExportConsentRecord): "active" | "revoked" {
   return consent.revokedAt ? "revoked" : "active";
+}
+
+function toExportScopeState(scopeState: ProjectConsentScopeState): ProjectExportScopeStateJson {
+  return {
+    templateKey: scopeState.templateKey,
+    scopeKey: scopeState.scopeOptionKey,
+    label: scopeState.scopeLabel,
+    status: scopeState.effectiveStatus,
+    signedValueGranted: scopeState.signedValueGranted,
+    governingSourceKind: scopeState.governingSourceKind,
+    governingConsentId: scopeState.governingConsentId,
+    governingRecurringProfileConsentId: scopeState.governingRecurringProfileConsentId,
+    governingTemplateId: scopeState.governingTemplateId,
+    governingTemplateVersion: scopeState.governingTemplateVersion,
+    governingTemplateVersionNumber: scopeState.governingTemplateVersionNumber,
+    governingSignedAt: scopeState.governingSignedAt,
+    governingRevokedAt: scopeState.governingRevokedAt,
+    derivedFrom: scopeState.derivedFrom,
+  };
+}
+
+function sortSignedScopes(scopes: ProjectExportSignedScopeJson[]) {
+  return scopes.slice().sort((left, right) => {
+    if (left.templateVersionNumber !== right.templateVersionNumber) {
+      return left.templateVersionNumber - right.templateVersionNumber;
+    }
+
+    return left.scopeKey.localeCompare(right.scopeKey);
+  });
+}
+
+function buildSignedScopesFromSnapshot(
+  snapshot: StructuredFieldsSnapshot | Record<string, unknown> | null,
+  signedAt: string | null,
+) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return [] as ProjectExportSignedScopeJson[];
+  }
+
+  const typedSnapshot = snapshot as StructuredFieldsSnapshot;
+  const templateKey = typedSnapshot.templateSnapshot?.templateKey ?? null;
+  const templateId = typedSnapshot.templateSnapshot?.templateId ?? null;
+  const templateVersion = typedSnapshot.templateSnapshot?.version ?? null;
+  const templateVersionNumber = typedSnapshot.templateSnapshot?.versionNumber ?? null;
+  const scopeOptions = typedSnapshot.definition?.builtInFields?.scope?.options ?? [];
+  const selectedOptionKeys =
+    typedSnapshot.values?.scope?.valueType === "checkbox_list"
+      ? new Set(typedSnapshot.values.scope.selectedOptionKeys)
+      : new Set<string>();
+
+  if (!templateKey || !templateId || !templateVersion || !Number.isFinite(templateVersionNumber)) {
+    return [] as ProjectExportSignedScopeJson[];
+  }
+
+  return sortSignedScopes(
+    scopeOptions.map((option) => ({
+      templateKey,
+      scopeKey: option.optionKey,
+      label: option.label,
+      granted: selectedOptionKeys.has(option.optionKey),
+      templateId,
+      templateVersion,
+      templateVersionNumber,
+      signedAt,
+    })),
+  );
 }
 
 function requireAssetStorage(asset: ProjectExportAssetRecord) {
@@ -612,13 +729,120 @@ export async function loadProjectExportRecords(input: {
     })) satisfies ProjectExportFallbackRecord[];
   });
 
+  const effectiveScopeConsentIds = Array.from(
+    new Set(
+      [
+        ...consents.map((consent) => consent.id),
+        ...faceLinks.map((link) => link.consentId),
+        ...wholeAssetLinks.map((link) => link.consentId),
+        ...fallbackLinks.map((link) => link.consentId),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const effectiveScopeParticipantIds = Array.from(
+    new Set(
+      [
+        ...faceLinks.map((link) => link.projectProfileParticipantId),
+        ...wholeAssetLinks.map((link) => link.projectProfileParticipantId),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const [effectiveScopesByConsentId, effectiveScopesByParticipantId] = await Promise.all([
+    loadProjectConsentScopeStatesByConsentIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      consentIds: effectiveScopeConsentIds,
+    }),
+    loadProjectConsentScopeStatesByParticipantIds({
+      supabase: input.supabase,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      participantIds: effectiveScopeParticipantIds,
+    }),
+  ]);
+
+  const signedScopeProjectionRows = await runChunkedRead(consents.map((consent) => consent.id), async (consentIdChunk) => {
+    const { data, error } = await input.supabase
+      .from("project_consent_scope_signed_projections")
+      .select(
+        "consent_id, template_id, template_key, template_version, template_version_number, scope_option_key, scope_label_snapshot, granted, signed_at",
+      )
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .in("consent_id", consentIdChunk)
+      .order("scope_order_index", { ascending: true });
+
+    if (error) {
+      throw new HttpError(500, "project_export_failed", "Unable to load project export data.");
+    }
+
+    return (data ?? []) as Array<{
+      consent_id: string | null;
+      template_id: string;
+      template_key: string;
+      template_version: string;
+      template_version_number: number;
+      scope_option_key: string;
+      scope_label_snapshot: string;
+      granted: boolean;
+      signed_at: string | null;
+    }>;
+  });
+  const signedScopesByConsentId = new Map<string, ProjectExportSignedScopeJson[]>();
+  for (const row of signedScopeProjectionRows) {
+    if (!row.consent_id) {
+      continue;
+    }
+
+    const current = signedScopesByConsentId.get(row.consent_id) ?? [];
+    current.push({
+      templateKey: row.template_key,
+      scopeKey: row.scope_option_key,
+      label: row.scope_label_snapshot,
+      granted: row.granted,
+      templateId: row.template_id,
+      templateVersion: row.template_version,
+      templateVersionNumber: row.template_version_number,
+      signedAt: row.signed_at,
+    });
+    signedScopesByConsentId.set(row.consent_id, current);
+  }
+
+  const enrichedConsents = consents.map((consent) => ({
+    ...consent,
+    effectiveScopes: (effectiveScopesByConsentId.get(consent.id) ?? []).map(toExportScopeState),
+    signedScopes:
+      sortSignedScopes(signedScopesByConsentId.get(consent.id) ?? []).length > 0
+        ? sortSignedScopes(signedScopesByConsentId.get(consent.id) ?? [])
+        : buildSignedScopesFromSnapshot(consent.structuredFieldsSnapshot, consent.signedAt),
+  }));
+  const enrichedFaceLinks = faceLinks.map((link) => ({
+    ...link,
+    effectiveScopes:
+      link.identityKind === "project_consent" && link.consentId
+        ? (effectiveScopesByConsentId.get(link.consentId) ?? []).map(toExportScopeState)
+        : link.projectProfileParticipantId
+          ? (effectiveScopesByParticipantId.get(link.projectProfileParticipantId) ?? []).map(toExportScopeState)
+          : [],
+  }));
+  const enrichedWholeAssetLinks = wholeAssetLinks.map((link) => ({
+    ...link,
+    effectiveScopes:
+      link.identityKind === "project_consent" && link.consentId
+        ? (effectiveScopesByConsentId.get(link.consentId) ?? []).map(toExportScopeState)
+        : link.projectProfileParticipantId
+          ? (effectiveScopesByParticipantId.get(link.projectProfileParticipantId) ?? []).map(toExportScopeState)
+          : [],
+  }));
+
   return {
     assets,
-    consents,
+    consents: enrichedConsents,
     materializations,
     faces,
-    faceLinks,
-    wholeAssetLinks,
+    faceLinks: enrichedFaceLinks,
+    wholeAssetLinks: enrichedWholeAssetLinks,
     fallbackLinks,
   } satisfies LoadedProjectExportRecords;
 }
@@ -896,6 +1120,39 @@ export function buildPreparedProjectExport(input: {
         };
       }),
     ];
+    const linkedOwnerScopeStates: ProjectExportAssetJson["linkedOwnerScopeStates"] = [
+      ...(faceLinksByAssetId.get(asset.id) ?? []).map((link) => ({
+        projectFaceAssigneeId: link.projectFaceAssigneeId,
+        identityKind: link.identityKind,
+        consentId: link.consentId,
+        recurringProfileConsentId: link.recurringProfileConsentId,
+        projectProfileParticipantId: link.projectProfileParticipantId,
+        profileId: link.profileId,
+        effectiveScopes: link.effectiveScopes,
+      })),
+      ...(wholeAssetLinksByAssetId.get(asset.id) ?? []).map((link) => ({
+        projectFaceAssigneeId: link.projectFaceAssigneeId,
+        identityKind: link.identityKind,
+        consentId: link.consentId,
+        recurringProfileConsentId: link.recurringProfileConsentId,
+        projectProfileParticipantId: link.projectProfileParticipantId,
+        profileId: link.profileId,
+        effectiveScopes: link.effectiveScopes,
+      })),
+      ...(fallbackLinksByAssetId.get(asset.id) ?? []).map((link) => {
+        const consent = consentById.get(link.consentId);
+
+        return {
+          projectFaceAssigneeId: `fallback:${link.consentId}`,
+          identityKind: "project_consent" as const,
+          consentId: link.consentId,
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          effectiveScopes: consent?.effectiveScopes ?? [],
+        };
+      }),
+    ];
 
     linkedConsents.sort((left, right) => {
       const leftRank = left.faceRank ?? Number.MAX_SAFE_INTEGER;
@@ -915,6 +1172,7 @@ export function buildPreparedProjectExport(input: {
 
       return left.projectFaceAssigneeId.localeCompare(right.projectFaceAssigneeId);
     });
+    linkedOwnerScopeStates.sort((left, right) => left.projectFaceAssigneeId.localeCompare(right.projectFaceAssigneeId));
 
     return {
       assetId: asset.id,
@@ -951,6 +1209,7 @@ export function buildPreparedProjectExport(input: {
         detectedFaces,
         linkedConsents,
         linkedAssignees,
+        linkedOwnerScopeStates,
       } satisfies ProjectExportAssetJson,
     };
   });
@@ -1025,6 +1284,8 @@ export function buildPreparedProjectExport(input: {
           revokedAt: consent.revokedAt,
           revokeReason: consent.revokeReason,
         },
+        effectiveScopes: consent.effectiveScopes,
+        signedScopes: consent.signedScopes,
         linkedAssets,
       } satisfies ProjectExportConsentJson,
     };

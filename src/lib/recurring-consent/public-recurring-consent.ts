@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+import { mapStructuredSnapshotToFormValues, type PublicConsentInitialValues } from "@/lib/consent/public-consent-prefill";
 import { HttpError } from "@/lib/http/errors";
 import { enqueueReconcileProjectJob } from "@/lib/matching/auto-match-jobs";
 import { enqueueRecurringProjectReplayForProfile } from "@/lib/matching/project-recurring-sources";
@@ -7,7 +8,8 @@ import {
   getEffectiveFormLayoutDefinition,
   type ConsentFormLayoutDefinition,
 } from "@/lib/templates/form-layout";
-import type { StructuredFieldsDefinition } from "@/lib/templates/structured-fields";
+import type { StructuredFieldsDefinition, StructuredFieldsSnapshot } from "@/lib/templates/structured-fields";
+import { hashPublicToken } from "@/lib/tokens/public-token";
 
 type PublicRecurringConsentRequestRpcRow = {
   request_id: string;
@@ -48,6 +50,7 @@ export type PublicRecurringConsentRequest = {
   templateName: string | null;
   structuredFieldsDefinition: StructuredFieldsDefinition | null;
   formLayoutDefinition: ConsentFormLayoutDefinition;
+  upgradeContext: PublicRecurringConsentUpgradeContext | null;
 };
 
 export type SubmitRecurringConsentResult = {
@@ -64,9 +67,34 @@ export type SubmitRecurringConsentResult = {
 };
 
 type RecurringConsentRequestScopeRow = {
+  id: string;
+  tenant_id: string;
   profile_id: string;
   project_id: string | null;
   consent_kind: "baseline" | "project";
+  consent_template_id: string;
+};
+
+type RecurringProfileRow = {
+  full_name: string;
+  email: string;
+};
+
+type TemplateKeyRow = {
+  template_key: string;
+};
+
+type ActiveRecurringProjectConsentRow = {
+  id: string;
+  consent_template_id: string;
+  face_match_opt_in: boolean;
+  structured_fields_snapshot: StructuredFieldsSnapshot | null;
+};
+
+export type PublicRecurringConsentUpgradeContext = {
+  priorConsentId: string;
+  profileId: string;
+  initialValues: PublicConsentInitialValues;
 };
 
 function createServiceRoleClient() {
@@ -88,7 +116,7 @@ async function loadRecurringConsentRequestScope(requestId: string) {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("recurring_profile_consent_requests")
-    .select("profile_id, project_id, consent_kind")
+    .select("id, tenant_id, profile_id, project_id, consent_kind, consent_template_id")
     .eq("id", requestId)
     .maybeSingle();
 
@@ -97,6 +125,113 @@ async function loadRecurringConsentRequestScope(requestId: string) {
   }
 
   return (data as RecurringConsentRequestScopeRow | null) ?? null;
+}
+
+async function loadRecurringConsentRequestScopeByToken(token: string) {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("recurring_profile_consent_requests")
+    .select("id, tenant_id, profile_id, project_id, consent_kind, consent_template_id")
+    .eq("token_hash", hashPublicToken(token))
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, "recurring_consent_request_lookup_failed", "Unable to load recurring consent request.");
+  }
+
+  return (data as RecurringConsentRequestScopeRow | null) ?? null;
+}
+
+async function loadTemplateKeyById(
+  supabase: SupabaseClient,
+  templateId: string,
+) {
+  const { data, error } = await supabase
+    .from("consent_templates")
+    .select("template_key")
+    .eq("id", templateId)
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, "recurring_consent_request_lookup_failed", "Unable to load recurring consent request.");
+  }
+
+  return (data as TemplateKeyRow | null)?.template_key ?? null;
+}
+
+async function loadRecurringProjectUpgradeContextForRequest(
+  requestScope: RecurringConsentRequestScopeRow,
+): Promise<PublicRecurringConsentUpgradeContext | null> {
+  if (requestScope.consent_kind !== "project" || !requestScope.project_id) {
+    return null;
+  }
+
+  const supabase = createServiceRoleClient();
+  const targetTemplateKey = await loadTemplateKeyById(supabase, requestScope.consent_template_id);
+  if (!targetTemplateKey) {
+    return null;
+  }
+
+  const { data: activeConsent, error: activeConsentError } = await supabase
+    .from("recurring_profile_consents")
+    .select("id, consent_template_id, face_match_opt_in, structured_fields_snapshot")
+    .eq("tenant_id", requestScope.tenant_id)
+    .eq("profile_id", requestScope.profile_id)
+    .eq("project_id", requestScope.project_id)
+    .eq("consent_kind", "project")
+    .is("revoked_at", null)
+    .is("superseded_at", null)
+    .order("signed_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeConsentError) {
+    throw new HttpError(500, "recurring_consent_request_lookup_failed", "Unable to load recurring consent request.");
+  }
+
+  if (!activeConsent) {
+    return null;
+  }
+
+  const activeTemplateKey = await loadTemplateKeyById(
+    supabase,
+    (activeConsent as ActiveRecurringProjectConsentRow).consent_template_id,
+  );
+  const snapshotTemplateKey =
+    (activeConsent as ActiveRecurringProjectConsentRow).structured_fields_snapshot?.templateSnapshot?.templateKey
+    ?? null;
+  if ((activeTemplateKey ?? snapshotTemplateKey) !== targetTemplateKey) {
+    return null;
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("recurring_profiles")
+    .select("full_name, email")
+    .eq("tenant_id", requestScope.tenant_id)
+    .eq("id", requestScope.profile_id)
+    .maybeSingle();
+
+  if (profileError) {
+    throw new HttpError(500, "recurring_consent_request_lookup_failed", "Unable to load recurring consent request.");
+  }
+
+  if (!profile) {
+    return null;
+  }
+
+  return {
+    priorConsentId: (activeConsent as ActiveRecurringProjectConsentRow).id,
+    profileId: requestScope.profile_id,
+    initialValues: {
+      subjectName: (profile as RecurringProfileRow).full_name ?? "",
+      subjectEmail: (profile as RecurringProfileRow).email ?? "",
+      faceMatchOptIn: (activeConsent as ActiveRecurringProjectConsentRow).face_match_opt_in === true,
+      structuredFieldValues: mapStructuredSnapshotToFormValues(
+        (activeConsent as ActiveRecurringProjectConsentRow).structured_fields_snapshot,
+      ),
+    },
+  };
 }
 
 export async function getPublicRecurringConsentRequest(
@@ -116,6 +251,8 @@ export async function getPublicRecurringConsentRequest(
     return null;
   }
 
+  const requestScope = await loadRecurringConsentRequestScopeByToken(token);
+
   return {
     requestId: row.request_id,
     profileId: row.profile_id,
@@ -132,6 +269,9 @@ export async function getPublicRecurringConsentRequest(
       row.form_layout_definition,
       row.structured_fields_definition,
     ),
+    upgradeContext: requestScope
+      ? await loadRecurringProjectUpgradeContextForRequest(requestScope)
+      : null,
   };
 }
 
@@ -149,6 +289,12 @@ export async function submitRecurringProfileConsent(
   });
 
   if (error) {
+    console.error("submit_public_recurring_profile_consent failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    });
+
     if (error.code === "P0002") {
       throw new HttpError(404, "recurring_consent_request_not_found", "Recurring consent request is invalid.");
     }

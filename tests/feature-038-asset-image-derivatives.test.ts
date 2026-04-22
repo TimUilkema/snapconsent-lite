@@ -689,6 +689,39 @@ test("request-scoped post-finalize processing still queues derivative rows throu
   assert.equal(derivatives.get(`${uploadedAsset.assetId}:preview`)?.status, "pending");
 });
 
+test("request-scoped post-finalize processing also queues a photo_uploaded matching job", async () => {
+  const context = await createProjectContext(admin);
+  const requestScopedClient = await createRequestScopedClient(context);
+  const uploadedAsset = await createUploadedPhotoAsset(admin, context, {
+    filename: "request-scoped-matching.jpg",
+    contentType: "image/jpeg",
+  });
+
+  await queueProjectAssetPostFinalizeProcessing({
+    supabase: requestScopedClient,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: uploadedAsset.assetId,
+    assetType: "photo",
+    consentIds: [],
+    source: "photo_finalize",
+  });
+
+  const { data: jobRow, error: jobError } = await admin
+    .from("face_match_jobs")
+    .select("job_type, status, payload")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", context.projectId)
+    .eq("scope_asset_id", uploadedAsset.assetId)
+    .eq("job_type", "photo_uploaded")
+    .maybeSingle();
+  assertNoError(jobError, "select queued photo_uploaded job");
+
+  assert.equal(jobRow?.job_type, "photo_uploaded");
+  assert.equal(jobRow?.status, "queued");
+  assert.match(String((jobRow?.payload as { source?: string } | null)?.source ?? ""), /^photo_finalize$/);
+});
+
 test("request-scoped post-finalize processing also queues poster rows for uploaded videos", async () => {
   const context = await createProjectContext(admin);
   const requestScopedClient = await createRequestScopedClient(context);

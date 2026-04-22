@@ -3,6 +3,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { HttpError } from "@/lib/http/errors";
 import { getAutoMatchMaterializerVersion } from "@/lib/matching/auto-match-config";
 import { enqueueReconcileProjectJob } from "@/lib/matching/auto-match-jobs";
+import {
+  isProjectRecurringConsentStateAutoEligible,
+  loadProjectRecurringConsentStateByParticipantIds,
+} from "@/lib/matching/project-face-assignees";
 import type { RecurringProfileMatchingReadiness } from "@/lib/profiles/profile-headshot-service";
 
 type ProjectProfileParticipantRow = {
@@ -396,6 +400,33 @@ export async function resolveReadyProjectRecurringSource(
   };
 }
 
+export async function resolveAutoEligibleProjectRecurringSource(
+  supabase: SupabaseClient | undefined,
+  input: {
+    tenantId: string;
+    projectId: string;
+    projectProfileParticipantId: string;
+  },
+): Promise<ReadyProjectRecurringSource | null> {
+  const client = getInternalSupabaseClient(supabase);
+  const [source, consentStateByParticipantId] = await Promise.all([
+    resolveReadyProjectRecurringSource(client, input),
+    loadProjectRecurringConsentStateByParticipantIds({
+      supabase: client,
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      participantIds: [input.projectProfileParticipantId],
+    }),
+  ]);
+
+  if (!source) {
+    return null;
+  }
+
+  const consentState = consentStateByParticipantId.get(input.projectProfileParticipantId) ?? null;
+  return isProjectRecurringConsentStateAutoEligible(consentState) ? source : null;
+}
+
 export async function getCurrentProjectRecurringSourceBoundary(
   supabase: SupabaseClient | undefined,
   input: {
@@ -423,7 +454,7 @@ export async function getCurrentProjectRecurringSourceBoundary(
   }
 
   for (const participant of ((data ?? []) as Array<{ id: string; created_at: string }>)) {
-    const source = await resolveReadyProjectRecurringSource(client, {
+    const source = await resolveAutoEligibleProjectRecurringSource(client, {
       tenantId: input.tenantId,
       projectId: input.projectId,
       projectProfileParticipantId: participant.id,
@@ -484,7 +515,7 @@ export async function listReadyProjectRecurringSourcesPage(
     cursorParticipantId = candidates.at(-1)?.id ?? cursorParticipantId;
 
     for (const participant of candidates) {
-      const source = await resolveReadyProjectRecurringSource(client, {
+      const source = await resolveAutoEligibleProjectRecurringSource(client, {
         tenantId: input.tenantId,
         projectId: input.projectId,
         projectProfileParticipantId: participant.id,

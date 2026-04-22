@@ -1,12 +1,20 @@
 import { createAssetWithIdempotency } from "@/lib/assets/create-asset";
 import { normalizeSubjectRelation } from "@/lib/assets/normalize-subject-relation";
 import {
+  loadProjectConsentScopeFilterFamilies,
+  resolveProjectAssetIdsByConsentScopeFilter,
+  type ProjectConsentScopeFilterStatus,
+} from "@/lib/consent/project-consent-scope-filter";
+import {
   resolveSignedAssetDisplayUrlsForAssets,
   signThumbnailUrlsForAssets,
 } from "@/lib/assets/sign-asset-thumbnails";
 import { signVideoPlaybackUrlsForAssets } from "@/lib/assets/sign-asset-playback";
 import { HttpError, jsonError } from "@/lib/http/errors";
-import { getAssetReviewSummaries } from "@/lib/matching/asset-preview-linking";
+import {
+  buildPendingAssetReviewSummary,
+  getAssetReviewSummaries,
+} from "@/lib/matching/asset-preview-linking";
 import {
   listLinkedFaceOverlaysForAssetIds,
   listPhotoConsentAssignmentsForAssetIds,
@@ -44,6 +52,8 @@ type CreateAssetBody = {
 type AssetListSort = ProjectAssetListSort;
 
 type AssetReviewFilter = ProjectAssetReviewFilter;
+
+type AssetScopeFilterStatus = ProjectConsentScopeFilterStatus;
 
 type DuplicatePolicy = "upload_anyway" | "overwrite" | "ignore";
 
@@ -173,6 +183,28 @@ function parseConsentFilterIds(searchParams: URLSearchParams) {
   );
 }
 
+function parseScopeFilter(searchParams: URLSearchParams) {
+  const scopeTemplateKey = String(searchParams.get("scopeTemplateKey") ?? "").trim();
+  const scopeKey = String(searchParams.get("scopeKey") ?? "").trim();
+  const rawScopeStatus = String(searchParams.get("scopeStatus") ?? "").trim();
+  const scopeStatus: AssetScopeFilterStatus =
+    rawScopeStatus === "not_granted"
+    || rawScopeStatus === "revoked"
+    || rawScopeStatus === "not_collected"
+      ? rawScopeStatus
+      : "granted";
+
+  if (!scopeTemplateKey || !scopeKey) {
+    return null;
+  }
+
+  return {
+    scopeTemplateKey,
+    scopeKey,
+    scopeStatus,
+  };
+}
+
 function parseDuplicatePolicy(value: unknown): DuplicatePolicy {
   if (typeof value !== "string") {
     return "upload_anyway";
@@ -216,14 +248,22 @@ export async function GET(request: Request, context: RouteContext) {
     const reviewFilter = parseReviewFilter(url.searchParams);
     const queryText = parseSearchQuery(url.searchParams);
     const selectedConsentIds = parseConsentFilterIds(url.searchParams);
+    const selectedScopeFilter = parseScopeFilter(url.searchParams);
 
-    const { data: consentFilterRows, error: consentFilterError } = await supabase
-      .from("consents")
-      .select("id, subjects(email, full_name)")
-      .eq("tenant_id", tenantId)
-      .eq("project_id", projectId)
-      .not("signed_at", "is", null)
-      .order("signed_at", { ascending: false });
+    const [{ data: consentFilterRows, error: consentFilterError }, scopeFilters] = await Promise.all([
+      supabase
+        .from("consents")
+        .select("id, subjects(email, full_name)")
+        .eq("tenant_id", tenantId)
+        .eq("project_id", projectId)
+        .not("signed_at", "is", null)
+        .order("signed_at", { ascending: false }),
+      loadProjectConsentScopeFilterFamilies({
+        supabase,
+        tenantId,
+        projectId,
+      }),
+    ]);
 
     if (consentFilterError) {
       throw new HttpError(500, "consent_filter_lookup_failed", "Unable to load consent filters.");
@@ -283,9 +323,11 @@ export async function GET(request: Request, context: RouteContext) {
             assets: [],
             totalCount: 0,
             people,
+            scopeFilters,
             reviewSummary: {
               totalAssetCount: 0,
               needsReviewAssetCount: 0,
+              pendingAssetCount: 0,
               blockedAssetCount: 0,
               resolvedAssetCount: 0,
             },
@@ -317,7 +359,23 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     const candidateAssetRows = (assets as AssetRow[] | null) ?? [];
-    const candidatePhotoAssetIds = candidateAssetRows
+    const scopeMatchedAssetIds = selectedScopeFilter
+      ? new Set(
+          await resolveProjectAssetIdsByConsentScopeFilter({
+            supabase,
+            tenantId,
+            projectId,
+            assetIds: candidateAssetRows.map((asset) => asset.id),
+            scopeTemplateKey: selectedScopeFilter.scopeTemplateKey,
+            scopeKey: selectedScopeFilter.scopeKey,
+            scopeStatus: selectedScopeFilter.scopeStatus,
+          }),
+        )
+      : null;
+    const scopeFilteredAssetRows = scopeMatchedAssetIds
+      ? candidateAssetRows.filter((asset) => scopeMatchedAssetIds.has(asset.id))
+      : candidateAssetRows;
+    const candidatePhotoAssetIds = scopeFilteredAssetRows
       .filter((asset) => asset.asset_type === "photo")
       .map((asset) => asset.id);
     const reviewSummaryByAssetId = await getAssetReviewSummaries({
@@ -327,16 +385,19 @@ export async function GET(request: Request, context: RouteContext) {
       assetIds: candidatePhotoAssetIds,
     });
 
-    const candidateAssets = candidateAssetRows.map((asset) => ({
+    const candidateAssets = scopeFilteredAssetRows.map((asset) => ({
       asset,
       review:
-        reviewSummaryByAssetId.get(asset.id) ?? {
-          assetId: asset.id,
-          reviewStatus: "resolved" as const,
-          unresolvedFaceCount: 0,
-          blockedFaceCount: 0,
-          firstNeedsReviewFaceId: null,
-        },
+        reviewSummaryByAssetId.get(asset.id) ??
+        (asset.asset_type === "photo"
+          ? buildPendingAssetReviewSummary(asset.id)
+          : {
+              assetId: asset.id,
+              reviewStatus: "resolved" as const,
+              unresolvedFaceCount: 0,
+              blockedFaceCount: 0,
+              firstNeedsReviewFaceId: null,
+            }),
     }));
 
     const reviewSummary = buildProjectAssetReviewSummary(candidateAssets);
@@ -656,11 +717,15 @@ export async function GET(request: Request, context: RouteContext) {
               ? photoPreviewMap.get(asset.id) ?? { url: null, state: "unavailable" as const }
               : videoPreviewMap.get(asset.id) ?? { url: null, state: "unavailable" as const };
           const review = reviewByAssetId.get(asset.id) ?? {
-            assetId: asset.id,
-            reviewStatus: "resolved" as const,
-            unresolvedFaceCount: 0,
-            blockedFaceCount: 0,
-            firstNeedsReviewFaceId: null,
+            ...(asset.asset_type === "photo"
+              ? buildPendingAssetReviewSummary(asset.id)
+              : {
+                  assetId: asset.id,
+                  reviewStatus: "resolved" as const,
+                  unresolvedFaceCount: 0,
+                  blockedFaceCount: 0,
+                  firstNeedsReviewFaceId: null,
+                }),
           };
           return {
             id: asset.id,
@@ -700,6 +765,7 @@ export async function GET(request: Request, context: RouteContext) {
         }),
         totalCount: filteredAssets.length,
         people,
+        scopeFilters,
         reviewSummary,
       },
       { status: 200 },

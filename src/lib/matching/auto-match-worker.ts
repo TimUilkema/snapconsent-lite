@@ -31,7 +31,7 @@ import {
   supersedeRecurringProfileFanoutContinuations,
   type ClaimedFanoutContinuationRow,
 } from "@/lib/matching/auto-match-fanout-continuations";
-import { resolveReadyProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
+import { resolveAutoEligibleProjectRecurringSource } from "@/lib/matching/project-recurring-sources";
 import {
   ensureAssetFaceMaterialization,
   loadConsentHeadshotMaterialization,
@@ -707,20 +707,20 @@ async function loadEligibleHeadshotForConsent(
   tenantId: string,
   projectId: string,
   consentId: string,
-) {
-  const { data: consent, error: consentError } = await supabase
-    .from("consents")
-    .select("id, face_match_opt_in, revoked_at")
-    .eq("tenant_id", tenantId)
-    .eq("project_id", projectId)
-    .eq("id", consentId)
-    .maybeSingle();
+  ) {
+    const { data: consent, error: consentError } = await supabase
+      .from("consents")
+      .select("id, face_match_opt_in, revoked_at, superseded_at")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("id", consentId)
+      .maybeSingle();
 
   if (consentError) {
     throw new HttpError(500, "face_match_consent_lookup_failed", "Unable to load consent.");
   }
 
-  if (!consent || !consent.face_match_opt_in || consent.revoked_at) {
+  if (!consent || !consent.face_match_opt_in || consent.revoked_at || consent.superseded_at) {
     return null;
   }
 
@@ -1527,7 +1527,7 @@ async function enqueueMaterializeJobForIntake(
   if (job.job_type === "reconcile_project") {
     const payload = parseReconcileProjectPayload(job.payload);
     if (payload.replayKind === "recurring_profile_source" && payload.projectProfileParticipantId) {
-      const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+      const currentSource = await resolveAutoEligibleProjectRecurringSource(supabase, {
         tenantId: job.tenant_id,
         projectId: job.project_id,
         projectProfileParticipantId: payload.projectProfileParticipantId,
@@ -1895,7 +1895,7 @@ async function isCurrentRecurringMaterializedPair(
     return false;
   }
 
-  const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+  const currentSource = await resolveAutoEligibleProjectRecurringSource(supabase, {
     tenantId: job.tenant_id,
     projectId: job.project_id,
     projectProfileParticipantId: payload.projectProfileParticipantId,

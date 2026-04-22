@@ -52,15 +52,34 @@ Recommended local setup for phone testing:
 
 ## Local Email Verification
 
-The local Supabase config uses Inbucket for email testing.
+SnapConsent now has a central outbound email foundation for server-side email jobs.
+
+- Foundation code lives under `src/lib/email/outbound/`.
+- New email features should add a typed email kind plus centralized renderer/registry entry there and enqueue jobs through the foundation.
+- Feature code should not call SMTP or provider libraries directly unless the foundation itself is being changed.
+- External email links should continue to use the existing relative path builders plus `APP_ORIGIN` through `src/lib/url/external-origin.ts`.
+
+The local Supabase config uses Inbucket for email testing, and the current SMTP transport points at that local sink by default.
 
 - Inbucket UI: `http://127.0.0.1:54324`
 - SMTP target for app mailer: `127.0.0.1:54325`
+- Worker token env for queued and retried email dispatch: `OUTBOUND_EMAIL_WORKER_TOKEN`
+
+Current live use is the one-off consent receipt flow. Future invite, reminder, and request-style email features should extend the outbound foundation instead of creating a second notification path.
 
 After submitting consent, verify in Inbucket:
 - receipt delivered to subject email
 - consent summary content
 - revoke link works and marks consent revoked without deleting consent records
+
+If you need to drain queued email jobs locally, call the internal worker endpoint:
+
+```bash
+curl -X POST "$APP_ORIGIN/api/internal/email/worker" \
+  -H "Authorization: Bearer $OUTBOUND_EMAIL_WORKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"batchSize":10}'
+```
 
 ## Validation Commands
 

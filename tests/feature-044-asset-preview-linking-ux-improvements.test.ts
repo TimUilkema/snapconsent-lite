@@ -13,8 +13,12 @@ import { signFaceDerivativeUrl } from "../src/lib/assets/sign-face-derivatives";
 import {
   AssetPreviewConsentPanel,
   AssetPreviewLinkedPeopleStrip,
-} from "../src/components/projects/project-asset-preview-lightbox";
+} from "../src/components/projects/project-photo-asset-preview-lightbox";
 import { submitConsent } from "../src/lib/consent/submit-consent";
+import {
+  loadProjectConsentScopeFilterFamilies,
+  resolveProjectAssetIdsByConsentScopeFilter,
+} from "../src/lib/consent/project-consent-scope-filter";
 import {
   getAssetPreviewFaces,
   getAssetPreviewLinkCandidates,
@@ -388,6 +392,7 @@ async function updateConsentPreviewFields(
     structuredSnapshot?: StructuredFieldsSnapshot | null;
     consentVersion?: string;
     revoked?: boolean;
+    superseded?: boolean;
   },
 ) {
   const { error } = await admin
@@ -396,6 +401,7 @@ async function updateConsentPreviewFields(
       structured_fields_snapshot: input.structuredSnapshot ?? null,
       consent_version: input.consentVersion ?? "v1",
       revoked_at: input.revoked ? new Date().toISOString() : null,
+      superseded_at: input.superseded ? new Date().toISOString() : null,
     })
     .eq("tenant_id", context.tenantId)
     .eq("project_id", context.projectId)
@@ -403,7 +409,9 @@ async function updateConsentPreviewFields(
   assertNoError(error, "update consent preview fields");
 }
 
-function createStructuredSnapshot(): StructuredFieldsSnapshot {
+function createStructuredSnapshot(input?: {
+  selectedScopeKeys?: string[];
+}) : StructuredFieldsSnapshot {
   return {
     schemaVersion: 1,
     templateSnapshot: {
@@ -456,7 +464,7 @@ function createStructuredSnapshot(): StructuredFieldsSnapshot {
     values: {
       scope: {
         valueType: "checkbox_list",
-        selectedOptionKeys: ["web", "social"],
+        selectedOptionKeys: input?.selectedScopeKeys ?? ["web", "social"],
       },
       duration: {
         valueType: "single_select",
@@ -523,6 +531,25 @@ test("asset preview linked faces expose exact linked face crops and bounded cons
     "Duration: 2 years",
     "Territory: EU and UK",
   ]);
+  assert.deepEqual(
+    preview.linkedFaces[0]?.currentLink?.consent?.scopeStates.map((scopeState) => ({
+      scopeLabel: scopeState.scopeLabel,
+      effectiveStatus: scopeState.effectiveStatus,
+      governingTemplateVersion: scopeState.governingTemplateVersion,
+    })),
+    [
+      {
+        scopeLabel: "Website",
+        effectiveStatus: "revoked",
+        governingTemplateVersion: "v2",
+      },
+      {
+        scopeLabel: "Social",
+        effectiveStatus: "revoked",
+        governingTemplateVersion: "v2",
+      },
+    ],
+  );
 
   const signedFaceUrl = await signFaceDerivativeUrl({
     asset_face_id: targetFaceId,
@@ -533,12 +560,13 @@ test("asset preview linked faces expose exact linked face crops and bounded cons
   assert.ok(typeof signedFaceUrl === "string" || signedFaceUrl === null);
 });
 
-test("asset preview link candidates stay project-scoped, exclude revoked consents, and expose current asset links", async () => {
+test("asset preview link candidates stay project-scoped, exclude revoked or superseded consents, and expose current asset links", async () => {
   const context = await createProjectContext(admin);
   const photoAssetId = await createAsset(admin, context, { assetType: "photo" });
   const consentA = await createOptedInConsentWithHeadshot(admin, context);
   const consentB = await createOptedInConsentWithHeadshot(admin, context);
   const consentRevoked = await createOptedInConsentWithHeadshot(admin, context);
+  const consentSuperseded = await createOptedInConsentWithHeadshot(admin, context);
   const photo = await materializeAsset(context, photoAssetId, [{ faceRank: 0 }, { faceRank: 1 }]);
 
   await manualLinkPhotoToConsent({
@@ -564,6 +592,9 @@ test("asset preview link candidates stay project-scoped, exclude revoked consent
   await updateConsentPreviewFields(context, consentRevoked.consentId, {
     revoked: true,
   });
+  await updateConsentPreviewFields(context, consentSuperseded.consentId, {
+    superseded: true,
+  });
 
   const candidates = await getAssetPreviewLinkCandidates({
     supabase: admin,
@@ -577,6 +608,7 @@ test("asset preview link candidates stay project-scoped, exclude revoked consent
   assert.ok(candidateIds.has(consentA.consentId));
   assert.ok(candidateIds.has(consentB.consentId));
   assert.equal(candidateIds.has(consentRevoked.consentId), false);
+  assert.equal(candidateIds.has(consentSuperseded.consentId), false);
 
   const candidateA = candidates.candidates.find((candidate) => candidate.consentId === consentA.consentId) ?? null;
   const candidateB = candidates.candidates.find((candidate) => candidate.consentId === consentB.consentId) ?? null;
@@ -587,6 +619,74 @@ test("asset preview link candidates stay project-scoped, exclude revoked consent
   assert.equal(candidateB?.currentAssetLink?.assetFaceId, photo.faces[1]?.id ?? null);
   assert.equal(candidateB?.currentAssetLink?.faceRank, 1);
   assert.equal("headshotThumbnailUrl" in (candidateA ?? {}), true);
+});
+
+test("asset scope filtering resolves one-off linked assets by effective scope state", async () => {
+  const context = await createProjectContext(admin);
+  const websiteAssetId = await createAsset(admin, context, { assetType: "photo" });
+  const socialAssetId = await createAsset(admin, context, { assetType: "photo" });
+  const websiteConsent = await createOptedInConsentWithHeadshot(admin, context);
+  const socialConsent = await createOptedInConsentWithHeadshot(admin, context);
+
+  await updateConsentPreviewFields(context, websiteConsent.consentId, {
+    structuredSnapshot: createStructuredSnapshot({ selectedScopeKeys: ["web"] }),
+    consentVersion: "v1",
+  });
+  await updateConsentPreviewFields(context, socialConsent.consentId, {
+    structuredSnapshot: createStructuredSnapshot({ selectedScopeKeys: ["social"] }),
+    consentVersion: "v1",
+  });
+
+  await manualLinkWholeAssetToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: websiteAssetId,
+    consentId: websiteConsent.consentId,
+    actorUserId: context.userId,
+  });
+  await manualLinkWholeAssetToConsent({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetId: socialAssetId,
+    consentId: socialConsent.consentId,
+    actorUserId: context.userId,
+  });
+
+  const scopeFamilies = await loadProjectConsentScopeFilterFamilies({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+  });
+  assert.equal(scopeFamilies.length, 1);
+  assert.equal(scopeFamilies[0]?.templateKey, "feature-044-template");
+  assert.deepEqual(
+    scopeFamilies[0]?.scopes.map((scope) => scope.label),
+    ["Website", "Social"],
+  );
+
+  const websiteGrantedAssetIds = await resolveProjectAssetIdsByConsentScopeFilter({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetIds: [websiteAssetId, socialAssetId],
+    scopeTemplateKey: "feature-044-template",
+    scopeKey: "web",
+    scopeStatus: "granted",
+  });
+  assert.deepEqual(websiteGrantedAssetIds, [websiteAssetId]);
+
+  const socialNotGrantedAssetIds = await resolveProjectAssetIdsByConsentScopeFilter({
+    supabase: admin,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    assetIds: [websiteAssetId, socialAssetId],
+    scopeTemplateKey: "feature-044-template",
+    scopeKey: "social",
+    scopeStatus: "not_granted",
+  });
+  assert.deepEqual(socialNotGrantedAssetIds, [websiteAssetId]);
 });
 
 test("linked people strip renders linked cards and selection state without altering overlay data requirements", () => {
@@ -622,6 +722,7 @@ test("linked people strip renders linked cards and selection state without alter
             headshotThumbnailUrl: null,
             headshotPreviewUrl: null,
             goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
+            scopeStates: [],
           },
           recurring: null,
         },
@@ -659,6 +760,13 @@ test("consent panel renders placeholder and selected linked-face summary states"
       headshotLabel: "Headshot",
       noEmailLabel: "No email",
       unknownValueLabel: "Unknown",
+      scopeStatusLabel: "Scope status",
+      scopeStatusGrantedLabel: "Granted",
+      scopeStatusNotGrantedLabel: "Not granted",
+      scopeStatusRevokedLabel: "Revoked",
+      scopeStatusNotCollectedLabel: "Not collected",
+      scopeProvenanceWithDateLabel: (version: string, date: string) => `Current state from ${version}, signed ${date}`,
+      scopeProvenanceWithoutDateLabel: (version: string) => `Current state from ${version}`,
       activeLabel: "Active",
       revokedLabel: "Revoked",
       autoLinkLabel: "Auto",
@@ -723,6 +831,15 @@ test("consent panel renders placeholder and selected linked-face summary states"
           headshotThumbnailUrl: "https://example.com/headshot.webp",
           headshotPreviewUrl: "https://example.com/headshot-preview.webp",
           goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
+          scopeStates: [
+            {
+              scopeOptionKey: "website",
+              scopeLabel: "Website",
+              effectiveStatus: "revoked",
+              governingTemplateVersion: "v2",
+              governingSignedAt: "2026-04-02T10:00:00.000Z",
+            },
+          ],
         },
         recurring: null,
       },
@@ -734,6 +851,13 @@ test("consent panel renders placeholder and selected linked-face summary states"
       headshotLabel: "Headshot",
       noEmailLabel: "No email",
       unknownValueLabel: "Unknown",
+      scopeStatusLabel: "Scope status",
+      scopeStatusGrantedLabel: "Granted",
+      scopeStatusNotGrantedLabel: "Not granted",
+      scopeStatusRevokedLabel: "Revoked",
+      scopeStatusNotCollectedLabel: "Not collected",
+      scopeProvenanceWithDateLabel: (version: string, date: string) => `Current state from ${version}, signed ${date}`,
+      scopeProvenanceWithoutDateLabel: (version: string) => `Current state from ${version}`,
       activeLabel: "Active",
       revokedLabel: "Revoked",
       autoLinkLabel: "Auto",
@@ -770,6 +894,9 @@ test("consent panel renders placeholder and selected linked-face summary states"
   assert.match(selectedMarkup, /Go to consent form/);
   assert.match(selectedMarkup, /Remove link/);
   assert.match(selectedMarkup, /Change person/);
+  assert.match(selectedMarkup, /Scope status/);
+  assert.match(selectedMarkup, /Current state from v2, signed/);
+  assert.match(selectedMarkup, /Website/);
   assert.doesNotMatch(selectedMarkup, /Consent version/);
   assert.doesNotMatch(selectedMarkup, /Face match opt-in/);
 });
@@ -806,6 +933,7 @@ test("change person picker rows show names without email lines", () => {
           headshotThumbnailUrl: null,
           headshotPreviewUrl: null,
           goToConsentHref: "/projects/project-1?openConsentId=consent-1#consent-consent-1",
+          scopeStates: [],
         },
         recurring: null,
       },
@@ -817,6 +945,13 @@ test("change person picker rows show names without email lines", () => {
       headshotLabel: "Headshot",
       noEmailLabel: "No email",
       unknownValueLabel: "Unknown",
+      scopeStatusLabel: "Scope status",
+      scopeStatusGrantedLabel: "Granted",
+      scopeStatusNotGrantedLabel: "Not granted",
+      scopeStatusRevokedLabel: "Revoked",
+      scopeStatusNotCollectedLabel: "Not collected",
+      scopeProvenanceWithDateLabel: (version: string, date: string) => `Current state from ${version}, signed ${date}`,
+      scopeProvenanceWithoutDateLabel: (version: string) => `Current state from ${version}`,
       activeLabel: "Active",
       revokedLabel: "Revoked",
       autoLinkLabel: "Auto",
@@ -873,6 +1008,11 @@ test("whole-asset links appear on zero-face previews and candidate rows for one-
   const context = await createProjectContext(admin);
   const photoAssetId = await createAsset(admin, context, { assetType: "photo" });
   const consent = await createOptedInConsentWithHeadshot(admin, context);
+  const supersededConsent = await createOptedInConsentWithHeadshot(admin, context);
+
+  await updateConsentPreviewFields(context, supersededConsent.consentId, {
+    superseded: true,
+  });
 
   const linkResult = await manualLinkWholeAssetToConsent({
     supabase: admin,
@@ -904,6 +1044,10 @@ test("whole-asset links appear on zero-face previews and candidate rows for one-
   });
   const linkedCandidate = candidates.candidates.find((candidate) => candidate.consentId === consent.consentId) ?? null;
   assert.ok(linkedCandidate);
+  assert.equal(
+    candidates.candidates.some((candidate) => candidate.consentId === supersededConsent.consentId),
+    false,
+  );
   assert.equal(linkedCandidate.currentExactFaceLink, null);
   assert.equal(typeof linkedCandidate.currentWholeAssetLink?.projectFaceAssigneeId, "string");
 

@@ -8,6 +8,10 @@ import { resolveSignedUploadUrlForBrowser } from "@/lib/client/storage-signed-ur
 import { resolveLocalizedApiError } from "@/lib/i18n/error-message";
 import { formatDateTime } from "@/lib/i18n/format";
 import type { RecurringProfileDetailData } from "@/lib/profiles/profile-directory-service";
+import {
+  RECURRING_PROFILE_MIN_FACE_AREA_RATIO,
+  RECURRING_PROFILE_MIN_FACE_CONFIDENCE,
+} from "@/lib/profiles/profile-headshot-thresholds";
 
 type HeadshotMatchingData = RecurringProfileDetailData["headshotMatching"];
 
@@ -133,6 +137,9 @@ export function ProfileHeadshotPanel({
     headshotMatching.actions.canSelectFace
     && Boolean(currentHeadshot)
     && headshotMatching.candidateFaces.length > 0;
+  const showLowQualityWarning =
+    headshotMatching.readiness.state === "needs_face_selection"
+    && currentHeadshot?.selection_reason === "multiple_faces_low_quality";
 
   async function handleSelectedFile(file: File | null) {
     if (!file) {
@@ -355,6 +362,14 @@ export function ProfileHeadshotPanel({
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-medium text-amber-900">{t("faceSelection.title")}</p>
           <p className="mt-1 text-sm text-amber-900">{t("faceSelection.help")}</p>
+          {showLowQualityWarning ? (
+            <p className="mt-2 text-sm text-amber-900">
+              {t("faceSelection.lowQualityWarning", {
+                confidence: Math.round(RECURRING_PROFILE_MIN_FACE_CONFIDENCE * 100),
+                area: Math.round(RECURRING_PROFILE_MIN_FACE_AREA_RATIO * 100),
+              })}
+            </p>
+          ) : null}
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {headshotMatching.candidateFaces.map((face) => (
               <button

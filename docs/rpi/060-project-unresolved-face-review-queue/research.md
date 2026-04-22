@@ -161,7 +161,6 @@ Verified in `src/app/api/projects/[projectId]/assets/route.ts`:
 - it does not include:
   - unresolved face count
   - blocked face count
-  - revoked-owner count
   - derived asset review status
   - preselected face id for review navigation
 
@@ -277,26 +276,24 @@ This is the smallest coherent workflow that improves discovery, filtering, prior
 
 Feature 060 should stay operational and small. "Needs review" should mean that the operator still has an actionable face-level decision to make or repair inside the current lightbox.
 
-### Recommended unresolved conditions
+### Current unresolved conditions
 
 Count a face as unresolved when:
 
 - its current preview `faceState` is `unlinked`
-- or it has a current link whose `ownerState` is `revoked`
 
 This covers:
 
 - detector-created faces with no owner
 - manual-created faces with no owner
-- previously linked faces whose current owner is no longer active in the current model
 
-### Recommended non-unresolved conditions
+### Current non-unresolved conditions
 
 Do not count a face as unresolved when:
 
 - it is `hidden`
 - it is `blocked`
-- it is linked and `ownerState` is `active`
+- it is linked
 
 Reasoning:
 
@@ -318,79 +315,78 @@ Reasoning:
 
 Assets with zero visible or detected faces should not be marked unresolved by Feature 060 alone. They can remain neutral/resolved from this feature's perspective unless the product later introduces a separate asset-quality review workflow.
 
-## Recommended asset-level statuses and filters
+### Non-materialized assets
 
-### Recommended derived asset statuses
+Assets without a current face materialization should not be marked `resolved` just because there are no current unlinked faces yet.
 
-Keep the taxonomy small:
+Instead, the live implementation keeps them in a separate `pending` review state until a current materialization exists.
 
+## Implemented asset-level statuses and filters
+
+### Current derived asset statuses
+
+The live implementation uses this status taxonomy:
+
+- `pending`
 - `needs_review`
 - `blocked`
 - `resolved`
 
-Recommended derivation:
+Current derivation:
 
+- `pending` when:
+  - the photo asset does not yet have a current face materialization for the active materializer version
 - `needs_review` when:
-  - `unresolvedFaceCount > 0`
-  - or `revokedLinkedFaceCount > 0`
+  - a current materialization exists
+  - and `unresolvedFaceCount > 0`
 - `blocked` when:
+  - a current materialization exists
   - not `needs_review`
   - and `blockedFaceCount > 0`
 - `resolved` otherwise
 
-This keeps the primary operator queue focused on unfinished work while still making intentionally blocked assets discoverable.
+This keeps newly uploaded photos out of the done/resolved bucket until face materialization has actually completed.
 
-### Recommended asset-level counts
+### Current asset-level counts
 
-Add the smallest useful counts:
+The live implementation currently exposes:
 
 - `unresolvedFaceCount`
 - `blockedFaceCount`
-- `revokedLinkedFaceCount`
 
-For UI simplicity, the visible "needs review" count on a card can be:
+The current implementation does not expose a separate revoked-owner review subcount.
 
-- `needsReviewFaceCount = unresolvedFaceCount + revokedLinkedFaceCount`
+### Current filters
 
-The API can still expose the two underlying fields separately for clarity and future tuning.
-
-### Recommended filters
-
-Add these asset-list filters:
+The asset list currently exposes these filters:
 
 - `All`
 - `Needs review`
 - `Blocked`
 - `Resolved`
 
-Recommended semantics:
+Current semantics:
 
 - `All`: no review-state restriction
 - `Needs review`: assets where `reviewStatus = needs_review`
-- `Blocked`: assets where `blockedFaceCount > 0`
+- `Blocked`: assets where `reviewStatus = blocked`
 - `Resolved`: assets where `reviewStatus = resolved`
 
-The `Blocked` filter should include assets that also have unresolved faces only if the product wants a permissive discovery filter. For a simpler first slice, the plan phase should decide whether `Blocked` is:
+Pending assets currently remain visible through `All` and the review summary strip, but they do not have a dedicated filter tab.
 
-- a pure status filter matching only `reviewStatus = blocked`
-- or a broader "has blocked faces" filter
+### Current sorting
 
-The more useful operational default is the broader "has blocked faces" filter, because it helps operators find all assets with explicit blocks without hiding assets that also need review.
-
-### Recommended sorting
-
-Keep existing sort options and add one review-oriented sort:
+The current implementation keeps the existing sort options and adds:
 
 - `Needs review first`
 
-Derived order recommendation:
+Current order:
 
 1. `needs_review`
 2. `blocked`
-3. `resolved`
-4. tie-break by current default `created_at_desc`
-
-This is enough to prioritize work without replacing the current sort model.
+3. `pending`
+4. `resolved`
+5. tie-break by current default `created_at_desc`
 
 ## Recommended fit with the current project assets surface
 
@@ -403,12 +399,12 @@ Recommended additions to the assets area:
 - one additional review-first sort option
 - status badge and small counts on each asset card/list item
 
-Recommended summary values:
+Current summary values:
 
 - assets needing review
+- assets pending materialization
 - assets with blocked faces
 - resolved assets
-- optionally total unresolved faces across the current result set or project
 
 This summary should remain informational and navigational. It should not become a second workflow panel with its own actions.
 
@@ -425,8 +421,7 @@ This summary should remain informational and navigational. It should not become 
 When opening from a review-focused context, preselect:
 
 1. the first `unlinked` face by face rank
-2. otherwise the first linked face with `ownerState = revoked` by face rank
-3. otherwise no special selection
+2. otherwise no special selection
 
 This is the smallest lightbox enhancement that reduces operator clicks without redesigning navigation.
 
@@ -463,7 +458,6 @@ Add derived review fields to the existing project assets list response:
 - `reviewStatus`
 - `unresolvedFaceCount`
 - `blockedFaceCount`
-- `revokedLinkedFaceCount`
 - `firstNeedsReviewFaceId` or equivalent
 
 These should be derived server-side from the current exact-face state and preview semantics, not trusted from the client.
@@ -495,7 +489,7 @@ That is sufficient for Feature 060. No durable queue state is needed.
 - Preserve tenant scoping in every query by deriving tenant membership from the authenticated session.
 - Never accept tenant id or derived review status from the client.
 - Preserve current exact-face ownership semantics and one-owner-per-face behavior.
-- Do not introduce client-side decisions about hidden, blocked, or revoked semantics.
+- Do not introduce client-side decisions about hidden, blocked, or pending-vs-resolved semantics.
 - Keep writes idempotent and unchanged where possible; Feature 060 is primarily a read-model and navigation improvement.
 - Avoid introducing new durable review tables unless derivation proves insufficient.
 - Ensure filtered navigation remains stable when asset data refreshes after a write inside the lightbox.
@@ -525,10 +519,11 @@ That is sufficient for Feature 060. No durable queue state is needed.
 - should usually appear as `resolved` for Feature 060 purposes
 - hidden faces should remain available only through the existing hidden-face affordance in the lightbox
 
-### Revoked current owners
+### Non-materialized assets
 
-- linked faces with `ownerState = revoked` should count as needing review
-- this keeps the queue operationally useful when historical links remain visible but no longer represent an active usable owner
+- assets without a current face materialization should derive as `pending`
+- they should not be treated as `resolved`
+- they remain visible in `All` and in the summary strip until materialization finishes
 
 ### Mixed recurring and one-off owners
 
@@ -569,7 +564,6 @@ That is sufficient for Feature 060. No durable queue state is needed.
 - Should the review summary counts reflect:
   - the full project
   - or only the current query/filter result set
-- Should revoked linked faces be shown as a distinct subcount in UI, or folded into a single needs-review count
 - Should opening an asset from the generic `All` view also preselect the first unresolved face when one exists, or only do that from explicit review-focused actions
 - Where should the batch asset-review derivation helper live so it stays aligned with preview-face semantics without overloading the preview payload path
 - What test additions should anchor:
@@ -582,10 +576,10 @@ That is sufficient for Feature 060. No durable queue state is needed.
 
 The smallest production-worthy slice is:
 
-1. Derive asset-level review fields on the server.
+1. Derive asset-level review fields on the server, including `pending` for non-materialized photos.
 2. Add `Needs review`, `Blocked`, and `Resolved` filters to the existing assets surface.
-3. Add status badge and small review counts to asset cards/list items.
-4. Add a `Needs review first` sort option.
+3. Add status badge and small review counts to asset cards/list items without showing non-materialized photos as done.
+4. Add a `Needs review first` sort option with `pending` ahead of `resolved`.
 5. Open the existing lightbox and preselect the first unresolved face when entering from a review-focused context.
 
 This is enough to make unfinished work discoverable and navigable without changing the underlying review model.

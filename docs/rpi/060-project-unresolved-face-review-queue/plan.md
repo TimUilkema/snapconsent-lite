@@ -170,13 +170,11 @@ Feature 060 will:
 A face counts as unresolved when:
 
 - `faceState === "unlinked"`
-- or `currentLink.ownerState === "revoked"`
 
 This includes:
 
 - unlinked detector faces
 - unlinked manual-created faces
-- historically linked faces whose current owner is revoked/inactive in the live model
 
 ### Face-level non-unresolved rules
 
@@ -184,12 +182,18 @@ A face does not count as unresolved when:
 
 - `faceState === "hidden"`
 - `faceState === "blocked"`
-- face is linked and `ownerState === "active"`
+- face is linked
 
 ### Zero-face assets
 
 - zero-face assets do not count as unresolved for Feature 060
 - they fall into `resolved` unless future product work introduces a separate asset-quality queue
+
+### Non-materialized assets
+
+- photo assets without a current face materialization must derive as `pending`
+- they must not be shown as `resolved` or done just because there are no current unlinked faces yet
+- this keeps the project asset list honest while background face materialization is still outstanding
 
 ### Blocked treatment
 
@@ -206,7 +210,6 @@ Per asset, derive:
 - `reviewStatus`
 - `unresolvedFaceCount`
 - `blockedFaceCount`
-- `revokedLinkedFaceCount`
 - `firstNeedsReviewFaceId`
 
 ### Status derivation
@@ -215,14 +218,18 @@ Use this precedence:
 
 1. `needs_review`
 2. `blocked`
-3. `resolved`
+3. `pending`
+4. `resolved`
 
 Exact rules:
 
+- `pending` when:
+  - there is no current face materialization for the photo asset
 - `needs_review` when:
-  - `unresolvedFaceCount > 0`
-  - or `revokedLinkedFaceCount > 0`
+  - there is a current face materialization
+  - and `unresolvedFaceCount > 0`
 - `blocked` when:
+  - there is a current face materialization
   - `needs_review` is false
   - and `blockedFaceCount > 0`
 - `resolved` otherwise
@@ -232,8 +239,7 @@ Exact rules:
 Derive `firstNeedsReviewFaceId` as:
 
 1. first face with `faceState === "unlinked"` by `faceRank`
-2. otherwise first linked face with `ownerState === "revoked"` by `faceRank`
-3. otherwise `null`
+2. otherwise `null`
 
 ### Chosen `Blocked` filter semantics
 
@@ -267,10 +273,9 @@ Extend `GET /api/projects/[projectId]/assets` with:
 
 Extend each asset row with:
 
-- `reviewStatus: "needs_review" | "blocked" | "resolved"`
+- `reviewStatus: "pending" | "needs_review" | "blocked" | "resolved"`
 - `unresolvedFaceCount: number`
 - `blockedFaceCount: number`
-- `revokedLinkedFaceCount: number`
 - `firstNeedsReviewFaceId: string | null`
 
 Extend the response payload with:
@@ -278,6 +283,7 @@ Extend the response payload with:
 - `reviewSummary`
   - `totalAssetCount`
   - `needsReviewAssetCount`
+  - `pendingAssetCount`
   - `blockedAssetCount`
   - `resolvedAssetCount`
 
@@ -374,6 +380,7 @@ Recommended contents:
 
 - total scoped assets
 - needs review asset count
+- pending materialization asset count
 - blocked asset count
 - resolved asset count
 
@@ -389,6 +396,7 @@ Each asset card should gain:
 
 Recommended card behavior:
 
+- `pending` badge is explicit but low-emphasis
 - `needs_review` badge is visually primary
 - `blocked` badge is secondary/warning-toned
 - `resolved` badge is low-emphasis
@@ -405,8 +413,9 @@ Recommended order for this sort:
 
 1. `needs_review`
 2. `blocked`
-3. `resolved`
-4. then newest first
+3. `pending`
+4. `resolved`
+5. then newest first
 
 ### Lightbox preselection
 
@@ -467,7 +476,7 @@ Resulting user behavior:
 - Tenant id is still derived from authenticated membership, never accepted from the client.
 - The assets route remains the source of truth for review filter membership and counts.
 - No change is made to canonical write paths or exact-face ownership semantics.
-- No new client-side rule decides hidden, blocked, unlinked, or revoked semantics.
+- No new client-side rule decides hidden, blocked, unlinked, or pending-vs-resolved semantics.
 - No schema migration is introduced for this feature.
 - Deferred list refresh on lightbox close avoids unstable mid-session pagination and navigation.
 - Shared tests must guard against drift between preview-face semantics and asset-level review derivation.
@@ -497,16 +506,16 @@ Resulting user behavior:
 - asset derives as `resolved`
 - hidden faces do not contribute to unresolved or blocked counts
 
-### Revoked linked owners
+### Non-materialized assets
 
-- revoked linked owners contribute to `revokedLinkedFaceCount`
-- asset derives as `needs_review`
-- these faces can be preselected when there is no unlinked face
+- assets without a current face materialization derive as `pending`
+- they do not count as `resolved`
+- they stay visible in `All` and in summary counts until materialization completes
 
 ### Mixed recurring and one-off owners
 
 - owner kind does not affect review derivation
-- only face state and `ownerState` matter
+- only face state and materialization presence matter
 
 ### Zero-face assets
 
@@ -531,8 +540,6 @@ Resulting user behavior:
 - `tests/feature-048-block-person-assignment-for-faces-without-consent.test.ts`
   - extend for blocked being separate from unresolved
   - confirm blocked-only assets derive as `blocked`
-- `tests/feature-058-project-local-assignee-bridge.test.ts`
-  - extend for revoked recurring-linked owner causing `needs_review`
 - `tests/feature-044-asset-preview-linking-ux-improvements.test.ts`
   - extend component-level lightbox behavior for `initialSelectedFaceId`
 
@@ -555,9 +562,9 @@ This file should cover:
 ### Minimum assertions to include
 
 - `unlinked` faces count toward unresolved
-- revoked linked faces count toward unresolved
 - hidden faces do not count toward unresolved
 - blocked faces do not count toward unresolved
+- non-materialized assets derive as `pending`
 - blocked-only assets derive as `blocked`
 - assets with both resolved and unresolved faces derive as `needs_review`
 - assets with all active linked faces derive as `resolved`
@@ -623,4 +630,4 @@ This file should cover:
 
 ## Concise implementation prompt
 
-Implement Feature 060 inside the existing project assets surface. Extend `GET /api/projects/[projectId]/assets` to derive and return `reviewStatus`, `unresolvedFaceCount`, `blockedFaceCount`, `revokedLinkedFaceCount`, `firstNeedsReviewFaceId`, and a current-query-scoped `reviewSummary`. Add `review=all|needs_review|blocked|resolved` and `sort=needs_review_first`. In `AssetsList`, add review filters, a compact review summary strip, a `Needs review first` sort option, and per-asset status badges/counts using existing `projects.assetsList` i18n conventions. Keep blocked distinct from unresolved, treat active auto-linked faces as resolved, and do not add new workflow tables. Add `initialSelectedFaceId` to `ProjectAssetPreviewLightbox` and use it only when opening from `Needs review`. Preserve stable previous/next navigation by deferring asset-list refetch until lightbox close while still letting the lightbox refresh its own preview data after writes. Extend the existing 044/045/047/048/058 tests and add a focused Feature 060 test file for route/filter/sort/preselection behavior.
+Implement Feature 060 inside the existing project assets surface. Extend `GET /api/projects/[projectId]/assets` to derive and return `reviewStatus`, `unresolvedFaceCount`, `blockedFaceCount`, `firstNeedsReviewFaceId`, and a current-query-scoped `reviewSummary`. Non-materialized photo assets must derive as `pending`, not `resolved`. Add `review=all|needs_review|blocked|resolved` and `sort=needs_review_first`. In `AssetsList`, add review filters, a compact review summary strip that also reports pending materialization items, a `Needs review first` sort option, and per-asset status badges/counts using existing `projects.assetsList` i18n conventions. Keep blocked distinct from unresolved, do not mark non-materialized assets as done, and do not add new workflow tables. Add `initialSelectedFaceId` to `ProjectAssetPreviewLightbox` and use it only when opening from `Needs review`. Preserve stable previous/next navigation by deferring asset-list refetch until lightbox close while still letting the lightbox refresh its own preview data after writes. Extend the focused Feature 060 tests for pending-materialization behavior alongside route/filter/sort/preselection behavior.

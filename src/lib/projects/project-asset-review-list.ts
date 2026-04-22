@@ -1,4 +1,4 @@
-export type ProjectAssetReviewStatus = "needs_review" | "blocked" | "resolved";
+export type ProjectAssetReviewStatus = "pending" | "needs_review" | "blocked" | "resolved";
 
 export type ProjectAssetReviewFilter = "all" | "needs_review" | "blocked" | "resolved";
 
@@ -28,6 +28,7 @@ export function buildProjectAssetReviewSummary(entries: ProjectAssetReviewListEn
   return {
     totalAssetCount: entries.length,
     needsReviewAssetCount: entries.filter((entry) => entry.review.reviewStatus === "needs_review").length,
+    pendingAssetCount: entries.filter((entry) => entry.review.reviewStatus === "pending").length,
     blockedAssetCount: entries.filter((entry) => entry.review.reviewStatus === "blocked").length,
     resolvedAssetCount: entries.filter((entry) => entry.review.reviewStatus === "resolved").length,
   };
@@ -51,7 +52,8 @@ export function sortProjectAssetsForList(
   const reviewStatusOrder: Record<ProjectAssetReviewStatus, number> = {
     needs_review: 0,
     blocked: 1,
-    resolved: 2,
+    pending: 2,
+    resolved: 3,
   };
 
   return entries.slice().sort((left, right) => {

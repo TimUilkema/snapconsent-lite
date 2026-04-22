@@ -43,7 +43,7 @@ type AssetRow = {
     linkSource: "manual" | "auto";
     matchConfidence: number | null;
   }>;
-  reviewStatus?: "needs_review" | "blocked" | "resolved" | null;
+  reviewStatus?: "pending" | "needs_review" | "blocked" | "resolved" | null;
   unresolvedFaceCount?: number;
   blockedFaceCount?: number;
   firstNeedsReviewFaceId?: string | null;
@@ -58,9 +58,11 @@ type AssetsResponse = {
     email: string | null;
     label: string;
   }>;
+  scopeFilters?: ScopeFilterOption[];
   reviewSummary?: {
     totalAssetCount: number;
     needsReviewAssetCount: number;
+    pendingAssetCount: number;
     blockedAssetCount: number;
     resolvedAssetCount: number;
   };
@@ -76,12 +78,25 @@ type AssetSortOption =
 
 type AssetReviewFilter = "all" | "needs_review" | "blocked" | "resolved";
 
+type AssetScopeFilterStatus = "granted" | "not_granted" | "revoked" | "not_collected";
+
+type ScopeFilterOption = {
+  templateKey: string;
+  templateLabel: string;
+  scopes: Array<{
+    scopeKey: string;
+    label: string;
+    orderIndex: number;
+  }>;
+};
+
 type AssetsListProps = {
   projectId: string;
 };
 
 type AssetPageCacheEntry = {
   assets: AssetRow[];
+  scopeFilters: ScopeFilterOption[];
   reviewSummary: NonNullable<AssetsResponse["reviewSummary"]>;
   fetchedAt: number;
 };
@@ -92,6 +107,7 @@ type LoadedAssetPagePayload = {
   assets: AssetRow[];
   totalCount: number;
   people: NonNullable<AssetsResponse["people"]>;
+  scopeFilters: ScopeFilterOption[];
   reviewSummary: NonNullable<AssetsResponse["reviewSummary"]>;
 };
 
@@ -100,6 +116,7 @@ const ASSET_PAGE_CACHE_TTL_MS = 90_000;
 const EMPTY_REVIEW_SUMMARY = {
   totalAssetCount: 0,
   needsReviewAssetCount: 0,
+  pendingAssetCount: 0,
   blockedAssetCount: 0,
   resolvedAssetCount: 0,
 } as const;
@@ -157,6 +174,8 @@ function buildPageSummary(
 
 function getReviewStatusClasses(status: NonNullable<AssetRow["reviewStatus"]>) {
   switch (status) {
+    case "pending":
+      return "border-slate-300 bg-slate-100 text-slate-700";
     case "needs_review":
       return "border-rose-200 bg-rose-50 text-rose-800";
     case "blocked":
@@ -362,6 +381,10 @@ export function AssetsList({ projectId }: AssetsListProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedConsentIds, setSelectedConsentIds] = useState<string[]>([]);
+  const [scopeFilters, setScopeFilters] = useState<ScopeFilterOption[]>([]);
+  const [selectedScopeTemplateKey, setSelectedScopeTemplateKey] = useState("");
+  const [selectedScopeKey, setSelectedScopeKey] = useState("");
+  const [selectedScopeStatus, setSelectedScopeStatus] = useState<AssetScopeFilterStatus>("granted");
   const [selectedAssetGlobalIndex, setSelectedAssetGlobalIndex] = useState<number | null>(null);
   const [people, setPeople] = useState<AssetsResponse["people"]>([]);
   const [reviewSummary, setReviewSummary] = useState<NonNullable<AssetsResponse["reviewSummary"]>>(EMPTY_REVIEW_SUMMARY);
@@ -371,10 +394,17 @@ export function AssetsList({ projectId }: AssetsListProps) {
     () => [...selectedConsentIds].sort((a, b) => a.localeCompare(b)).join(","),
     [selectedConsentIds],
   );
+  const selectedScopeFilterKey = useMemo(
+    () =>
+      selectedScopeTemplateKey && selectedScopeKey
+        ? `${selectedScopeTemplateKey}:${selectedScopeKey}:${selectedScopeStatus}`
+        : "",
+    [selectedScopeKey, selectedScopeStatus, selectedScopeTemplateKey],
+  );
 
   const queryCacheKey = useMemo(
-    () => `${searchQuery}::${selectedConsentFilterKey}::${reviewFilter}::${sort}::${limit}`,
-    [limit, reviewFilter, searchQuery, selectedConsentFilterKey, sort],
+    () => `${searchQuery}::${selectedConsentFilterKey}::${selectedScopeFilterKey}::${reviewFilter}::${sort}::${limit}`,
+    [limit, reviewFilter, searchQuery, selectedConsentFilterKey, selectedScopeFilterKey, sort],
   );
 
   useEffect(() => {
@@ -396,6 +426,34 @@ export function AssetsList({ projectId }: AssetsListProps) {
     setPendingListRefreshOnClose(false);
   }, [queryCacheKey]);
 
+  const selectedScopeFamily = useMemo(
+    () => scopeFilters.find((family) => family.templateKey === selectedScopeTemplateKey) ?? null,
+    [scopeFilters, selectedScopeTemplateKey],
+  );
+
+  useEffect(() => {
+    if (!selectedScopeTemplateKey) {
+      if (selectedScopeKey) {
+        setSelectedScopeKey("");
+      }
+      return;
+    }
+
+    if (!selectedScopeFamily) {
+      setSelectedScopeTemplateKey("");
+      setSelectedScopeKey("");
+      return;
+    }
+
+    if (!selectedScopeKey) {
+      return;
+    }
+
+    if (!selectedScopeFamily.scopes.some((scope) => scope.scopeKey === selectedScopeKey)) {
+      setSelectedScopeKey("");
+    }
+  }, [selectedScopeFamily, selectedScopeKey, selectedScopeTemplateKey]);
+
   const fetchAssetsPage = useCallback(
     async (pageOffset: number, signal?: AbortSignal) => {
       const params = new URLSearchParams();
@@ -403,6 +461,11 @@ export function AssetsList({ projectId }: AssetsListProps) {
         params.set("q", searchQuery);
       }
       selectedConsentIds.forEach((consentId) => params.append("consentId", consentId));
+      if (selectedScopeTemplateKey && selectedScopeKey) {
+        params.set("scopeTemplateKey", selectedScopeTemplateKey);
+        params.set("scopeKey", selectedScopeKey);
+        params.set("scopeStatus", selectedScopeStatus);
+      }
       params.set("review", reviewFilter);
       params.set("sort", sort);
       params.set("limit", String(limit));
@@ -420,7 +483,18 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
       return payload;
     },
-    [limit, projectId, reviewFilter, searchQuery, selectedConsentIds, sort, tErrors],
+    [
+      limit,
+      projectId,
+      reviewFilter,
+      searchQuery,
+      selectedConsentIds,
+      selectedScopeKey,
+      selectedScopeStatus,
+      selectedScopeTemplateKey,
+      sort,
+      tErrors,
+    ],
   );
 
   const ensurePageLoaded = useCallback(
@@ -435,6 +509,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
           assets: cachedEntry.assets,
           totalCount,
           people: (people ?? []) as NonNullable<AssetsResponse["people"]>,
+          scopeFilters: cachedEntry.scopeFilters,
           reviewSummary: cachedEntry.reviewSummary,
         };
       }
@@ -452,6 +527,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
           ...current,
           [pageOffset]: {
             assets: pageAssets,
+            scopeFilters: payload.scopeFilters ?? [],
             reviewSummary: nextReviewSummary,
             fetchedAt: Date.now(),
           },
@@ -459,11 +535,13 @@ export function AssetsList({ projectId }: AssetsListProps) {
       });
       setTotalCount(payload.totalCount ?? 0);
       setPeople(payload.people ?? []);
+      setScopeFilters(payload.scopeFilters ?? []);
       setReviewSummary(nextReviewSummary);
       return {
         assets: pageAssets,
         totalCount: payload.totalCount ?? 0,
         people: (payload.people ?? []) as NonNullable<AssetsResponse["people"]>,
+        scopeFilters: payload.scopeFilters ?? [],
         reviewSummary: nextReviewSummary,
       };
     },
@@ -476,6 +554,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
 
     if (cachedPage && isAssetPageCacheFresh(cachedPage.fetchedAt)) {
       setAssets(cachedPage.assets);
+      setScopeFilters(cachedPage.scopeFilters);
       setReviewSummary(cachedPage.reviewSummary);
       setIsLoading(false);
       return () => controller.abort();
@@ -538,8 +617,15 @@ export function AssetsList({ projectId }: AssetsListProps) {
   const reviewSummaryItems = [
     { label: t("reviewSummaryAll"), count: reviewSummary.totalAssetCount },
     { label: t("reviewSummaryNeedsReview"), count: reviewSummary.needsReviewAssetCount },
+    { label: t("reviewSummaryPending"), count: reviewSummary.pendingAssetCount },
     { label: t("reviewSummaryBlocked"), count: reviewSummary.blockedAssetCount },
     { label: t("reviewSummaryResolved"), count: reviewSummary.resolvedAssetCount },
+  ];
+  const scopeStatusOptions: Array<{ value: AssetScopeFilterStatus; label: string }> = [
+    { value: "granted", label: t("previewScopeStatusGranted") },
+    { value: "not_granted", label: t("previewScopeStatusNotGranted") },
+    { value: "revoked", label: t("previewScopeStatusRevoked") },
+    { value: "not_collected", label: t("previewScopeStatusNotCollected") },
   ];
 
   const emptyStateLabel = useMemo(() => {
@@ -733,7 +819,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
             );
           })}
         </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
           {reviewSummaryItems.map((item) => (
             <div key={item.label} className="rounded-lg border border-zinc-200 px-3 py-2">
               <p className="text-xs text-zinc-600">{item.label}</p>
@@ -742,6 +828,88 @@ export function AssetsList({ projectId }: AssetsListProps) {
           ))}
         </div>
       </div>
+
+      {scopeFilters.length > 0 ? (
+        <details className="rounded-xl border border-zinc-200 bg-white p-3">
+          <summary className="cursor-pointer text-sm font-medium text-zinc-900">{t("filterByScope")}</summary>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            <label className="space-y-1 text-xs text-zinc-600">
+              <span>{t("filterScopeFamilyLabel")}</span>
+              <select
+                value={selectedScopeTemplateKey}
+                onChange={(event) => {
+                  setOffset(0);
+                  setSelectedScopeTemplateKey(event.target.value);
+                  setSelectedScopeKey("");
+                  setSelectedScopeStatus("granted");
+                }}
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
+              >
+                <option value="">{t("filterScopeFamilyPlaceholder")}</option>
+                {scopeFilters.map((family) => (
+                  <option key={family.templateKey} value={family.templateKey}>
+                    {family.templateLabel}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-zinc-600">
+              <span>{t("filterScopeLabel")}</span>
+              <select
+                value={selectedScopeKey}
+                disabled={!selectedScopeFamily}
+                onChange={(event) => {
+                  setOffset(0);
+                  setSelectedScopeKey(event.target.value);
+                }}
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 disabled:opacity-60"
+              >
+                <option value="">{t("filterScopePlaceholder")}</option>
+                {(selectedScopeFamily?.scopes ?? []).map((scope) => (
+                  <option key={scope.scopeKey} value={scope.scopeKey}>
+                    {scope.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs text-zinc-600">
+              <span>{t("filterScopeStatusLabel")}</span>
+              <select
+                value={selectedScopeStatus}
+                disabled={!selectedScopeKey}
+                onChange={(event) => {
+                  setOffset(0);
+                  setSelectedScopeStatus(event.target.value as AssetScopeFilterStatus);
+                }}
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 disabled:opacity-60"
+              >
+                {scopeStatusOptions.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <p className="text-xs text-zinc-600">{t("filterScopeHelp")}</p>
+            {selectedScopeTemplateKey || selectedScopeKey ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOffset(0);
+                  setSelectedScopeTemplateKey("");
+                  setSelectedScopeKey("");
+                  setSelectedScopeStatus("granted");
+                }}
+                className="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                {t("clearFilter")}
+              </button>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
 
       {people && people.length > 0 ? (
         <details className="rounded-xl border border-zinc-200 bg-white p-3">
@@ -836,7 +1004,9 @@ export function AssetsList({ projectId }: AssetsListProps) {
                     className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-medium ${getReviewStatusClasses(asset.reviewStatus ?? "resolved")}`}
                   >
                     {t(
-                      asset.reviewStatus === "needs_review"
+                      asset.reviewStatus === "pending"
+                        ? "reviewStatusPending"
+                        : asset.reviewStatus === "needs_review"
                         ? "reviewStatusNeedsReview"
                         : asset.reviewStatus === "blocked"
                           ? "reviewStatusBlocked"

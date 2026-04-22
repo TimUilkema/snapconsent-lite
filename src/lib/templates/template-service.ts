@@ -219,6 +219,7 @@ function isStructuredDefinitionValidationCode(code: string) {
     "invalid_structured_fields_definition",
     "structured_fields_payload_too_large",
     "structured_scope_required",
+    "structured_scope_key_semantic_drift",
     "duplicate_structured_field_key",
     "duplicate_structured_option_key",
     "invalid_structured_text_limits",

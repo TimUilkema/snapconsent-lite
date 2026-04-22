@@ -12,8 +12,7 @@ import {
 import {
   getCurrentProjectRecurringSourceBoundary,
   listReadyProjectRecurringSourcesPage,
-  resolveReadyProjectRecurringSource,
-  type ProjectRecurringSourceBoundary,
+  resolveAutoEligibleProjectRecurringSource,
   type ReadyProjectRecurringSource,
 } from "@/lib/matching/project-recurring-sources";
 import {
@@ -836,7 +835,7 @@ export async function loadConsentEligibility(
 ) {
   const { data, error } = await supabase
     .from("consents")
-    .select("id, face_match_opt_in, revoked_at")
+    .select("id, face_match_opt_in, revoked_at, superseded_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("id", consentId)
@@ -846,7 +845,7 @@ export async function loadConsentEligibility(
     throw new HttpError(500, "face_match_consent_lookup_failed", "Unable to load consent eligibility.");
   }
 
-  return data && data.face_match_opt_in === true && data.revoked_at === null;
+  return data && data.face_match_opt_in === true && data.revoked_at === null && data.superseded_at === null;
 }
 
 export async function createOrResetFanoutContinuationsForMaterializedAsset(
@@ -1639,7 +1638,7 @@ export async function processClaimedFanoutContinuation(
     return buildSupersededBatchResult(continuation);
   }
 
-  const currentSource = await resolveReadyProjectRecurringSource(supabase, {
+  const currentSource = await resolveAutoEligibleProjectRecurringSource(supabase, {
     tenantId: continuation.tenant_id,
     projectId: continuation.project_id,
     projectProfileParticipantId: continuation.source_project_profile_participant_id,

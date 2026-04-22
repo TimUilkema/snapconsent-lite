@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 
 import { ConsentFormLayoutRenderer } from "@/components/consent/consent-form-layout-renderer";
+import type { PublicConsentInitialValues } from "@/lib/consent/public-consent-prefill";
 import type { ConsentFormLayoutDefinition } from "@/lib/templates/form-layout";
 import type { StructuredFieldsDefinition } from "@/lib/templates/structured-fields";
 
@@ -14,6 +15,8 @@ type PublicRecurringConsentFormProps = {
   consentText: string | null;
   structuredFieldsDefinition: StructuredFieldsDefinition | null;
   formLayoutDefinition: ConsentFormLayoutDefinition;
+  initialValues?: PublicConsentInitialValues | null;
+  upgradeMode?: boolean;
 };
 
 export function PublicRecurringConsentForm({
@@ -23,15 +26,16 @@ export function PublicRecurringConsentForm({
   consentText,
   structuredFieldsDefinition,
   formLayoutDefinition,
+  initialValues,
 }: PublicRecurringConsentFormProps) {
   const t = useTranslations("publicRecurringConsent.form");
-  const [subjectName, setSubjectName] = useState(profileName);
-  const [subjectEmail, setSubjectEmail] = useState(profileEmail);
+  const [subjectName, setSubjectName] = useState(initialValues?.subjectName ?? profileName);
+  const [subjectEmail, setSubjectEmail] = useState(initialValues?.subjectEmail ?? profileEmail);
   const [consentAcknowledged, setConsentAcknowledged] = useState(false);
-  const [faceMatchOptIn, setFaceMatchOptIn] = useState(false);
+  const [faceMatchOptIn, setFaceMatchOptIn] = useState(initialValues?.faceMatchOptIn ?? false);
   const [structuredFieldValues, setStructuredFieldValues] = useState<
     Record<string, string | string[] | null | undefined>
-  >({});
+  >(() => ({ ...(initialValues?.structuredFieldValues ?? {}) }));
   const [error, setError] = useState<string | null>(null);
 
   return (

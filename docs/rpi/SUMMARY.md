@@ -60,6 +60,8 @@ Recurring profiles are also tenant-scoped. They represent known people that the 
 
 One-off consent revocation uses `revoke_tokens` and `consent_events`. Revocation changes future processing but does not delete the signed consent record or erase history.
 
+One-off consent now also has an explicit upgrade path. `project_consent_upgrade_requests` tracks pending upgrade requests bound to the same `subjects` row, and a newer signed one-off consent can supersede the prior current consent through `superseded_at` and `superseded_by_consent_id`. Old signed rows remain immutable history, but current one-off reads and current one-off assignment state follow the governing unsuperseded consent.
+
 ### Recurring profile and recurring consent model
 
 `recurring_profile_types` and `recurring_profiles` are tenant-scoped directory entities. They support profile classification, profile archiving, and a reusable pool of known people.
@@ -73,12 +75,16 @@ This distinction matters. Baseline recurring consent is the standing authorizati
 
 `project_profile_participants` are the bridge that adds recurring profiles into a specific project. They do not themselves mean the person has granted project consent. They are the project-local participation record that later recurring consent, matching readiness, and assignment logic build on.
 
+Recurring project replacement requests can now coexist with an active current project consent. Creating a replacement request does not demote the current signed project consent; the old row remains current until a newer project consent successfully signs and supersedes it.
+
 Recurring public flows use separate public routes from one-off invites:
 
 - `GET /rp/[token]`: public recurring consent request
 - `GET /rr/[token]`: public recurring consent revoke flow
 
 The recurring public flow reuses the same core principles as one-off public consent: server-validated token access, immutable signed records, bounded revoke handling, and no client authority over tenant or project identity.
+
+Project-media consent now also has a derived scope-state layer. `project_consent_scope_signed_projections` stores immutable per-scope signed projections for one-off project consent and recurring project consent, and `project_consent_scope_effective_states` derives the governing per-scope operational state by stable owner boundary plus template family. The effective vocabulary is `granted`, `not_granted`, `revoked`, and `not_collected`, where `not_collected` means the governing signed version did not include that scope.
 
 ### Media and asset model
 
@@ -101,6 +107,8 @@ Recurring profile headshots are modeled separately from `assets`. They use:
 
 This separation matters because recurring headshots are tenant/profile infrastructure, not project assets. One-off consent headshots are project-linked; recurring headshots are reusable profile-linked matching inputs.
 
+For recurring headshots, any upload with more than one detected face now requires manual canonical-face selection. The server no longer auto-selects a dominant face for multi-face recurring headshots.
+
 ### Exact-face materialization and ownership model
 
 For project photos, the live matching system is now face-centric. Current photos can have materialization rows in:
@@ -116,6 +124,8 @@ The assignee bridge is `project_face_assignees`. It normalizes two identity kind
 - `project_recurring_consent`
 
 That bridge is the key later-era design move. It lets one-off project consents and project-scoped recurring consents participate in the same exact-face and whole-asset linking flows without collapsing them into the same table.
+
+One-off upgrade completion can retarget the existing one-off assignee row and still-current consent-backed link rows from the prior consent to the new governing consent. That lets exact-face, fallback, and whole-asset behavior keep following the same person without treating an upgrade as a brand-new current owner.
 
 Current exact-face links live in `asset_face_consent_links`. Despite the name, the canonical exact-face model is really "asset face to project face assignee", not "asset to consent". A face can have only one current assignee. That is one of the main modern invariants of the repo.
 
@@ -181,6 +191,8 @@ The repo uses `idempotency_keys`, deterministic dedupe keys, and upsert-style wr
 
 One-off `consents` and recurring `recurring_profile_consents` are signed historical records. Revocation adds current-state markers and audit rows, but signed records remain. Future processing should stop when consent is revoked, but historical truth is preserved.
 
+Upgrade and replacement flows now also have explicit current-versus-history semantics. Pending replacement requests do not demote the current governing consent. A one-off or recurring project consent becomes historical only after a newer signed consent supersedes it, and future matching eligibility follows that governing consent's revocation and `face_match_opt_in` state.
+
 ### Baseline recurring consent and project recurring consent are different boundaries
 
 Baseline recurring consent is tenant/profile level. Project recurring consent is project level. Baseline consent may enable recurring headshots and readiness, but project assignment inside a project depends on current project recurring consent state. Future features should not casually collapse these concepts.
@@ -211,7 +223,7 @@ Project assets, headshots, and derived images are stored privately. The app uses
 
 ### Async pipelines must be replayable and repairable
 
-Matching and derivative generation are intentionally asynchronous. Finalize routes try to enqueue downstream work, but the system assumes enqueue can fail and that reconcile or repair paths must backfill missed work. New async features should follow the same pattern instead of assuming the first enqueue always succeeds.
+Matching and derivative generation are intentionally asynchronous. Finalize routes try to enqueue downstream work, but the system assumes enqueue can fail and that reconcile or repair paths must backfill missed work. Photo finalize now uses the correct privileged enqueue boundary for matching work, but derivative workers are still separate from matching workers, so repair and reconcile remain the fallback when queueing is missed. New async features should follow the same pattern instead of assuming the first enqueue always succeeds.
 
 ### Video support is layered on existing privacy and review rules
 
@@ -267,6 +279,10 @@ These flows usually have the same shape:
 - bounded processing per run
 - terminal versus retryable failure handling
 - explicit repair or reconcile paths to recover from missed or partial work
+
+### Email and external-link patterns
+
+Outbound email is still narrow today. The live app sends one-off and recurring receipt emails through a small server-side SMTP/Nodemailer helper, using `APP_ORIGIN` for absolute public links and local Inbucket for development. A broader typed outbound-email job foundation has been researched, but it is not live in the current repo.
 
 ### Matching architecture
 
@@ -413,7 +429,7 @@ The dependency chain matters:
 - Whole-asset linking depends on the project-face-assignee identity layer and the modern asset preview surfaces.
 - Video preview depends on the derivative worker and signed private URL patterns already used for photos.
 - Structured consent templates and live preview depend on the versioned template system, not the original static template assumptions from early docs.
-- Project review queueing depends on the current face-level review summary model, not the older asset-level matching assumptions.
+- Project review queueing depends on the current face-level review summary model, including an explicit pending-materialization state for photos that are not ready to be judged as blocked, unresolved, or resolved yet.
 
 ## 7. Current product capabilities in plain English
 
@@ -421,11 +437,15 @@ Today, a tenant can log in and manage a workspace with projects, templates, and 
 
 Inside a project, staff can create one-off public invite links, choose or inherit consent templates, and collect signed one-off consent records from public participants. Those signed consents preserve the exact text, version, and structured values that were signed. Participants can later revoke through tokenized public links without deleting history.
 
-The same tenant can also maintain recurring profiles. A recurring profile can receive a baseline recurring consent request through a public tokenized flow. Once baseline consent exists, the tenant can manage recurring headshots and matching readiness. That profile can also be added to a project as a participant, and the project can request project-specific recurring consent from that participant when needed. This gives the product a mixed model: a project can contain both one-off invite signers and known recurring people.
+Staff can also issue one-off upgrade requests to newer published template versions in the same family. Public upgrade signing reuses the same project subject, prefills prior values where keys still exist, keeps acceptance unchecked, and can reuse an existing one-off headshot instead of forcing a reupload. The newly signed unsuperseded consent becomes current; older signed rows remain history.
 
-For media, staff can upload project photos and videos through the protected app. Photos and videos are private assets, and the app renders preview or thumbnail derivatives rather than exposing storage objects directly. Videos also get poster thumbnails and signed playback URLs. One-off consent headshots are collected through the project and feed one-off matching. Recurring profile headshots are managed separately and feed recurring matching readiness.
+The same tenant can also maintain recurring profiles. A recurring profile can receive a baseline recurring consent request through a public tokenized flow. Once baseline consent exists, the tenant can manage recurring headshots and matching readiness. That profile can also be added to a project as a participant, and the project can request project-specific recurring consent from that participant when needed. Pending project replacement requests can coexist with an active current project consent until the newer version signs. This gives the product a mixed model: a project can contain both one-off invite signers and known recurring people.
 
-For review, the app can materialize photo faces, generate candidate matches, auto-assign some exact faces when confidence and consent state allow it, and expose unresolved work through project and consent review surfaces. Operators can manually link or unlink exact faces, review likely matches, hide irrelevant faces, block no-consent faces, draw manual face boxes when detection missed someone, and restore prior hidden or blocked states when appropriate.
+Project-media consent is now operationalized beyond raw signed snapshots. The app keeps immutable per-scope signed projections and derives current family-scoped scope state as `granted`, `not_granted`, `revoked`, or `not_collected` for one-off subjects and recurring project participants. Those derived states feed preview, filtering, and export without mutating signed history.
+
+For media, staff can upload project photos and videos through the protected app. Photos and videos are private assets, and the app renders preview or thumbnail derivatives rather than exposing storage objects directly. Videos also get poster thumbnails and signed playback URLs. One-off consent headshots are collected through the project and feed one-off matching. Recurring profile headshots are managed separately and feed recurring matching readiness, and multi-face recurring headshots now require a manual canonical-face choice instead of a server auto-pick.
+
+For review, the app can materialize photo faces, generate candidate matches, auto-assign some exact faces when confidence and consent state allow it, and expose project-level review state through the assets surface. Newly finalized photos should normally enqueue matching and materialization work promptly, although repair and reconcile still backfill missed work. Once materialized, operators can use the same assets surface to find needs-review, blocked, and resolved items, then open the preview lightbox to link or unlink exact faces, review likely matches, hide irrelevant faces, block no-consent faces, draw manual face boxes when detection missed someone, and restore prior hidden or blocked states when appropriate.
 
 The app also supports broader asset-level assignment. For photos with no usable exact face, there is manual fallback linking. For photos and videos, operators can create whole-asset links to a project assignee. Whole-asset linking is separate from exact-face ownership and is especially important for video, where the current app supports review and assignment without a photo-style exact-face pipeline.
 
@@ -495,7 +515,7 @@ This index lists every current top-level folder in `docs/rpi/` using the live fo
 - `057-project-matching-integration-for-ready-recurring-profiles`: Adds ready recurring profiles into project matching source enumeration and replay.
 - `058-project-local-assignee-bridge-for-profile-backed-matches`: Introduces the project-local assignee bridge that normalizes one-off and recurring project identities into one assignment layer.
 - `059-auto-assignment-for-project-scoped-recurring-assignees`: Lets project-scoped recurring assignees participate in canonical exact-face auto-assignment.
-- `060-project-unresolved-face-review-queue`: Project-level unresolved face review queue, filtering, and navigation into the preview lightbox.
+- `060-project-unresolved-face-review-queue`: Project-level face review queue with pending-materialization, needs-review, blocked, and resolved asset states, plus filtering and navigation into the preview lightbox.
 - `060-tenant-resolution-hardening`: Hardens tenant resolution after auth transitions by centralizing recovery logic in the tenant resolver.
 - `061-link-consent-to-whole-asset`: Makes whole-asset manual linking a real project workflow alongside exact-face linking.
 - `062-video-upload-foundation`: Adds `video` as a supported project asset type and establishes upload/listing behavior.
@@ -503,6 +523,11 @@ This index lists every current top-level folder in `docs/rpi/` using the live fo
 - `063-video-asset-preview-playback-and-thumbnails`: Video poster thumbnails, preview integration, and private signed playback URLs.
 - `063a-video-poster-thumbnail-performance-investigation`: Research-focused performance investigation into poster/thumbnail generation after video preview support landed.
 - `064-whole-asset-linking-for-video-assets`: Extends whole-asset linking to video assets so video review can participate in the same assignee model.
+- `065-recurring-profile-multi-face-manual-selection`: Recurring profile headshots with more than one detected face now always require manual canonical-face selection, with warning-specific low-quality states when needed.
+- `066-post-finalize-matching-job-enqueue-reliability`: Hardens photo finalize so matching/materialization enqueue uses the correct privileged boundary instead of leaving new photos permanently pending without a job.
+- `067-consent-scope-state-and-upgrade-requests`: Adds immutable per-scope signed projections and effective scope-state reads for one-off and recurring project consent, plus one-off upgrade-request and recurring supersedence foundations.
+- `068-outbound-email-foundation-with-local-emulation-and-typed-email-jobs`: Research-only design for durable typed outbound email jobs, provider abstraction, and local Inbucket/SMTP development flow; the generalized email-job system is not live yet.
+- `069-consent-upgrade-flow-owner-reuse-and-prefill-refinement`: Makes one-off and recurring project upgrade flows owner-bound and prefilled, adds one-off supersedence and carry-forward behavior, and aligns governing-consent reads and matching eligibility with the new current consent.
 - `archive`: Non-feature holding folder for archived alternatives, currently including `062a-safer-video-duplicate-checking-for-slower-clients` and `062a-simpler-video-duplicate-checking-for-slower-clients`.
 
 ## 9. Current mental model for future AI work
@@ -541,6 +566,8 @@ Future AI work should avoid casual redesign of these foundations:
 - immutable consent plus revocation history
 - the distinction between one-off consent and recurring consent
 - the distinction between baseline recurring consent and project recurring consent
+- scope-state derivation by stable owner boundary plus template family
+- governing-consent versus historical-consent semantics for upgrade flows
 - project-local assignee bridging
 - exact-face exclusivity with manual-over-auto precedence
 - hidden versus blocked versus manual-face semantics

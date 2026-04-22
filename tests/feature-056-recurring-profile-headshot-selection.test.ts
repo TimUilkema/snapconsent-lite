@@ -39,7 +39,7 @@ function makeFaceRow(input: {
   };
 }
 
-test("selectRecurringProfileCanonicalFace auto-selects the dominant portrait when a tiny background face exists", () => {
+test("selectRecurringProfileCanonicalFace requires manual selection whenever more than one face is detected", () => {
   const dominant = makeFaceRow({
     id: "face-dominant",
     faceRank: 0,
@@ -59,8 +59,9 @@ test("selectRecurringProfileCanonicalFace auto-selects the dominant portrait whe
     sourceHeight: 1600,
   });
 
-  assert.equal(selection.selectionStatus, "auto_selected");
-  assert.equal(selection.selectionFaceId, "face-dominant");
+  assert.equal(selection.selectionStatus, "needs_face_selection");
+  assert.equal(selection.selectionFaceId, null);
+  assert.equal(selection.selectionReason, "multiple_faces_require_manual_selection");
 });
 
 test("selectRecurringProfileCanonicalFace marks similar multi-face results as needing manual selection", () => {
@@ -85,6 +86,32 @@ test("selectRecurringProfileCanonicalFace marks similar multi-face results as ne
 
   assert.equal(selection.selectionStatus, "needs_face_selection");
   assert.equal(selection.selectionFaceId, null);
+  assert.equal(selection.selectionReason, "multiple_faces_require_manual_selection");
+});
+
+test("selectRecurringProfileCanonicalFace keeps multi-face uploads selectable but flags low-quality matching input", () => {
+  const tinyLeft = makeFaceRow({
+    id: "face-left",
+    faceRank: 0,
+    probability: 0.74,
+    normalizedBox: { xMin: 0.18, yMin: 0.2, xMax: 0.28, yMax: 0.34 },
+  });
+  const tinyRight = makeFaceRow({
+    id: "face-right",
+    faceRank: 1,
+    probability: 0.71,
+    normalizedBox: { xMin: 0.62, yMin: 0.22, xMax: 0.72, yMax: 0.36 },
+  });
+
+  const selection = selectRecurringProfileCanonicalFace({
+    faces: [tinyLeft, tinyRight],
+    sourceWidth: 1200,
+    sourceHeight: 1600,
+  });
+
+  assert.equal(selection.selectionStatus, "needs_face_selection");
+  assert.equal(selection.selectionFaceId, null);
+  assert.equal(selection.selectionReason, "multiple_faces_low_quality");
 });
 
 test("selectRecurringProfileCanonicalFace marks tiny low-confidence single detections as unusable", () => {

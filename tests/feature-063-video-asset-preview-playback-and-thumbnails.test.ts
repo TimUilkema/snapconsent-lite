@@ -433,6 +433,7 @@ test("shared whole-asset strip renders current linked owners for video preview r
             headshotThumbnailUrl: null,
             headshotPreviewUrl: null,
             goToConsentHref: "/projects/project/consents/consent-1",
+            scopeStates: [],
           },
           recurring: null,
         },

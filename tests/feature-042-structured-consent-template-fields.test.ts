@@ -8,6 +8,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { PublicStructuredFieldsSection } from "../src/components/public/public-structured-fields";
 import { ConsentStructuredSnapshot } from "../src/components/projects/consent-structured-snapshot";
 import { TemplateStructuredFieldsEditor } from "../src/components/templates/template-structured-fields-editor";
+import { runProjectConsentScopeRepair } from "../src/lib/consent/project-consent-scope-repair";
+import { loadProjectConsentScopeStatesByConsentIds } from "../src/lib/consent/project-consent-scope-state";
 import { submitConsent } from "../src/lib/consent/submit-consent";
 import { HttpError } from "../src/lib/http/errors";
 import { createInviteWithIdempotency } from "../src/lib/idempotency/invite-idempotency";
@@ -629,6 +631,43 @@ test("structured public submit stores an immutable snapshot with explicit blank 
     duplicateConsentRow.structured_fields_snapshot,
     firstConsentRow.structured_fields_snapshot,
   );
+
+  const { data: projectionRows, error: projectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .select("owner_kind, source_kind, scope_option_key, granted, template_key, template_version")
+    .eq("tenant_id", context.tenantId)
+    .eq("consent_id", firstSubmission.consentId)
+    .order("scope_order_index", { ascending: true });
+  assertNoPostgrestError(projectionError, "select one-off consent scope projections");
+
+  assert.deepEqual(
+    projectionRows?.map((row) => ({
+      owner_kind: row.owner_kind,
+      source_kind: row.source_kind,
+      scope_option_key: row.scope_option_key,
+      granted: row.granted,
+      template_key: row.template_key,
+      template_version: row.template_version,
+    })),
+    [
+      {
+        owner_kind: "one_off_subject",
+        source_kind: "project_consent",
+        scope_option_key: "published_media",
+        granted: true,
+        template_key: published.templateKey,
+        template_version: "v1",
+      },
+      {
+        owner_kind: "one_off_subject",
+        source_kind: "project_consent",
+        scope_option_key: "website",
+        granted: false,
+        template_key: published.templateKey,
+        template_version: "v1",
+      },
+    ],
+  );
 });
 
 test("structured public submit rejects missing or unknown fields and accepts archived-version invites", async () => {
@@ -711,6 +750,200 @@ test("structured public submit rejects missing or unknown fields and accepts arc
   assert.equal(archivedSubmission.duplicate, false);
 });
 
+test("one-off scope state helper falls back to signed snapshot and preserves not_collected for newer family scopes", async () => {
+  const context = await createTenantContext(adminClient);
+  const publishedV1 = await publishStructuredTemplate(context, buildStructuredDefinition(), "Scope Fallback");
+  const inviteToken = await createInviteToken(context, publishedV1.id);
+
+  const signed = await submitConsent({
+    supabase: createAnonClient(),
+    token: inviteToken,
+    fullName: "Fallback Subject",
+    email: `feature042-fallback-${randomUUID()}@example.com`,
+    faceMatchOptIn: false,
+    headshotAssetId: null,
+    structuredFieldValues: {
+      scope: ["published_media"],
+      duration: "one_year",
+    },
+    captureIp: null,
+    captureUserAgent: "feature-042-fallback-test",
+  });
+
+  const v2Draft = await createTenantTemplateVersion({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    idempotencyKey: `feature042-fallback-v2-${randomUUID()}`,
+    templateId: publishedV1.id,
+  });
+  const fallbackDefinition = buildStructuredDefinition();
+  fallbackDefinition.builtInFields.scope.options = [
+    {
+      optionKey: "published_media",
+      label: "Published media",
+      orderIndex: 0,
+    },
+    {
+      optionKey: "website",
+      label: "Website",
+      orderIndex: 1,
+    },
+    {
+      optionKey: "linkedin",
+      label: "LinkedIn",
+      orderIndex: 2,
+    },
+  ];
+  await updateDraftTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: v2Draft.payload.template.id,
+    name: "Scope Fallback",
+    description: "Structured template for scope fallback coverage.",
+    body: "Structured Feature 042 consent body with enough content to satisfy template validation.",
+    structuredFieldsDefinition: fallbackDefinition,
+  });
+  await publishTenantTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: v2Draft.payload.template.id,
+  });
+
+  const { error: deleteProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .delete()
+    .eq("tenant_id", context.tenantId)
+    .eq("consent_id", signed.consentId);
+  assertNoPostgrestError(deleteProjectionError, "delete one-off scope projections to force fallback");
+
+  const statesByConsentId = await loadProjectConsentScopeStatesByConsentIds({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    consentIds: [signed.consentId],
+  });
+
+  assert.deepEqual(
+    statesByConsentId.get(signed.consentId)?.map((row) => ({
+      scopeOptionKey: row.scopeOptionKey,
+      effectiveStatus: row.effectiveStatus,
+      signedValueGranted: row.signedValueGranted,
+      derivedFrom: row.derivedFrom,
+      governingConsentId: row.governingConsentId,
+    })),
+    [
+      {
+        scopeOptionKey: "published_media",
+        effectiveStatus: "granted",
+        signedValueGranted: true,
+        derivedFrom: "snapshot_fallback",
+        governingConsentId: signed.consentId,
+      },
+      {
+        scopeOptionKey: "website",
+        effectiveStatus: "not_granted",
+        signedValueGranted: false,
+        derivedFrom: "snapshot_fallback",
+        governingConsentId: signed.consentId,
+      },
+      {
+        scopeOptionKey: "linkedin",
+        effectiveStatus: "not_collected",
+        signedValueGranted: null,
+        derivedFrom: "snapshot_fallback",
+        governingConsentId: signed.consentId,
+      },
+    ],
+  );
+});
+
+test("one-off consent scope repair backfills missing projections with resumable cursors and idempotent reruns", async () => {
+  const context = await createTenantContext(adminClient);
+  const published = await publishStructuredTemplate(context, buildStructuredDefinition(), "Scope Repair");
+  const firstInviteToken = await createInviteToken(context, published.id);
+  const secondInviteToken = await createInviteToken(context, published.id);
+
+  const firstSigned = await submitConsent({
+    supabase: createAnonClient(),
+    token: firstInviteToken,
+    fullName: "Repair Subject One",
+    email: `feature042-repair-one-${randomUUID()}@example.com`,
+    faceMatchOptIn: false,
+    headshotAssetId: null,
+    structuredFieldValues: {
+      scope: ["published_media"],
+      duration: "one_year",
+    },
+    captureIp: null,
+    captureUserAgent: "feature-042-repair-test",
+  });
+  const secondSigned = await submitConsent({
+    supabase: createAnonClient(),
+    token: secondInviteToken,
+    fullName: "Repair Subject Two",
+    email: `feature042-repair-two-${randomUUID()}@example.com`,
+    faceMatchOptIn: false,
+    headshotAssetId: null,
+    structuredFieldValues: {
+      scope: ["website"],
+      duration: "two_years",
+    },
+    captureIp: null,
+    captureUserAgent: "feature-042-repair-test",
+  });
+
+  const { error: deleteProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .delete()
+    .eq("tenant_id", context.tenantId)
+    .in("consent_id", [firstSigned.consentId, secondSigned.consentId]);
+  assertNoPostgrestError(deleteProjectionError, "delete one-off repair projections");
+
+  const firstRepair = await runProjectConsentScopeRepair({
+    projectId: context.projectId,
+    batchSize: 1,
+    supabase: adminClient,
+  });
+  assert.equal(firstRepair.scannedOneOffConsents, 1);
+  assert.equal(firstRepair.repairedOneOffConsents, 1);
+  assert.equal(firstRepair.insertedOneOffProjectionRows, 2);
+  assert.equal(firstRepair.scannedRecurringConsents, 0);
+  assert.equal(firstRepair.hasMore, true);
+  assert.ok(firstRepair.nextOneOffCursorConsentId);
+
+  const secondRepair = await runProjectConsentScopeRepair({
+    projectId: context.projectId,
+    batchSize: 1,
+    oneOffCursorCreatedAt: firstRepair.nextOneOffCursorCreatedAt,
+    oneOffCursorConsentId: firstRepair.nextOneOffCursorConsentId,
+    supabase: adminClient,
+  });
+  assert.equal(secondRepair.scannedOneOffConsents, 1);
+  assert.equal(secondRepair.repairedOneOffConsents, 1);
+  assert.equal(secondRepair.insertedOneOffProjectionRows, 2);
+  assert.equal(secondRepair.hasMore, false);
+
+  const rerunRepair = await runProjectConsentScopeRepair({
+    projectId: context.projectId,
+    batchSize: 10,
+    supabase: adminClient,
+  });
+  assert.equal(rerunRepair.scannedOneOffConsents, 0);
+  assert.equal(rerunRepair.repairedOneOffConsents, 0);
+  assert.equal(rerunRepair.insertedOneOffProjectionRows, 0);
+
+  const { count: restoredProjectionCount, error: restoredProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", context.tenantId)
+    .in("consent_id", [firstSigned.consentId, secondSigned.consentId]);
+  assertNoPostgrestError(restoredProjectionError, "count restored one-off repair projections");
+  assert.equal(restoredProjectionCount, 4);
+});
+
 test("concurrent version creation reuses one draft and concurrent publish leaves one published version", async () => {
   const context = await createTenantContext(adminClient);
   const published = await publishStructuredTemplate(context, buildStructuredDefinition(), "Concurrent Template");
@@ -788,4 +1021,92 @@ test("concurrent version creation reuses one draft and concurrent publish leaves
 
   assert.equal(familyRows?.filter((row) => row.status === "published").length, 1);
   assert.equal(familyRows?.filter((row) => row.status === "draft").length, 0);
+});
+
+test("reintroduced scope keys cannot return with a different normalized label after removal", async () => {
+  const context = await createTenantContext(adminClient);
+  const publishedV1 = await publishStructuredTemplate(context, buildStructuredDefinition(), "Scope Identity");
+
+  const v2Draft = await createTenantTemplateVersion({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    idempotencyKey: `feature042-scope-family-v2-${randomUUID()}`,
+    templateId: publishedV1.id,
+  });
+
+  const removedKeyDefinition = buildStructuredDefinition();
+  removedKeyDefinition.builtInFields.scope.options = [
+    {
+      optionKey: "website",
+      label: "Website",
+      orderIndex: 0,
+    },
+  ];
+
+  await updateDraftTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: v2Draft.payload.template.id,
+    name: "Scope Identity",
+    description: "Removed key version",
+    body: "Feature 042 removed key body with enough content to satisfy validation.",
+    structuredFieldsDefinition: removedKeyDefinition,
+  });
+
+  const publishedV2 = await publishTenantTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: v2Draft.payload.template.id,
+  });
+
+  const v3Draft = await createTenantTemplateVersion({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    idempotencyKey: `feature042-scope-family-v3-${randomUUID()}`,
+    templateId: publishedV2.id,
+  });
+
+  const driftedDefinition = buildStructuredDefinition();
+  driftedDefinition.builtInFields.scope.options = [
+    {
+      optionKey: "published_media",
+      label: "Print advertising",
+      orderIndex: 0,
+    },
+    {
+      optionKey: "website",
+      label: "Website",
+      orderIndex: 1,
+    },
+  ];
+
+  await updateDraftTemplate({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    templateId: v3Draft.payload.template.id,
+    name: "Scope Identity",
+    description: "Reintroduced key version",
+    body: "Feature 042 reintroduced key body with enough content to satisfy validation.",
+    structuredFieldsDefinition: driftedDefinition,
+  });
+
+  await assert.rejects(
+    publishTenantTemplate({
+      supabase: context.ownerClient,
+      tenantId: context.tenantId,
+      userId: context.ownerUserId,
+      templateId: v3Draft.payload.template.id,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 400);
+      assert.equal(error.code, "structured_scope_key_semantic_drift");
+      return true;
+    },
+  );
 });

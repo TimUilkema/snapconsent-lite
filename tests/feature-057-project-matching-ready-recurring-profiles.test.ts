@@ -8,7 +8,7 @@ import { createBaselineConsentRequest } from "../src/lib/profiles/profile-consen
 import {
   deriveRecurringProfileMatchingReadiness,
 } from "../src/lib/profiles/profile-headshot-service";
-import { addProjectProfileParticipant } from "../src/lib/projects/project-participants-service";
+import { addProjectProfileParticipant, createProjectProfileConsentRequest } from "../src/lib/projects/project-participants-service";
 import {
   getPublicRecurringRevokeToken,
   revokeRecurringProfileConsentByToken,
@@ -19,7 +19,10 @@ import { createStarterStructuredFieldsDefinition } from "../src/lib/templates/st
 import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
 import { enqueueCompareRecurringProfileMaterializedPairJob } from "../src/lib/matching/auto-match-jobs";
 import { runAutoMatchWorker } from "../src/lib/matching/auto-match-worker";
-import { resolveReadyProjectRecurringSource } from "../src/lib/matching/project-recurring-sources";
+import {
+  resolveAutoEligibleProjectRecurringSource,
+  resolveReadyProjectRecurringSource,
+} from "../src/lib/matching/project-recurring-sources";
 import {
   adminClient,
   assertNoPostgrestError,
@@ -535,6 +538,100 @@ test("resolveReadyProjectRecurringSource returns the current ready source and ad
   assert.equal(participants?.length ?? 0, 1);
 });
 
+test("recurring project matching gatekeepers require an opted-in governing project consent", async () => {
+  const context = await createTenantContext();
+  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const anonClient = createAnonClient();
+
+  const baselineRequest = await createBaselineConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature057-gating-baseline-${randomUUID()}`,
+  });
+  const baselineToken = baselineRequest.payload.request.consentPath.split("/").pop() ?? "";
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: baselineToken,
+    fullName: "Jordan Miles",
+    email: `feature057-gating-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature057-gating-baseline",
+  });
+
+  await createReadyRecurringHeadshot({
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    profileId,
+    supabase: context.ownerClient,
+  });
+
+  const participant = await addProjectProfileParticipant({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    recurringProfileId: profileId,
+  });
+  assert.equal(participant.status, 201);
+
+  const rawReadySource = await resolveReadyProjectRecurringSource(context.ownerClient, {
+    tenantId: context.tenantId,
+    projectId,
+    projectProfileParticipantId: participant.payload.participant.id,
+  });
+  assert.ok(rawReadySource);
+
+  const unsignedAutoEligible = await resolveAutoEligibleProjectRecurringSource(context.ownerClient, {
+    tenantId: context.tenantId,
+    projectId,
+    projectProfileParticipantId: participant.payload.participant.id,
+  });
+  assert.equal(unsignedAutoEligible, null);
+
+  const projectRequest = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId: participant.payload.participant.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature057-gating-project-${randomUUID()}`,
+  });
+  assert.equal(projectRequest.status, 201);
+
+  const projectToken = projectRequest.payload.request.consentPath.split("/").pop() ?? "";
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: projectToken,
+    fullName: "Jordan Miles",
+    email: `feature057-gating-project-${randomUUID()}@example.com`,
+    faceMatchOptIn: false,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature057-gating-project",
+  });
+
+  const optedOutAutoEligible = await resolveAutoEligibleProjectRecurringSource(context.ownerClient, {
+    tenantId: context.tenantId,
+    projectId,
+    projectProfileParticipantId: participant.payload.participant.id,
+  });
+  assert.equal(optedOutAutoEligible, null);
+});
+
 test("baseline recurring consent submit and revoke requeue replay for existing project participants", async () => {
   const context = await createTenantContext();
   const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
@@ -685,8 +782,34 @@ test("participant-scoped recurring replay creates recurring-profile fanout conti
     recurringProfileId: profileId,
   });
 
+  const projectRequest = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId: participant.payload.participant.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature057-replay-project-${randomUUID()}`,
+  });
+  assert.equal(projectRequest.status, 201);
+
+  const projectToken = projectRequest.payload.request.consentPath.split("/").pop() ?? "";
+  await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: projectToken,
+    fullName: "Jordan Miles",
+    email: `feature057-replay-project-${randomUUID()}@example.com`,
+    faceMatchOptIn: true,
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature057-replay-project",
+  });
+
   const reconcileJobs = await listReconcileJobs(context.tenantId, projectId);
-  assert.equal(reconcileJobs.length, 1);
+  assert.ok(reconcileJobs.length >= 1);
 
   await runWorkerUntil({
     workerIdPrefix: "feature057-replay-worker",

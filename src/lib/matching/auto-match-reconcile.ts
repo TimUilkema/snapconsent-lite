@@ -213,6 +213,7 @@ export async function runAutoMatchReconcile(
     .select("id, tenant_id, project_id, signed_at")
     .eq("face_match_opt_in", true)
     .is("revoked_at", null)
+    .is("superseded_at", null)
     .gte("signed_at", sinceIso)
     .order("signed_at", { ascending: false })
     .limit(batchSize);
@@ -295,14 +296,15 @@ export async function runAutoMatchReconcile(
 
     const eligibleConsents = await runChunkedRead(linkedConsentIds, async (consentIdChunk) => {
       // safe-in-filter: reconcile consent validation is batch-windowed and chunked by shared helper.
-      const { data, error } = await supabase
-        .from("consents")
-        .select("id")
-        .eq("tenant_id", headshot.tenant_id)
-        .eq("project_id", headshot.project_id)
-        .eq("face_match_opt_in", true)
-        .is("revoked_at", null)
-        .in("id", consentIdChunk);
+        const { data, error } = await supabase
+          .from("consents")
+          .select("id")
+          .eq("tenant_id", headshot.tenant_id)
+          .eq("project_id", headshot.project_id)
+          .eq("face_match_opt_in", true)
+          .is("revoked_at", null)
+          .is("superseded_at", null)
+          .in("id", consentIdChunk);
 
       if (error) {
         throw new HttpError(

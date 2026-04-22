@@ -4,6 +4,8 @@ import test from "node:test";
 
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
+import { runProjectConsentScopeRepair } from "../src/lib/consent/project-consent-scope-repair";
+import { loadProjectConsentScopeStatesByParticipantIds } from "../src/lib/consent/project-consent-scope-state";
 import { createBaselineConsentRequest } from "../src/lib/profiles/profile-consent-service";
 import { createProjectProfileConsentRequest } from "../src/lib/projects/project-participants-service";
 import {
@@ -14,6 +16,7 @@ import {
   getPublicRecurringRevokeToken,
   revokeRecurringProfileConsentByToken,
 } from "../src/lib/recurring-consent/revoke-recurring-profile-consent";
+import { HttpError } from "../src/lib/http/errors";
 import { createStarterFormLayoutDefinition } from "../src/lib/templates/form-layout";
 import { createStarterStructuredFieldsDefinition } from "../src/lib/templates/structured-fields";
 import {
@@ -470,6 +473,40 @@ test("project recurring public consent flow signs and revokes project context wi
   assert.equal(projectConsent.consent_kind, "project");
   assert.equal(projectConsent.revoked_at, null);
 
+  const { data: baselineProjectionRows, error: baselineProjectionError } = await context.ownerClient
+    .from("project_consent_scope_signed_projections")
+    .select("id")
+    .eq("tenant_id", context.tenantId)
+    .eq("recurring_profile_consent_id", baselineSigned.consentId);
+  assertNoPostgrestError(baselineProjectionError, "select baseline recurring scope projections");
+  assert.equal(baselineProjectionRows?.length ?? 0, 0);
+
+  const { data: projectProjectionRows, error: projectProjectionError } = await context.ownerClient
+    .from("project_consent_scope_signed_projections")
+    .select("owner_kind, source_kind, project_profile_participant_id, scope_option_key, granted")
+    .eq("tenant_id", context.tenantId)
+    .eq("recurring_profile_consent_id", projectSigned.consentId)
+    .order("scope_order_index", { ascending: true });
+  assertNoPostgrestError(projectProjectionError, "select project recurring scope projections");
+  assert.deepEqual(
+    projectProjectionRows?.map((row) => ({
+      owner_kind: row.owner_kind,
+      source_kind: row.source_kind,
+      project_profile_participant_id: row.project_profile_participant_id,
+      scope_option_key: row.scope_option_key,
+      granted: row.granted,
+    })),
+    [
+      {
+        owner_kind: "project_participant",
+        source_kind: "project_recurring_consent",
+        project_profile_participant_id: participantRow.id,
+        scope_option_key: "photos",
+        granted: true,
+      },
+    ],
+  );
+
   const revokeContext = await getPublicRecurringRevokeToken(anonClient, projectSigned.revokeToken ?? "");
   assert.ok(revokeContext);
   assert.equal(revokeContext.status, "available");
@@ -595,4 +632,303 @@ test("project recurring consent sign and revoke enqueue reconcile_project replay
   assert.equal(revokeReplayJobs[0]?.payload?.replayKind, "project_recurring_consent");
   assert.equal(revokeReplayJobs[0]?.payload?.reason, "project_recurring_consent_revoked");
   assert.equal(revokeReplayJobs[0]?.status, "queued");
+});
+
+test("project participant scope state helper falls back from signed snapshot when projections are missing", async () => {
+  const context = await createTenantContext(adminClient);
+  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const anonClient = createAnonClient();
+
+  const { data: participantRow, error: participantError } = await context.ownerClient
+    .from("project_profile_participants")
+    .insert({
+      tenant_id: context.tenantId,
+      project_id: projectId,
+      recurring_profile_id: profileId,
+      created_by: context.ownerUserId,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(participantError, "insert project participant for scope helper");
+
+  const projectRequest = await createProjectProfileConsentRequest({
+    supabase: context.photographerClient,
+    tenantId: context.tenantId,
+    userId: context.photographerUserId,
+    projectId,
+    participantId: participantRow.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature055-scope-helper-${randomUUID()}`,
+  });
+  const projectToken = projectRequest.payload.request.consentPath.split("/").pop() ?? "";
+
+  const signed = await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: projectToken,
+    fullName: "Jordan Miles",
+    email: "jordan+scope-helper@example.com",
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature055-scope-helper",
+  });
+
+  const { error: deleteProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .delete()
+    .eq("tenant_id", context.tenantId)
+    .eq("recurring_profile_consent_id", signed.consentId);
+  assertNoPostgrestError(deleteProjectionError, "delete recurring scope projections to force fallback");
+
+  const statesByParticipantId = await loadProjectConsentScopeStatesByParticipantIds({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    projectId,
+    participantIds: [participantRow.id],
+  });
+
+  assert.deepEqual(
+    statesByParticipantId.get(participantRow.id)?.map((row) => ({
+      scopeOptionKey: row.scopeOptionKey,
+      effectiveStatus: row.effectiveStatus,
+      signedValueGranted: row.signedValueGranted,
+      derivedFrom: row.derivedFrom,
+      governingRecurringProfileConsentId: row.governingRecurringProfileConsentId,
+    })),
+    [
+      {
+        scopeOptionKey: "photos",
+        effectiveStatus: "granted",
+        signedValueGranted: true,
+        derivedFrom: "snapshot_fallback",
+        governingRecurringProfileConsentId: signed.consentId,
+      },
+    ],
+  );
+});
+
+test("project recurring consent scope repair backfills missing recurring projections and reruns idempotently", async () => {
+  const context = await createTenantContext(adminClient);
+  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+  const anonClient = createAnonClient();
+
+  const { data: participantRow, error: participantError } = await context.ownerClient
+    .from("project_profile_participants")
+    .insert({
+      tenant_id: context.tenantId,
+      project_id: projectId,
+      recurring_profile_id: profileId,
+      created_by: context.ownerUserId,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(participantError, "insert project participant for recurring repair");
+
+  const projectRequest = await createProjectProfileConsentRequest({
+    supabase: context.photographerClient,
+    tenantId: context.tenantId,
+    userId: context.photographerUserId,
+    projectId,
+    participantId: participantRow.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature055-recurring-repair-${randomUUID()}`,
+  });
+  const projectToken = projectRequest.payload.request.consentPath.split("/").pop() ?? "";
+
+  const signed = await submitRecurringProfileConsent({
+    supabase: anonClient,
+    token: projectToken,
+    fullName: "Jordan Miles",
+    email: "jordan+repair@example.com",
+    structuredFieldValues: {
+      scope: ["photos"],
+      duration: "one_year",
+    },
+    captureIp: "127.0.0.1",
+    captureUserAgent: "feature055-recurring-repair",
+  });
+
+  const { error: deleteProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .delete()
+    .eq("tenant_id", context.tenantId)
+    .eq("recurring_profile_consent_id", signed.consentId);
+  assertNoPostgrestError(deleteProjectionError, "delete recurring repair projections");
+
+  const repaired = await runProjectConsentScopeRepair({
+    projectId,
+    batchSize: 10,
+    supabase: adminClient,
+  });
+  assert.equal(repaired.scannedRecurringConsents, 1);
+  assert.equal(repaired.repairedRecurringConsents, 1);
+  assert.equal(repaired.insertedRecurringProjectionRows, 1);
+
+  const rerun = await runProjectConsentScopeRepair({
+    projectId,
+    batchSize: 10,
+    supabase: adminClient,
+  });
+  assert.equal(rerun.scannedRecurringConsents, 0);
+  assert.equal(rerun.repairedRecurringConsents, 0);
+  assert.equal(rerun.insertedRecurringProjectionRows, 0);
+
+  const { count: restoredProjectionCount, error: restoredProjectionError } = await adminClient
+    .from("project_consent_scope_signed_projections")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", context.tenantId)
+    .eq("recurring_profile_consent_id", signed.consentId);
+  assertNoPostgrestError(restoredProjectionError, "count restored recurring repair projections");
+  assert.equal(restoredProjectionCount, 1);
+});
+
+test("superseded recurring consents no longer count as active for request creation or uniqueness", async () => {
+  const context = await createTenantContext(adminClient);
+  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
+  const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
+
+  const { data: participantRow, error: participantError } = await context.ownerClient
+    .from("project_profile_participants")
+    .insert({
+      tenant_id: context.tenantId,
+      project_id: projectId,
+      recurring_profile_id: profileId,
+      created_by: context.ownerUserId,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(participantError, "insert project participant for supersedence test");
+
+  const firstRequestId = randomUUID();
+  const { error: firstRequestError } = await adminClient.from("recurring_profile_consent_requests").insert({
+    id: firstRequestId,
+    tenant_id: context.tenantId,
+    profile_id: profileId,
+    project_id: projectId,
+    consent_kind: "project",
+    consent_template_id: templateId,
+    profile_name_snapshot: "Jordan Miles",
+    profile_email_snapshot: `superseded-project-${randomUUID()}@example.com`,
+    token_hash: `superseded-project-${randomUUID()}`,
+    status: "signed",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    created_by: context.ownerUserId,
+  });
+  assertNoPostgrestError(firstRequestError, "insert first signed project request");
+
+  const { data: firstConsent, error: firstConsentError } = await adminClient
+    .from("recurring_profile_consents")
+    .insert({
+      tenant_id: context.tenantId,
+      profile_id: profileId,
+      request_id: firstRequestId,
+      project_id: projectId,
+      consent_kind: "project",
+      consent_template_id: templateId,
+      profile_name_snapshot: "Jordan Miles",
+      profile_email_snapshot: `superseded-project-consent-${randomUUID()}@example.com`,
+      consent_text: "Project-specific consent text",
+      consent_version: "v1",
+      structured_fields_snapshot: {
+        schemaVersion: 1,
+        templateSnapshot: {
+          templateId,
+          templateKey: "feature055-template",
+          name: "Project Participant Consent",
+          version: "v1",
+          versionNumber: 1,
+        },
+        definition: createStarterStructuredFieldsDefinition(),
+        values: {},
+      },
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(firstConsentError, "insert first active project consent");
+
+  const createdWhileActive = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId: participantRow.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature055-active-block-${randomUUID()}`,
+  }).catch((error) => error);
+
+  assert.ok(createdWhileActive instanceof HttpError);
+  assert.equal(createdWhileActive.status, 409);
+  assert.equal(createdWhileActive.code, "project_consent_already_signed");
+
+  const nowIso = new Date().toISOString();
+  const { error: supersedeError } = await adminClient
+    .from("recurring_profile_consents")
+    .update({
+      superseded_at: nowIso,
+    })
+    .eq("id", firstConsent.id)
+    .eq("tenant_id", context.tenantId);
+  assertNoPostgrestError(supersedeError, "supersede first project consent");
+
+  const createdAfterSupersede = await createProjectProfileConsentRequest({
+    supabase: context.ownerClient,
+    tenantId: context.tenantId,
+    userId: context.ownerUserId,
+    projectId,
+    participantId: participantRow.id,
+    consentTemplateId: templateId,
+    idempotencyKey: `feature055-superseded-allow-${randomUUID()}`,
+  });
+
+  assert.equal(createdAfterSupersede.status, 201);
+
+  const secondRequestId = randomUUID();
+  const { error: secondRequestError } = await adminClient.from("recurring_profile_consent_requests").insert({
+    id: secondRequestId,
+    tenant_id: context.tenantId,
+    profile_id: profileId,
+    project_id: projectId,
+    consent_kind: "project",
+    consent_template_id: templateId,
+    profile_name_snapshot: "Jordan Miles",
+    profile_email_snapshot: `superseded-project-second-${randomUUID()}@example.com`,
+    token_hash: `superseded-project-second-${randomUUID()}`,
+    status: "signed",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    created_by: context.ownerUserId,
+  });
+  assertNoPostgrestError(secondRequestError, "insert second signed project request");
+
+  const { error: secondConsentError } = await adminClient.from("recurring_profile_consents").insert({
+    tenant_id: context.tenantId,
+    profile_id: profileId,
+    request_id: secondRequestId,
+    project_id: projectId,
+    consent_kind: "project",
+    consent_template_id: templateId,
+    profile_name_snapshot: "Jordan Miles",
+    profile_email_snapshot: `superseded-project-consent-second-${randomUUID()}@example.com`,
+    consent_text: "Project-specific consent text",
+    consent_version: "v1",
+    structured_fields_snapshot: {
+      schemaVersion: 1,
+      templateSnapshot: {
+        templateId,
+        templateKey: "feature055-template",
+        name: "Project Participant Consent",
+        version: "v1",
+        versionNumber: 1,
+      },
+      definition: createStarterStructuredFieldsDefinition(),
+      values: {},
+    },
+  });
+  assertNoPostgrestError(secondConsentError, "insert second project consent after supersede");
 });

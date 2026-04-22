@@ -1,15 +1,16 @@
-import { markReceiptSent, submitConsent } from "@/lib/consent/submit-consent";
+import { submitConsent } from "@/lib/consent/submit-consent";
 import { parseStructuredFieldValues } from "@/lib/consent/parse-structured-field-values";
 import { validateConsentBaseFields } from "@/lib/consent/validate-consent-base-fields";
-import { sendConsentReceiptEmail } from "@/lib/email/send-receipt";
+import { deliverConsentReceiptAfterSubmit } from "@/lib/email/outbound/consent-receipt-delivery";
 import { HttpError } from "@/lib/http/errors";
+import { resolvePublicInviteContext, resolvePublicInviteUpgradeContext } from "@/lib/invites/public-invite-context";
 import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
 import { redirectRelative } from "@/lib/http/redirect-relative";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { buildExternalUrl } from "@/lib/url/external-origin";
-import { buildInvitePath, buildRevokePath } from "@/lib/url/paths";
+import { buildInvitePath } from "@/lib/url/paths";
 
 type RouteContext = {
   params: Promise<{
@@ -51,6 +52,17 @@ export async function POST(request: Request, context: RouteContext) {
   const headshotAssetIdValue = String(formData.get("headshot_asset_id") ?? "").trim();
   const headshotAssetId = headshotAssetIdValue.length > 0 ? headshotAssetIdValue : null;
   let structuredFieldValues: Record<string, unknown> | null = null;
+  let allowUpgradeHeadshotReuse = false;
+
+  try {
+    const adminSupabase = createAdminClient();
+    const inviteContext = await resolvePublicInviteContext(adminSupabase, token);
+    allowUpgradeHeadshotReuse = Boolean(
+      await resolvePublicInviteUpgradeContext(adminSupabase, inviteContext.inviteId),
+    );
+  } catch {
+    allowUpgradeHeadshotReuse = false;
+  }
 
   const baseFieldValidation = validateConsentBaseFields({
     subjectName: fullName,
@@ -58,6 +70,7 @@ export async function POST(request: Request, context: RouteContext) {
     consentAcknowledged,
     faceMatchOptIn,
     hasHeadshot: Boolean(headshotAssetId),
+    requireHeadshotWhenOptedIn: !allowUpgradeHeadshotReuse,
   });
 
   if (baseFieldValidation.fieldErrors.face_match_section) {
@@ -122,31 +135,12 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
-    let receiptQueued = false;
-
-    if (!consent.duplicate && consent.revokeToken) {
-      try {
-        const revokeUrl = buildExternalUrl(buildRevokePath(consent.revokeToken));
-        await sendConsentReceiptEmail({
-          subjectName: consent.subjectName,
-          subjectEmail: consent.subjectEmail,
-          projectName: consent.projectName,
-          signedAtIso: consent.signedAt,
-          consentText: consent.consentText,
-          consentVersion: consent.consentVersion,
-          revokeUrl,
-        });
-
-        await markReceiptSent(supabase, consent.consentId, consent.revokeToken);
-      } catch {
-        receiptQueued = true;
-      }
-    }
+    const receiptDelivery = await deliverConsentReceiptAfterSubmit(consent);
 
     return redirectWithStatus(request, token, {
       success: "1",
       duplicate: consent.duplicate ? "1" : "0",
-      receipt: receiptQueued ? "queued" : "sent",
+      receipt: receiptDelivery.receiptStatus,
     });
   } catch (error) {
     if (error instanceof HttpError) {

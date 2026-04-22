@@ -55,6 +55,10 @@ export async function submitConsent(input: ConsentSubmitInput): Promise<ConsentS
       throw new HttpError(410, "invite_unavailable", "Invite is no longer available.");
     }
 
+    if (error.code === "23505" && error.message === "subject_email_in_use") {
+      throw new HttpError(400, "subject_email_in_use", "This email is already used by another project subject.");
+    }
+
     if (error.code === "23505") {
       throw new HttpError(409, "invite_duplicate", "Invite already submitted.");
     }

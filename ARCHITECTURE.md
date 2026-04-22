@@ -60,6 +60,13 @@ This is intentionally minimal and may evolve.
 - Server uses Supabase server client to query/write.
 - DB enforces rules using RLS and constraints.
 
+### Outbound email pattern
+- Outbound email is a canonical server-side pattern, not a route-local side effect.
+- Feature code should enqueue typed jobs through `src/lib/email/outbound/` and keep per-email content in the centralized registry/renderer structure.
+- Durable email state lives in Postgres and follows the repo's retry-safe async pattern: enqueue, optional immediate dispatch, and token-protected internal worker retry.
+- Email links sent outside the app must reuse the existing external-origin helpers backed by `APP_ORIGIN`.
+- Feature code should not import transport or provider details directly unless the email foundation itself is being changed.
+
 ### What to avoid
 - Direct writes from the browser to tenant-scoped tables unless RLS and policies are proven correct.
 - Relying on client-side validation for security decisions.

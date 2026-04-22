@@ -31,6 +31,7 @@ type RecurringProfileConsentRow = {
   consent_kind: "baseline" | "project";
   face_match_opt_in: boolean;
   revoked_at: string | null;
+  superseded_at: string | null;
   signed_at: string;
   created_at: string;
 };
@@ -100,7 +101,7 @@ export type ProjectRecurringConsentState =
   | {
       state: "signed";
       activeConsent: RecurringProfileConsentRow;
-      pendingRequest: null;
+      pendingRequest: RecurringProfileConsentRequestRow | null;
       latestRevokedConsent: null;
     }
   | {
@@ -206,17 +207,18 @@ export async function loadProjectRecurringConsentStateByParticipantIds(input: {
     input.supabase
       .from("recurring_profile_consents")
       .select(
-        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, signed_at, created_at",
+        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
       )
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
       .eq("consent_kind", "project")
       .is("revoked_at", null)
+      .is("superseded_at", null)
       .in("profile_id", profileIds),
     input.supabase
       .from("recurring_profile_consents")
       .select(
-        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, signed_at, created_at",
+        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
       )
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
@@ -257,17 +259,17 @@ export async function loadProjectRecurringConsentStateByParticipantIds(input: {
 
   for (const participant of participants) {
     const activeConsent = activeByProfileId.get(participant.recurring_profile_id) ?? null;
+    const pendingRequest = pendingByProfileId.get(participant.recurring_profile_id) ?? null;
     if (activeConsent) {
       stateByParticipantId.set(participant.id, {
         state: "signed",
         activeConsent,
-        pendingRequest: null,
+        pendingRequest,
         latestRevokedConsent: null,
       });
       continue;
     }
 
-    const pendingRequest = pendingByProfileId.get(participant.recurring_profile_id) ?? null;
     if (pendingRequest) {
       stateByParticipantId.set(participant.id, {
         state: "pending",

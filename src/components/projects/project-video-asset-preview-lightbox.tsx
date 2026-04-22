@@ -14,6 +14,14 @@ type ProjectVideoAssetPreviewLightboxProps = Omit<ProjectAssetPreviewLightboxPro
   asset: Extract<ProjectAssetPreviewLightboxProps["asset"], { assetType: "video" }>;
 };
 
+type PreviewScopeState = {
+  scopeOptionKey: string;
+  scopeLabel: string;
+  effectiveStatus: "granted" | "not_granted" | "revoked" | "not_collected";
+  governingTemplateVersion: string;
+  governingSignedAt: string | null;
+};
+
 type WholeAssetLinkPreview = {
   projectFaceAssigneeId: string;
   identityKind: "project_consent" | "project_recurring_consent";
@@ -35,6 +43,7 @@ type WholeAssetLinkPreview = {
     headshotThumbnailUrl: string | null;
     headshotPreviewUrl: string | null;
     goToConsentHref: string;
+    scopeStates: PreviewScopeState[];
   };
   recurring: null | {
     projectProfileParticipantId: string;
@@ -46,6 +55,7 @@ type WholeAssetLinkPreview = {
     faceMatchOptIn: boolean | null;
     headshotThumbnailUrl: string | null;
     headshotPreviewUrl: string | null;
+    scopeStates: PreviewScopeState[];
   };
 };
 
@@ -574,6 +584,17 @@ export function ProjectVideoAssetPreviewLightbox({
               unknownValueLabel={t("previewUnknownValue")}
               activeLabel={t("previewStatusActive")}
               revokedLabel={t("previewStatusRevoked")}
+              scopeStatusLabel={t("previewScopeStatusLabel")}
+              scopeStatusGrantedLabel={t("previewScopeStatusGranted")}
+              scopeStatusNotGrantedLabel={t("previewScopeStatusNotGranted")}
+              scopeStatusRevokedLabel={t("previewScopeStatusRevoked")}
+              scopeStatusNotCollectedLabel={t("previewScopeStatusNotCollected")}
+              scopeProvenanceWithDateLabel={(version, date) =>
+                t("previewScopeProvenanceWithDate", { version, date })
+              }
+              scopeProvenanceWithoutDateLabel={(version) =>
+                t("previewScopeProvenanceWithoutDate", { version })
+              }
               consentIdentityLabel={t("previewIdentityProjectConsent")}
               recurringIdentityLabel={t("previewIdentityRecurringProfile")}
               wholeAssetLabel={t("previewWholeAssetBadge")}
