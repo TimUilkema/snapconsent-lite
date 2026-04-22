@@ -73,6 +73,7 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
   const upgradeContext = inviteContext
     ? await resolvePublicInviteUpgradeContext(adminSupabase, inviteContext.inviteId)
     : null;
+  const upgradeMode = Boolean(upgradeContext);
 
   return (
     <main className="page-frame flex min-h-screen flex-col py-8 sm:py-10">
@@ -81,8 +82,12 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
           <LanguageSwitch />
         </div>
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t("title")}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+            {upgradeMode ? t("upgradeTitle") : t("title")}
+          </h1>
+          {upgradeMode ? <p className="text-sm text-zinc-700">{t("upgradeSubtitle")}</p> : null}
           {invite?.template_name ? <p className="text-sm text-zinc-700">{invite.template_name}</p> : null}
+          {upgradeMode ? <p className="text-sm text-zinc-600">{t("upgradeIdentityNote")}</p> : null}
           {!invite ? <p className="text-sm text-zinc-700">{t("lookupLabel")}</p> : null}
         </div>
 
@@ -117,7 +122,8 @@ export default async function PublicInvitePage({ params, searchParams }: InviteP
               invite.structured_fields_definition,
             )}
             initialValues={upgradeContext?.initialValues}
-            upgradeMode={Boolean(upgradeContext)}
+            upgradeMode={upgradeMode}
+            reusableHeadshotAvailable={upgradeContext?.reusableHeadshotAvailable ?? false}
           />
         ) : (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">

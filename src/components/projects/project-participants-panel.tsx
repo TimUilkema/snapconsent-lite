@@ -191,7 +191,8 @@ function ProjectProfileParticipantActions({
   router: ProjectParticipantsRouter;
 }) {
   const locale = useLocale();
-  const t = useTranslations("projects.participants.request");
+  const tRequest = useTranslations("projects.participants.request");
+  const tUpgrade = useTranslations("projects.participants.upgradeRequest");
   const tErrors = useTranslations("errors");
   const [selectedTemplateId, setSelectedTemplateId] = useState(defaultTemplateId ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -210,6 +211,8 @@ function ProjectProfileParticipantActions({
   }, [defaultTemplateId, templates]);
 
   const pendingRequest = participant.projectConsent.pendingRequest;
+  const isUpgradeRequest = Boolean(participant.projectConsent.activeConsent);
+  const t = isUpgradeRequest ? tUpgrade : tRequest;
 
   async function handleCopy() {
     if (!pendingRequest) {
@@ -311,6 +314,7 @@ function ProjectProfileParticipantActions({
 
   return (
     <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      {isUpgradeRequest ? <p className="text-sm text-zinc-700">{t("helper")}</p> : null}
       <label className="block text-sm text-zinc-800">
         <span className="mb-1 block font-medium">{t("templateLabel")}</span>
         <select

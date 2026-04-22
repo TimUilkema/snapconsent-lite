@@ -18,6 +18,7 @@ type PublicConsentFormProps = {
   formLayoutDefinition: ConsentFormLayoutDefinition;
   initialValues?: PublicConsentInitialValues | null;
   upgradeMode?: boolean;
+  reusableHeadshotAvailable?: boolean;
 };
 
 type CreateHeadshotResponse =
@@ -66,12 +67,22 @@ function uploadWithProgress(file: File, signedUrl: string, onProgress: (loaded: 
   });
 }
 
+export function isHeadshotUploadRequiredForPublicConsentSubmit(input: {
+  faceMatchOptIn: boolean;
+  headshotAssetId: string | null;
+  reusableHeadshotAvailable: boolean;
+}) {
+  return input.faceMatchOptIn && !input.headshotAssetId && !input.reusableHeadshotAvailable;
+}
+
 export function PublicConsentForm({
   token,
   consentText,
   structuredFieldsDefinition,
   formLayoutDefinition,
   initialValues,
+  upgradeMode = false,
+  reusableHeadshotAvailable = false,
 }: PublicConsentFormProps) {
   const t = useTranslations("publicInvite.form");
   const tErrors = useTranslations("errors");
@@ -91,6 +102,8 @@ export function PublicConsentForm({
   const [progressPercent, setProgressPercent] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const headshotReuseAvailable = upgradeMode && reusableHeadshotAvailable;
+  const uploadButtonLabel = headshotReuseAvailable ? t("replaceHeadshot") : t("uploadHeadshot");
 
   function handleSelectedFile(nextFile: File | null) {
     setShowSourcePicker(false);
@@ -204,7 +217,13 @@ export function PublicConsentForm({
           return;
         }
 
-        if (faceMatchOptIn && !headshotAssetId) {
+        if (
+          isHeadshotUploadRequiredForPublicConsentSubmit({
+            faceMatchOptIn,
+            headshotAssetId,
+            reusableHeadshotAvailable: headshotReuseAvailable,
+          })
+        ) {
           event.preventDefault();
           setError(t("errors.headshotRequiredBeforeSubmit"));
         }
@@ -224,8 +243,12 @@ export function PublicConsentForm({
           emptySelectionOption: t("emptySelectionOption"),
           emptyCheckboxOptionLabel: t("emptyCheckboxOptionLabel"),
           faceMatchOptIn: t("faceMatchOptIn"),
-          headshotRequiredTitle: t("headshotRequiredTitle"),
-          headshotRequiredBody: t("headshotRequiredBody"),
+          headshotRequiredTitle: headshotReuseAvailable
+            ? t("upgradeHeadshotReuseTitle")
+            : t("headshotRequiredTitle"),
+          headshotRequiredBody: headshotReuseAvailable
+            ? t("upgradeHeadshotReuseBody")
+            : t("headshotRequiredBody"),
           consentTextHeading: t("consentTextTitle"),
           consentTextUnavailable: t("consentTextUnavailable"),
           consentAcknowledgementLabel: t("consentAcknowledgementLabel"),
@@ -275,6 +298,9 @@ export function PublicConsentForm({
         }}
         faceMatchDetails={
           <>
+            {headshotReuseAvailable ? (
+              <p className="text-xs text-zinc-700">{t("upgradeHeadshotReuseOptionalReplace")}</p>
+            ) : null}
             <input
               ref={cameraInputRef}
               type="file"
@@ -298,7 +324,7 @@ export function PublicConsentForm({
               onClick={openHeadshotPicker}
               className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
             >
-              {isUploading ? t("uploadingHeadshot") : t("uploadHeadshot")}
+              {isUploading ? t("uploadingHeadshot") : uploadButtonLabel}
             </button>
             {showSourcePicker ? (
               <div className="flex flex-wrap gap-2">

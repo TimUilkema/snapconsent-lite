@@ -18,6 +18,7 @@ import { signThumbnailUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { formatDateTime } from "@/lib/i18n/format";
 import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
 import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
+import { filterCurrentOneOffInviteRows } from "@/lib/projects/current-one-off-consent";
 import { getProjectParticipantsPanelData } from "@/lib/projects/project-participants-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -54,6 +55,7 @@ type InviteRow = {
   consents?: Array<{
     id: string;
     signed_at: string;
+    superseded_at: string | null;
     consent_text: string;
     consent_version: string;
     structured_fields_snapshot: StructuredFieldsSnapshot | null;
@@ -91,6 +93,7 @@ type RawInviteRow = {
   consents?: Array<{
     id: string;
     signed_at: string;
+    superseded_at: string | null;
     consent_text: string;
     consent_version: string;
     structured_fields_snapshot: StructuredFieldsSnapshot | null;
@@ -234,7 +237,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   const { data: invites } = await supabase
     .from("subject_invites")
     .select(
-      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(id, template_key, name, version, version_number), consents(id, signed_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
+      "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(id, template_key, name, version, version_number), consents(id, signed_at, superseded_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
     )
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId)
@@ -253,6 +256,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
       ? invite.consents.map((consent) => ({
           id: consent.id,
           signed_at: consent.signed_at,
+          superseded_at: consent.superseded_at,
           consent_text: consent.consent_text,
           consent_version: consent.consent_version,
           structured_fields_snapshot: consent.structured_fields_snapshot,
@@ -261,8 +265,9 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
         }))
       : null,
   }));
+  const currentInviteRows = filterCurrentOneOffInviteRows(inviteRows);
 
-  const signedConsentIds = inviteRows
+  const signedConsentIds = currentInviteRows
     .flatMap((invite) => invite.consents?.map((consent) => consent.id) ?? [])
     .filter((consentId) => consentId.length > 0);
 
@@ -338,7 +343,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     .eq("project_id", project.id)
     .eq("tenant_id", tenantId);
 
-  const inviteCount = inviteRows.length;
+  const inviteCount = currentInviteRows.length;
   const matchingProgress = await getProjectMatchingProgress(adminSupabase, tenantId, project.id);
   const recurringProfileIds = participantPanelData.knownProfiles.map((participant) => participant.profile.id);
 
@@ -543,9 +548,9 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
             <div>
               <h3 className="text-base font-semibold text-zinc-900">{t("oneOffParticipantsTitle")}</h3>
             </div>
-            {inviteRows.length ? (
+            {currentInviteRows.length ? (
               <ul className="space-y-2 text-sm">
-                {inviteRows.map((invite) => (
+                {currentInviteRows.map((invite) => (
                   <li key={invite.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
                     <div className="flex flex-col gap-2">
                       <div className="flex items-start justify-between gap-3">

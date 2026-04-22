@@ -28,7 +28,9 @@ function buildStructuredDefinition() {
 }
 
 test("one-off public upgrade form prefills prior answers and leaves new acknowledgement unchecked", async () => {
-  const { PublicConsentForm } = await import("../src/components/public/public-consent-form");
+  const { PublicConsentForm, isHeadshotUploadRequiredForPublicConsentSubmit } = await import(
+    "../src/components/public/public-consent-form"
+  );
   const structuredFieldsDefinition = buildStructuredDefinition();
   const markup = renderToStaticMarkup(
     createElement(
@@ -49,6 +51,7 @@ test("one-off public upgrade form prefills prior answers and leaves new acknowle
           },
         },
         upgradeMode: true,
+        reusableHeadshotAvailable: true,
       }),
     ),
   );
@@ -59,7 +62,59 @@ test("one-off public upgrade form prefills prior answers and leaves new acknowle
   assert.doesNotMatch(markup, /<input type="checkbox" name="structured__scope" checked="" value="linkedin"\/>/);
   assert.match(markup, /<option value="one_year" selected="">1 year<\/option>/);
   assert.match(markup, /I consent to facial matching/);
+  assert.match(markup, /Existing headshot will be reused/);
+  assert.match(markup, /Replace headshot/);
   assert.doesNotMatch(markup, /name="consent_acknowledged"[^>]*checked=""/);
+  assert.equal(
+    isHeadshotUploadRequiredForPublicConsentSubmit({
+      faceMatchOptIn: true,
+      headshotAssetId: null,
+      reusableHeadshotAvailable: true,
+    }),
+    false,
+  );
+});
+
+test("one-off public upgrade form keeps required headshot copy when no reusable headshot is available", async () => {
+  const { PublicConsentForm, isHeadshotUploadRequiredForPublicConsentSubmit } = await import(
+    "../src/components/public/public-consent-form"
+  );
+  const structuredFieldsDefinition = buildStructuredDefinition();
+  const markup = renderToStaticMarkup(
+    createElement(
+      NextIntlClientProvider,
+      { locale: "en", messages: enMessages },
+      createElement(PublicConsentForm, {
+        token: "upgrade-token-no-reuse",
+        consentText: "Consent text",
+        structuredFieldsDefinition,
+        formLayoutDefinition: createStarterFormLayoutDefinition(structuredFieldsDefinition),
+        initialValues: {
+          subjectName: "Jordan Miles",
+          subjectEmail: "jordan@example.com",
+          faceMatchOptIn: true,
+          structuredFieldValues: {
+            scope: ["email"],
+            duration: "one_year",
+          },
+        },
+        upgradeMode: true,
+        reusableHeadshotAvailable: false,
+      }),
+    ),
+  );
+
+  assert.match(markup, /Headshot required/);
+  assert.match(markup, /Upload headshot/);
+  assert.doesNotMatch(markup, /Existing headshot will be reused/);
+  assert.equal(
+    isHeadshotUploadRequiredForPublicConsentSubmit({
+      faceMatchOptIn: true,
+      headshotAssetId: null,
+      reusableHeadshotAvailable: false,
+    }),
+    true,
+  );
 });
 
 test("recurring public project upgrade form prefills prior answers and keeps acknowledgement unchecked", async () => {
@@ -95,5 +150,6 @@ test("recurring public project upgrade form prefills prior answers and keeps ack
   assert.match(markup, /<input type="checkbox" name="structured__scope" checked="" value="email"\/>/);
   assert.doesNotMatch(markup, /<input type="checkbox" name="structured__scope" checked="" value="linkedin"\/>/);
   assert.match(markup, /<option value="one_year" selected="">1 year<\/option>/);
+  assert.match(markup, /Review the updated consent and confirm the fields below for this recurring profile\./);
   assert.doesNotMatch(markup, /name="consent_acknowledged"[^>]*checked=""/);
 });

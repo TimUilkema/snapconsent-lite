@@ -71,6 +71,7 @@ export default async function PublicRecurringConsentPage({
   const showDuplicate = resolvedSearchParams.duplicate === "1";
   const receiptStatus = resolvedSearchParams.receipt;
   const statusMessage = getStatusMessage(request?.requestStatus ?? null, t);
+  const upgradeMode = Boolean(request?.upgradeContext);
 
   return (
     <main className="page-frame flex min-h-screen flex-col py-8 sm:py-10">
@@ -80,7 +81,10 @@ export default async function PublicRecurringConsentPage({
         </div>
 
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t("title")}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+            {upgradeMode ? t("upgradeTitle") : t("title")}
+          </h1>
+          {upgradeMode ? <p className="text-sm text-zinc-700">{t("upgradeSubtitle")}</p> : null}
           {request?.templateName ? <p className="text-sm text-zinc-700">{request.templateName}</p> : null}
           {request ? (
             <p className="text-sm text-zinc-600">
@@ -90,6 +94,7 @@ export default async function PublicRecurringConsentPage({
               })}
             </p>
           ) : null}
+          {upgradeMode ? <p className="text-sm text-zinc-600">{t("upgradeIdentityNote")}</p> : null}
         </div>
 
         {errorMessage ? (
@@ -127,7 +132,7 @@ export default async function PublicRecurringConsentPage({
             structuredFieldsDefinition={request.structuredFieldsDefinition}
             formLayoutDefinition={request.formLayoutDefinition}
             initialValues={request.upgradeContext?.initialValues}
-            upgradeMode={Boolean(request.upgradeContext)}
+            upgradeMode={upgradeMode}
           />
         ) : (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">

@@ -27,6 +27,7 @@ export function PublicRecurringConsentForm({
   structuredFieldsDefinition,
   formLayoutDefinition,
   initialValues,
+  upgradeMode = false,
 }: PublicRecurringConsentFormProps) {
   const t = useTranslations("publicRecurringConsent.form");
   const [subjectName, setSubjectName] = useState(initialValues?.subjectName ?? profileName);
@@ -50,6 +51,7 @@ export function PublicRecurringConsentForm({
         }
       }}
     >
+      {upgradeMode ? <p className="text-sm text-zinc-700">{t("upgradeHelper")}</p> : null}
       <ConsentFormLayoutRenderer
         consentText={consentText}
         formLayoutDefinition={formLayoutDefinition}

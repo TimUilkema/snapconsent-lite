@@ -46,6 +46,7 @@ export type PublicInviteUpgradeContext = {
   priorConsentId: string;
   targetTemplateId: string;
   targetTemplateKey: string;
+  reusableHeadshotAvailable: boolean;
   initialValues: PublicConsentInitialValues;
 };
 
@@ -142,6 +143,28 @@ export async function resolvePublicInviteUpgradeContext(
   }
 
   const subject = firstRelation((priorConsent as PriorConsentRow).subjects);
+  let reusableHeadshotAvailable = false;
+
+  if ((priorConsent as PriorConsentRow).face_match_opt_in === true) {
+    const { data: reusableHeadshotLink, error: reusableHeadshotError } = await supabase
+      .from("asset_consent_links")
+      .select("asset_id, assets!inner(id)")
+      .eq("tenant_id", (upgradeRequest as UpgradeRequestRow).tenant_id)
+      .eq("project_id", (upgradeRequest as UpgradeRequestRow).project_id)
+      .eq("consent_id", (priorConsent as PriorConsentRow).id)
+      .eq("assets.asset_type", "headshot")
+      .eq("assets.status", "uploaded")
+      .is("assets.archived_at", null)
+      .or("retention_expires_at.is.null,retention_expires_at.gt.now()", { foreignTable: "assets" })
+      .limit(1)
+      .maybeSingle();
+
+    if (reusableHeadshotError) {
+      throw new HttpError(500, "invite_lookup_failed", "Unable to load invite.");
+    }
+
+    reusableHeadshotAvailable = Boolean(reusableHeadshotLink?.asset_id);
+  }
 
   return {
     upgradeRequestId: (upgradeRequest as UpgradeRequestRow).id,
@@ -149,6 +172,7 @@ export async function resolvePublicInviteUpgradeContext(
     priorConsentId: (upgradeRequest as UpgradeRequestRow).prior_consent_id,
     targetTemplateId: (upgradeRequest as UpgradeRequestRow).target_template_id,
     targetTemplateKey: (upgradeRequest as UpgradeRequestRow).target_template_key,
+    reusableHeadshotAvailable,
     initialValues: {
       subjectName: subject?.full_name ?? "",
       subjectEmail: subject?.email ?? "",

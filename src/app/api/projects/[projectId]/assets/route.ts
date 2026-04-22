@@ -27,6 +27,7 @@ import {
   type ProjectAssetListSort,
   type ProjectAssetReviewFilter,
 } from "@/lib/projects/project-asset-review-list";
+import { filterCurrentOneOffPeopleOptions } from "@/lib/projects/current-one-off-consent";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -98,6 +99,7 @@ type RecurringHeadshotRow = {
 
 type ConsentFilterOptionRow = {
   id: string;
+  superseded_at: string | null;
   subjects: Array<{
     email: string;
     full_name: string;
@@ -253,10 +255,11 @@ export async function GET(request: Request, context: RouteContext) {
     const [{ data: consentFilterRows, error: consentFilterError }, scopeFilters] = await Promise.all([
       supabase
         .from("consents")
-        .select("id, subjects(email, full_name)")
+        .select("id, superseded_at, subjects(email, full_name)")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
         .not("signed_at", "is", null)
+        .is("superseded_at", null)
         .order("signed_at", { ascending: false }),
       loadProjectConsentScopeFilterFamilies({
         supabase,
@@ -269,7 +272,9 @@ export async function GET(request: Request, context: RouteContext) {
       throw new HttpError(500, "consent_filter_lookup_failed", "Unable to load consent filters.");
     }
 
-    const people = ((consentFilterRows as ConsentFilterOptionRow[] | null) ?? []).map((consent) => {
+    const people = filterCurrentOneOffPeopleOptions(
+      ((consentFilterRows as ConsentFilterOptionRow[] | null) ?? []),
+    ).map((consent) => {
       const normalizedConsent: ConsentFilterOption = {
         id: consent.id,
         subjects: normalizeSubjectRelation(consent.subjects),

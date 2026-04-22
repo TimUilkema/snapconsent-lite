@@ -166,6 +166,7 @@ test("project participants panel renders known profiles, baseline context, and p
   assert.match(markup, /Add existing profile/);
   assert.match(markup, /Copy link/);
   assert.match(markup, /Open link/);
+  assert.match(markup, /Replacement consent link/);
   assert.match(markup, /Archived profile/);
   assert.match(markup, /Project Consent v1/);
   assert.match(markup, /Signed /);
@@ -247,4 +248,87 @@ test("project participants panel renders request creation controls when project 
   assert.match(markup, /Create project request/);
   assert.match(markup, /Select a template/);
   assert.match(markup, /No project consent request yet/);
+});
+
+test("project participants panel renders replacement request controls when an active consent can be upgraded", async () => {
+  const { ProjectParticipantsPanelView } = await import(
+    "../src/components/projects/project-participants-panel"
+  );
+
+  const data: ProjectParticipantsPanelData = {
+    availableProfiles: [],
+    knownProfiles: [
+      {
+        participantId: randomUUID(),
+        projectId: randomUUID(),
+        createdAt: new Date().toISOString(),
+        profile: {
+          id: randomUUID(),
+          fullName: "Morgan Lee",
+          email: "morgan@example.com",
+          status: "active",
+          archivedAt: null,
+          profileType: null,
+        },
+        baselineConsentState: "signed",
+        matchingReadiness: {
+          state: "ready",
+          authorized: true,
+          currentHeadshotId: randomUUID(),
+          selectionFaceId: randomUUID(),
+          selectionStatus: "auto_selected",
+          materializationStatus: "completed",
+        },
+        projectConsent: {
+          state: "signed",
+          latestActivityAt: new Date().toISOString(),
+          pendingRequest: null,
+          activeConsent: {
+            id: randomUUID(),
+            signedAt: new Date().toISOString(),
+            emailSnapshot: "morgan@example.com",
+            fullNameSnapshot: "Morgan Lee",
+            template: {
+              id: randomUUID(),
+              name: "Project Consent",
+              version: "v1",
+            },
+          },
+          latestRevokedConsent: null,
+        },
+        actions: {
+          canCreateRequest: true,
+          canCopyLink: false,
+          canOpenLink: false,
+        },
+      },
+    ],
+  };
+
+  const markup = renderToStaticMarkup(
+    createElement(
+      NextIntlClientProvider,
+      { locale: "en", messages: enMessages },
+      createElement(ProjectParticipantsPanelView, {
+        projectId: randomUUID(),
+        data,
+        templates: [
+          {
+            id: randomUUID(),
+            name: "Project Consent",
+            version: "v2",
+            scope: "tenant",
+          },
+        ],
+        defaultTemplateId: null,
+        defaultTemplateWarning: null,
+        router: { refresh() {} },
+      }),
+    ),
+  );
+
+  assert.match(markup, /Create a replacement request for a newer version/);
+  assert.match(markup, /Updated consent template/);
+  assert.match(markup, /Select a newer template/);
+  assert.match(markup, /Create replacement request/);
 });
