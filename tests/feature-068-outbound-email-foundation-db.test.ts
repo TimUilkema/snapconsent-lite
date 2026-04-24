@@ -8,6 +8,7 @@ import { submitConsent } from "../src/lib/consent/submit-consent";
 import {
   dispatchOutboundEmailJobById,
   enqueueConsentReceiptEmailJob,
+  enqueueTenantMembershipInviteEmailJob,
 } from "../src/lib/email/outbound/jobs";
 import { runOutboundEmailWorker } from "../src/lib/email/outbound/worker";
 import { adminClient, assertNoPostgrestError, createAuthUserWithRetry } from "./helpers/supabase-test-client";
@@ -269,6 +270,120 @@ test("outbound email worker retries transport failures and later sends the queue
     assert.equal(sentJob.status, "sent");
     assert.equal(sentJob.attempt_count, 2);
     assert.equal(sentJob.provider_message_id, "provider-message-2");
+  } finally {
+    process.env.APP_ORIGIN = originalOrigin;
+  }
+});
+
+test("tenant membership invite outbound email dedupes by invite send timestamp and cancels stale jobs", async () => {
+  const originalOrigin = process.env.APP_ORIGIN;
+  process.env.APP_ORIGIN = "https://app.example.test";
+
+  try {
+    const owner = await createAuthUserWithRetry(adminClient, "feature068-membership-owner");
+
+    const { data: tenant, error: tenantError } = await adminClient
+      .from("tenants")
+      .insert({
+        name: `Feature 068 Membership Invite ${randomUUID()}`,
+      })
+      .select("id")
+      .single();
+    assertNoPostgrestError(tenantError, "insert tenant");
+
+    const { error: membershipError } = await adminClient.from("memberships").insert({
+      tenant_id: tenant.id,
+      user_id: owner.userId,
+      role: "owner",
+    });
+    assertNoPostgrestError(membershipError, "insert membership");
+
+    const inviteToken = `feature068-membership-invite-${randomUUID()}`;
+    const refreshedLastSentAtIso = new Date("2026-04-22T08:15:45.000Z").toISOString();
+
+    const { data: invite, error: inviteError } = await adminClient
+      .from("tenant_membership_invites")
+      .insert({
+        tenant_id: tenant.id,
+        email: "alex@example.com",
+        normalized_email: "alex@example.com",
+        role: "reviewer",
+        status: "pending",
+        token_hash: hashSha256(inviteToken),
+        invited_by_user_id: owner.userId,
+        expires_at: "2026-04-25T08:09:45.000Z",
+        last_sent_at: "2026-04-22T08:09:45.000Z",
+      })
+      .select("id")
+      .single();
+    assertNoPostgrestError(inviteError, "insert tenant membership invite");
+
+    const first = await enqueueTenantMembershipInviteEmailJob({
+      tenantId: tenant.id,
+      payload: {
+        inviteId: invite.id,
+        tenantId: tenant.id,
+        tenantName: "Feature 068 Membership Invite",
+        invitedEmail: "alex@example.com",
+        role: "reviewer",
+        inviteToken,
+        expiresAtIso: "2026-04-25T08:09:45.000Z",
+        lastSentAtIso: "2026-04-22T08:09:45.000Z",
+        inviterDisplayName: "owner",
+      },
+      supabase: adminClient,
+    });
+
+    const duplicate = await enqueueTenantMembershipInviteEmailJob({
+      tenantId: tenant.id,
+      payload: {
+        inviteId: invite.id,
+        tenantId: tenant.id,
+        tenantName: "Feature 068 Membership Invite",
+        invitedEmail: "alex@example.com",
+        role: "reviewer",
+        inviteToken,
+        expiresAtIso: "2026-04-25T08:09:45.000Z",
+        lastSentAtIso: "2026-04-22T08:09:45.000Z",
+        inviterDisplayName: "owner",
+      },
+      supabase: adminClient,
+    });
+
+    assert.equal(first.enqueued, true);
+    assert.equal(duplicate.enqueued, false);
+    assert.equal(first.jobId, duplicate.jobId);
+
+    const { error: refreshError } = await adminClient
+      .from("tenant_membership_invites")
+      .update({
+        last_sent_at: refreshedLastSentAtIso,
+      })
+      .eq("tenant_id", tenant.id)
+      .eq("id", invite.id);
+    assertNoPostgrestError(refreshError, "refresh invite last_sent_at");
+
+    const dispatched = await dispatchOutboundEmailJobById({
+      tenantId: tenant.id,
+      jobId: first.jobId,
+      supabase: adminClient,
+      transport: {
+        send: async () => ({ providerMessageId: "provider-message-membership-1" }),
+      },
+    });
+
+    assert.equal(dispatched.outcome, "cancelled");
+
+    const { data: job, error: jobError } = await adminClient
+      .from("outbound_email_jobs")
+      .select("status, cancelled_at, last_error_code")
+      .eq("tenant_id", tenant.id)
+      .eq("id", first.jobId)
+      .single();
+    assertNoPostgrestError(jobError, "select cancelled outbound email job");
+    assert.equal(job.status, "cancelled");
+    assert.notEqual(job.cancelled_at, null);
+    assert.equal(job.last_error_code, "tenant_membership_invite_superseded");
   } finally {
     process.env.APP_ORIGIN = originalOrigin;
   }

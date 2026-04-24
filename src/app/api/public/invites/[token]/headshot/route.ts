@@ -1,6 +1,7 @@
 import { createAssetWithIdempotency } from "@/lib/assets/create-asset";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { resolvePublicInviteContext } from "@/lib/invites/public-invite-context";
+import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 type RouteContext = {
@@ -46,10 +47,17 @@ export async function POST(request: Request, context: RouteContext) {
 
     const admin = createAdminClient();
     const invite = await resolvePublicInviteContext(admin, token);
+    await assertWorkspacePublicSubmissionAllowed(
+      admin,
+      invite.tenantId,
+      invite.projectId,
+      invite.workspaceId,
+    );
     const result = await createAssetWithIdempotency({
       supabase: admin,
       tenantId: invite.tenantId,
       projectId: invite.projectId,
+      workspaceId: invite.workspaceId,
       userId: invite.createdBy,
       idempotencyKey,
       originalFilename: String(body.originalFilename ?? "").trim(),

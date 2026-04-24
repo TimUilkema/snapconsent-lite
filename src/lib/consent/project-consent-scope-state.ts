@@ -362,6 +362,7 @@ export async function loadProjectConsentScopeStatesByConsentIds(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   consentIds: string[];
 }) {
   const consentIds = Array.from(new Set(input.consentIds));
@@ -370,12 +371,18 @@ export async function loadProjectConsentScopeStatesByConsentIds(input: {
     return statesByConsentId;
   }
 
-  const { data, error } = await input.supabase
+  let consentQuery = input.supabase
     .from("consents")
     .select("id, subject_id, signed_at, revoked_at, structured_fields_snapshot")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .in("id", consentIds);
+
+  if (input.workspaceId) {
+    consentQuery = consentQuery.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await consentQuery;
 
   if (error) {
     throw new HttpError(500, "consent_scope_state_lookup_failed", "Unable to load consent scope state.");
@@ -475,6 +482,7 @@ export async function loadProjectConsentScopeStatesByParticipantIds(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   participantIds: string[];
 }) {
   const participantIds = Array.from(new Set(input.participantIds));
@@ -483,12 +491,18 @@ export async function loadProjectConsentScopeStatesByParticipantIds(input: {
     return statesByParticipantId;
   }
 
-  const { data: participantsData, error: participantsError } = await input.supabase
+  let participantsQuery = input.supabase
     .from("project_profile_participants")
     .select("id, recurring_profile_id")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .in("id", participantIds);
+
+  if (input.workspaceId) {
+    participantsQuery = participantsQuery.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data: participantsData, error: participantsError } = await participantsQuery;
 
   if (participantsError) {
     throw new HttpError(500, "consent_scope_state_lookup_failed", "Unable to load consent scope state.");
@@ -534,7 +548,7 @@ export async function loadProjectConsentScopeStatesByParticipantIds(input: {
 
   let latestConsentByProfileId = new Map<string, RecurringConsentFallbackRow>();
   if (missingProfileIds.length > 0) {
-    const { data: recurringConsentsData, error: recurringConsentsError } = await input.supabase
+    let recurringConsentsQuery = input.supabase
       .from("recurring_profile_consents")
       .select("id, profile_id, signed_at, revoked_at, superseded_at, structured_fields_snapshot")
       .eq("tenant_id", input.tenantId)
@@ -545,6 +559,12 @@ export async function loadProjectConsentScopeStatesByParticipantIds(input: {
       .order("signed_at", { ascending: false })
       .order("created_at", { ascending: false })
       .order("id", { ascending: false });
+
+    if (input.workspaceId) {
+      recurringConsentsQuery = recurringConsentsQuery.eq("workspace_id", input.workspaceId);
+    }
+
+    const { data: recurringConsentsData, error: recurringConsentsError } = await recurringConsentsQuery;
 
     if (recurringConsentsError) {
       throw new HttpError(500, "consent_scope_state_lookup_failed", "Unable to load consent scope state.");

@@ -16,14 +16,46 @@ set search_path = public, extensions
 as $$
 declare
   v_inserted_count integer := 0;
+  v_workspace_id uuid;
 begin
   if p_project_id is null or p_structured_fields_snapshot is null then
     return 0;
   end if;
 
+  if p_consent_id is not null then
+    select c.workspace_id
+    into v_workspace_id
+    from public.consents c
+    where c.id = p_consent_id
+      and c.tenant_id = p_tenant_id
+      and c.project_id = p_project_id
+    limit 1;
+  elsif p_recurring_profile_consent_id is not null then
+    select c.workspace_id
+    into v_workspace_id
+    from public.recurring_profile_consents c
+    where c.id = p_recurring_profile_consent_id
+      and c.tenant_id = p_tenant_id
+      and c.project_id = p_project_id
+    limit 1;
+  elsif p_project_profile_participant_id is not null then
+    select ppp.workspace_id
+    into v_workspace_id
+    from public.project_profile_participants ppp
+    where ppp.id = p_project_profile_participant_id
+      and ppp.tenant_id = p_tenant_id
+      and ppp.project_id = p_project_id
+    limit 1;
+  end if;
+
+  if v_workspace_id is null then
+    raise exception 'project_workspace_required' using errcode = '23514';
+  end if;
+
   insert into public.project_consent_scope_signed_projections (
     tenant_id,
     project_id,
+    workspace_id,
     owner_kind,
     subject_id,
     project_profile_participant_id,
@@ -43,6 +75,7 @@ begin
   select
     p_tenant_id,
     p_project_id,
+    v_workspace_id,
     p_owner_kind,
     p_subject_id,
     p_project_profile_participant_id,

@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
 import { SAFE_IN_FILTER_CHUNK_SIZE, chunkValues } from "@/lib/supabase/safe-in-filter";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -17,6 +18,7 @@ type PreflightFile = {
 };
 
 type PreflightBody = {
+  workspaceId?: string;
   assetType?: string;
   files?: PreflightFile[];
 };
@@ -81,6 +83,13 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(400, "invalid_body", "Invalid request body.");
     }
 
+    const { workspace } = await requireWorkspaceCaptureMutationAccessForRequest({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      requestedWorkspaceId: body.workspaceId,
+    });
     const assetType = normalizeAssetType(body.assetType);
     const files = Array.isArray(body.files) ? body.files : [];
     if (files.length === 0) {
@@ -105,6 +114,7 @@ export async function POST(request: Request, context: RouteContext) {
           .select("file_size_bytes")
           .eq("tenant_id", tenantId)
           .eq("project_id", projectId)
+          .eq("workspace_id", workspace.id)
           .eq("asset_type", assetType)
           .in("file_size_bytes", sizeChunk);
 
@@ -137,6 +147,7 @@ export async function POST(request: Request, context: RouteContext) {
           .select("content_hash")
           .eq("tenant_id", tenantId)
           .eq("project_id", projectId)
+          .eq("workspace_id", workspace.id)
           .eq("asset_type", assetType)
           .in("content_hash", hashChunk);
 

@@ -1,6 +1,7 @@
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
 import { queueProjectAssetPostFinalizeProcessing } from "@/lib/assets/post-finalize-processing";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { loadWorkspaceScopedRow, requireWorkspaceCaptureMutationAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -30,7 +31,6 @@ export async function POST(request: Request, context: RouteContext) {
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const { projectId, assetId } = await context.params;
     const body = (await request.json().catch(() => null)) as FinalizeAssetBody | null;
     const consentIds = Array.isArray(body?.consentIds)
@@ -44,19 +44,41 @@ export async function POST(request: Request, context: RouteContext) {
         )
       : [];
 
+    const assetRow = await loadWorkspaceScopedRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "assets",
+      rowId: assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+    await requireWorkspaceCaptureMutationAccessForRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "assets",
+      rowId: assetId,
+      userId: user.id,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+
     const finalizedAsset = await finalizeAsset({
       supabase,
       tenantId,
       projectId,
+      workspaceId: assetRow.workspace_id,
       assetId,
       consentIds,
     });
 
     await queueProjectAssetPostFinalizeProcessing({
-      supabase,
-      tenantId,
-      projectId,
-      assetId: finalizedAsset.assetId,
+        supabase,
+        tenantId,
+        projectId,
+        workspaceId: assetRow.workspace_id,
+        assetId: finalizedAsset.assetId,
       assetType: finalizedAsset.assetType,
       consentIds,
       source: "photo_finalize",

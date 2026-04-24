@@ -48,6 +48,7 @@ type MatchingScopeInput = {
   tenantId: string;
   projectId: string;
   consentId: string;
+  workspaceId?: string | null;
   actorUserId?: string | null;
 };
 
@@ -578,7 +579,7 @@ async function resolveLikelyCandidateBatch(
 
   const candidateAssetIds = Array.from(new Set(candidateRows.map((row) => row.asset_id)));
   const assets = await runChunkedRead(candidateAssetIds, async (assetIdChunk) => {
-    const { data, error } = await input.supabase
+    let query = input.supabase
       .from("assets")
       .select(
         "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
@@ -589,6 +590,12 @@ async function resolveLikelyCandidateBatch(
       .eq("status", "uploaded")
       .is("archived_at", null)
       .in("id", assetIdChunk);
+
+    if (input.workspaceId) {
+      query = query.eq("workspace_id", input.workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "asset_lookup_failed", "Unable to load likely-match assets.");
@@ -640,6 +647,7 @@ async function resolveLikelyCandidateBatch(
     input.tenantId,
     input.projectId,
     assetRows.map((row) => row.id),
+    input.workspaceId,
   );
   const hiddenFaceIds = new Set(hiddenFaces.map((row) => row.asset_face_id));
   const blockedFaceIds = new Set(blockedFaces.map((row) => row.asset_face_id));
@@ -677,6 +685,7 @@ async function resolveLikelyCandidateBatch(
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds: [input.consentId],
     })
   ).get(input.consentId) ?? null;
@@ -1116,12 +1125,14 @@ async function loadFallbackRowsForAssets(
   tenantId: string,
   projectId: string,
   assetIds: string[],
+  workspaceId?: string | null,
 ) {
   const wholeAssetLinks = await loadCurrentWholeAssetLinksForAssets({
     supabase,
     tenantId,
     projectId,
     assetIds,
+    workspaceId,
   });
 
   if (wholeAssetLinks.length === 0) {
@@ -1361,6 +1372,10 @@ async function validatePhotoAssetInProject(
     .eq("asset_type", "photo")
     .eq("id", assetId);
 
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
   if (requireUploadedAndNotArchived) {
     query = query.eq("status", "uploaded").is("archived_at", null);
   }
@@ -1378,13 +1393,18 @@ async function validatePhotoAssetInProject(
 }
 
 export async function assertConsentInProject(input: MatchingScopeInput, options?: { requireNotRevoked?: boolean }) {
-  const { data: consent, error } = await input.supabase
+  let query = input.supabase
     .from("consents")
     .select("id, revoked_at, superseded_at, face_match_opt_in")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
-    .eq("id", input.consentId)
-    .maybeSingle();
+    .eq("id", input.consentId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data: consent, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "consent_lookup_failed", "Unable to load consent.");
@@ -1798,6 +1818,7 @@ async function clearFallbackRowsForConsent(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetId: string,
   consentId: string,
 ) {
@@ -1805,6 +1826,7 @@ async function clearFallbackRowsForConsent(
     supabase,
     tenantId,
     projectId,
+    workspaceId,
     consentIds: [consentId],
   });
   const projectFaceAssigneeId = assigneeIdByConsentId.get(consentId) ?? null;
@@ -2026,6 +2048,7 @@ export async function blockAssetFace(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetId: input.assetId,
     });
   }
@@ -2135,6 +2158,7 @@ export async function hideAssetFace(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetId: input.assetId,
     });
   }
@@ -2394,7 +2418,7 @@ export async function listMatchableProjectPhotosForConsent(
     let candidateOffset = 0;
 
     while (collected.length <= pageSize) {
-      const query = input.supabase
+      let query = input.supabase
         .from("asset_consent_match_candidates")
         .select(
           "asset_id, consent_id, confidence, matcher_version, last_scored_at, winning_asset_face_id, winning_asset_face_rank",
@@ -2407,6 +2431,10 @@ export async function listMatchableProjectPhotosForConsent(
         .order("confidence", { ascending: false })
         .order("last_scored_at", { ascending: false })
         .range(candidateOffset, candidateOffset + candidateFetchLimit - 1);
+
+      if (input.workspaceId) {
+        query = query.eq("workspace_id", input.workspaceId);
+      }
 
       const { data: candidates, error: candidateError } = await query;
       if (candidateError) {
@@ -2431,6 +2459,7 @@ export async function listMatchableProjectPhotosForConsent(
           tenantId: input.tenantId,
           projectId: input.projectId,
           consentId: input.consentId,
+          workspaceId: input.workspaceId,
         },
         candidateRows,
       );
@@ -2480,6 +2509,10 @@ export async function listMatchableProjectPhotosForConsent(
       .order("created_at", { ascending: false })
       .range(assetOffset, assetOffset + assetBatchSize - 1);
 
+    if (input.workspaceId) {
+      query = query.eq("workspace_id", input.workspaceId);
+    }
+
     if (queryText) {
       query = query.ilike("original_filename", `%${queryText}%`);
     }
@@ -2509,7 +2542,13 @@ export async function listMatchableProjectPhotosForConsent(
       new Map(Array.from(materializations.entries()).map(([assetId, materialization]) => [assetId, materialization.id])),
     );
     const faceLinks = await loadCurrentFaceLinksForAssets(input.supabase, input.tenantId, input.projectId, assetIds);
-    const fallbacks = await loadFallbackRowsForAssets(input.supabase, input.tenantId, input.projectId, assetIds);
+    const fallbacks = await loadFallbackRowsForAssets(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      assetIds,
+      input.workspaceId,
+    );
     const hiddenFaceIds = new Set(hiddenFaces.map((row) => row.asset_face_id));
 
     const linkedAssetIds = new Set<string>();
@@ -2569,7 +2608,7 @@ export async function listLinkedPhotosForConsent(
   await assertConsentInProject(input);
 
   const currentLinks = await runChunkedRead([input.consentId], async (consentIdChunk) => {
-    const { data, error } = await input.supabase
+    let query = input.supabase
       .from("asset_face_consent_links")
       .select(
         "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
@@ -2577,6 +2616,12 @@ export async function listLinkedPhotosForConsent(
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
       .in("consent_id", consentIdChunk);
+
+    if (input.workspaceId) {
+      query = query.eq("workspace_id", input.workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "photo_face_link_lookup_failed", "Unable to load linked photos.");
@@ -2590,13 +2635,14 @@ export async function listLinkedPhotosForConsent(
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds: [input.consentId],
     })
   ).get(input.consentId) ?? null;
   const wholeAssetLinks =
     consentAssigneeId
       ? (await runChunkedRead([consentAssigneeId], async (assigneeIdChunk) => {
-          const { data, error } = await input.supabase
+          let query = input.supabase
             .from("asset_assignee_links")
             .select(
               "asset_id, project_face_assignee_id, tenant_id, project_id, link_source, created_at, created_by, updated_at",
@@ -2604,6 +2650,12 @@ export async function listLinkedPhotosForConsent(
             .eq("tenant_id", input.tenantId)
             .eq("project_id", input.projectId)
             .in("project_face_assignee_id", assigneeIdChunk);
+
+          if (input.workspaceId) {
+            query = query.eq("workspace_id", input.workspaceId);
+          }
+
+          const { data, error } = await query;
 
           if (error) {
             throw new HttpError(500, "whole_asset_link_lookup_failed", "Unable to load linked photos.");
@@ -2633,7 +2685,7 @@ export async function listLinkedPhotosForConsent(
   }
 
   const assets = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await input.supabase
+    let query = input.supabase
       .from("assets")
       .select(
         "id, original_filename, status, file_size_bytes, created_at, uploaded_at, archived_at, storage_bucket, storage_path",
@@ -2643,6 +2695,12 @@ export async function listLinkedPhotosForConsent(
       .eq("asset_type", "photo")
       .in("id", assetIdChunk)
       .order("created_at", { ascending: false });
+
+    if (input.workspaceId) {
+      query = query.eq("workspace_id", input.workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "asset_lookup_failed", "Unable to load linked photo assets.");
@@ -2921,6 +2979,7 @@ async function buildReadyManualPhotoLinkState(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds: [input.consentId],
     })
   ).get(input.consentId) ?? null;
@@ -3188,7 +3247,14 @@ export async function manualLinkPhotoToProjectFaceAssignee(
     });
 
     if (input.target.consentId) {
-      await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
+      await clearFallbackRowsForConsent(
+        input.supabase,
+        input.tenantId,
+        input.projectId,
+        input.workspaceId,
+        input.assetId,
+        input.target.consentId,
+      );
     }
 
     return {
@@ -3308,7 +3374,14 @@ export async function manualLinkPhotoToProjectFaceAssignee(
   });
 
   if (input.target.consentId) {
-    await clearFallbackRowsForConsent(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
+    await clearFallbackRowsForConsent(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      input.workspaceId,
+      input.assetId,
+      input.target.consentId,
+    );
     await deleteCandidatePair(input.supabase, input.tenantId, input.projectId, input.assetId, input.target.consentId);
   }
 
@@ -3316,6 +3389,7 @@ export async function manualLinkPhotoToProjectFaceAssignee(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assetId: input.assetId,
   });
 
@@ -3411,6 +3485,7 @@ export async function manualLinkPhotoToConsent(input: ManualPhotoLinkInput): Pro
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     consentId: input.consentId,
   });
 
@@ -3436,6 +3511,7 @@ export async function manualLinkPhotoToRecurringProjectParticipant(input: Projec
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     projectProfileParticipantId: input.projectProfileParticipantId,
   });
 
@@ -3480,6 +3556,7 @@ export async function manualUnlinkPhotoFaceAssignment(input: ProjectFaceAssignme
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assetId: input.assetId,
   });
 
@@ -3584,6 +3661,7 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds: [input.consentId],
     });
     const projectFaceAssigneeId = assigneeIdByConsentId.get(input.consentId) ?? null;
@@ -3593,6 +3671,7 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
         supabase: input.supabase,
         tenantId: input.tenantId,
         projectId: input.projectId,
+        workspaceId: input.workspaceId,
         assetId: input.assetId,
       });
 
@@ -3619,6 +3698,7 @@ export async function manualUnlinkPhotoFromConsent(input: ManualPhotoUnlinkInput
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assetId: input.assetId,
   });
 
@@ -3636,6 +3716,7 @@ export async function clearConsentPhotoSuppressions(input: MatchingScopeInput) {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     consentIds: [input.consentId],
   });
   const projectFaceAssigneeId = assigneeIdByConsentId.get(input.consentId) ?? null;
@@ -3689,6 +3770,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
 }) {
   const current = await loadCurrentAssetFaceMaterialization(
@@ -3780,6 +3862,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     consentIds: consentStateIds,
   });
   const consentStateById = await loadConsentStateMap(input.supabase, input.tenantId, input.projectId, consentStateIds);
@@ -3793,6 +3876,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assigneeIds: autoFaceLinks.map((row) => row.project_face_assignee_id),
   });
   const recurringParticipantIds = Array.from(
@@ -3809,6 +3893,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     participantIds: recurringParticipantIds,
   });
   const readyRecurringSourceByParticipantId = await loadReadyRecurringSourceMap({
@@ -3833,6 +3918,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     recurringConsentIds,
   });
   const autoEligibleFaceIds = new Set(
@@ -4033,6 +4119,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentId,
     });
     assigneeByConsentId.set(consentId, assignee.id);
@@ -4051,6 +4138,7 @@ export async function reconcilePhotoFaceCanonicalStateForAsset(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       projectProfileParticipantId: winner.projectProfileParticipantId,
     });
     assigneeByRecurringConsentId.set(winner.recurringProfileConsentId, assignee.id);

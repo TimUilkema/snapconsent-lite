@@ -253,7 +253,34 @@ export async function getPhotoFanoutBoundary(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId?: string | null,
 ): Promise<HeadshotFanoutBoundary> {
+  if (workspaceId) {
+    const { data, error } = await supabase
+      .from("assets")
+      .select("id, uploaded_at")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("workspace_id", workspaceId)
+      .eq("asset_type", "photo")
+      .eq("status", "uploaded")
+      .is("archived_at", null)
+      .order("uploaded_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "face_match_photo_boundary_failed", "Unable to load project photo boundary.");
+    }
+
+    return {
+      boundarySnapshotAt: normalizeBoundarySnapshotAt(new Date().toISOString()),
+      boundaryPhotoUploadedAt: data?.uploaded_at ?? null,
+      boundaryPhotoAssetId: data?.id ?? null,
+    };
+  }
+
   const { data, error } = await supabase.rpc("get_photo_fanout_boundary", {
     p_tenant_id: tenantId,
     p_project_id: projectId,
@@ -275,7 +302,34 @@ export async function getCurrentConsentHeadshotFanoutBoundary(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId?: string | null,
 ): Promise<PhotoFanoutBoundary> {
+  if (workspaceId) {
+    const { data, error } = await supabase
+      .from("consents")
+      .select("id, created_at")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("workspace_id", workspaceId)
+      .eq("face_match_opt_in", true)
+      .is("revoked_at", null)
+      .is("superseded_at", null)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "face_match_consent_boundary_failed", "Unable to load consent headshot boundary.");
+    }
+
+    return {
+      boundarySnapshotAt: normalizeBoundarySnapshotAt(new Date().toISOString()),
+      boundaryConsentCreatedAt: data?.created_at ?? null,
+      boundaryConsentId: data?.id ?? null,
+    };
+  }
+
   const { data, error } = await supabase.rpc("get_current_consent_headshot_fanout_boundary", {
     p_tenant_id: tenantId,
     p_project_id: projectId,

@@ -565,6 +565,7 @@ begin
   where r.tenant_id = v_participant.tenant_id
     and r.profile_id = v_participant.recurring_profile_id
     and r.project_id = v_participant.project_id
+    and r.workspace_id = v_participant.workspace_id
     and r.consent_kind = 'project'
     and r.status = 'pending'
     and r.expires_at <= now();
@@ -575,6 +576,7 @@ begin
   where c.tenant_id = v_participant.tenant_id
     and c.profile_id = v_participant.recurring_profile_id
     and c.project_id = v_participant.project_id
+    and c.workspace_id = v_participant.workspace_id
     and c.consent_kind = 'project'
     and c.revoked_at is null
     and c.superseded_at is null
@@ -605,6 +607,7 @@ begin
   where r.tenant_id = v_participant.tenant_id
     and r.profile_id = v_participant.recurring_profile_id
     and r.project_id = v_participant.project_id
+    and r.workspace_id = v_participant.workspace_id
     and r.consent_kind = 'project'
     and r.status = 'pending'
   limit 1;
@@ -630,6 +633,7 @@ begin
       tenant_id,
       profile_id,
       project_id,
+      workspace_id,
       consent_kind,
       consent_template_id,
       profile_name_snapshot,
@@ -644,6 +648,7 @@ begin
       v_participant.tenant_id,
       v_participant.recurring_profile_id,
       v_participant.project_id,
+      v_participant.workspace_id,
       'project',
       v_template.id,
       v_profile.full_name,
@@ -661,6 +666,7 @@ begin
       where r.tenant_id = v_participant.tenant_id
         and r.profile_id = v_participant.recurring_profile_id
         and r.project_id = v_participant.project_id
+        and r.workspace_id = v_participant.workspace_id
         and r.consent_kind = 'project'
         and r.status = 'pending'
       limit 1;
@@ -830,8 +836,16 @@ begin
     and c.profile_id = v_request.profile_id
     and c.consent_kind = v_request.consent_kind
     and (
-      (v_request.project_id is null and c.project_id is null)
-      or c.project_id = v_request.project_id
+      (
+        v_request.project_id is null
+        and v_request.workspace_id is null
+        and c.project_id is null
+        and c.workspace_id is null
+      )
+      or (
+        c.project_id = v_request.project_id
+        and c.workspace_id = v_request.workspace_id
+      )
     )
     and c.revoked_at is null
     and c.superseded_at is null
@@ -912,6 +926,7 @@ begin
     profile_id,
     request_id,
     project_id,
+    workspace_id,
     consent_kind,
     consent_template_id,
     profile_name_snapshot,
@@ -928,6 +943,7 @@ begin
     v_request.profile_id,
     v_request.id,
     v_request.project_id,
+    v_request.workspace_id,
     v_request.consent_kind,
     v_request.consent_template_id,
     v_normalized_full_name,
@@ -947,6 +963,7 @@ begin
     from public.project_profile_participants ppp
     where ppp.tenant_id = v_request.tenant_id
       and ppp.project_id = v_request.project_id
+      and ppp.workspace_id = v_request.workspace_id
       and ppp.recurring_profile_id = v_request.profile_id
     limit 1;
 

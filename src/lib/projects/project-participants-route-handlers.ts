@@ -14,10 +14,12 @@ type AuthenticatedRouteClient = {
 
 type AddProjectProfileParticipantBody = {
   recurringProfileId?: string;
+  workspaceId?: string;
 };
 
 type CreateProjectProfileConsentRequestBody = {
   consentTemplateId?: string | null;
+  workspaceId?: string;
 };
 
 type ProjectParticipantRouteContext = {
@@ -36,11 +38,19 @@ type ProjectRouteContext = {
 type AddProjectProfileParticipantDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  requireWorkspaceCaptureMutationAccessForRequest: (input: {
+    supabase: AuthenticatedRouteClient;
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    requestedWorkspaceId?: string | null;
+  }) => Promise<unknown>;
   addProjectProfileParticipant: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
     userId: string;
     projectId: string;
+    workspaceId: string;
     recurringProfileId: string;
   }) => Promise<{
     status: number;
@@ -51,11 +61,19 @@ type AddProjectProfileParticipantDependencies = {
 type CreateProjectProfileConsentRequestDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  requireWorkspaceCaptureMutationAccessForRequest: (input: {
+    supabase: AuthenticatedRouteClient;
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    requestedWorkspaceId?: string | null;
+  }) => Promise<unknown>;
   createProjectProfileConsentRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
     userId: string;
     projectId: string;
+    workspaceId: string;
     participantId: string;
     consentTemplateId?: string | null;
     idempotencyKey: string;
@@ -98,18 +116,29 @@ export async function handleAddProjectProfileParticipantPost(
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const body = (await request.json().catch(() => null)) as AddProjectProfileParticipantBody | null;
     if (!body) {
       throw new HttpError(400, "invalid_body", "Invalid request body.");
     }
 
     const { projectId } = await context.params;
+    const workspaceId = String(body.workspaceId ?? "").trim();
+    if (!workspaceId) {
+      throw new HttpError(400, "workspace_required", "Project workspace is required.");
+    }
+    await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      requestedWorkspaceId: workspaceId,
+    });
     const result = await dependencies.addProjectProfileParticipant({
       supabase,
       tenantId,
       userId: user.id,
       projectId,
+      workspaceId,
       recurringProfileId: String(body.recurringProfileId ?? ""),
     });
 
@@ -138,7 +167,6 @@ export async function handleCreateProjectProfileConsentRequestPost(
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const body = (await parseOptionalJsonBody(request).catch((error) => {
       if (error instanceof SyntaxError) {
         throw new HttpError(400, "invalid_body", "Invalid request body.");
@@ -149,11 +177,23 @@ export async function handleCreateProjectProfileConsentRequestPost(
 
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     const { projectId, participantId } = await context.params;
+    const workspaceId = String(body?.workspaceId ?? "").trim();
+    if (!workspaceId) {
+      throw new HttpError(400, "workspace_required", "Project workspace is required.");
+    }
+    await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      requestedWorkspaceId: workspaceId,
+    });
     const result = await dependencies.createProjectProfileConsentRequest({
       supabase,
       tenantId,
       userId: user.id,
       projectId,
+      workspaceId,
       participantId,
       consentTemplateId: typeof body?.consentTemplateId === "string" ? body.consentTemplateId : null,
       idempotencyKey,

@@ -26,10 +26,12 @@ import { ensureAssetFaceMaterialization } from "../src/lib/matching/face-materia
 import { ensureMaterializedFaceCompare } from "../src/lib/matching/materialized-face-compare";
 import { getProjectMatchingProgress } from "../src/lib/matching/project-matching-progress";
 import { runAutoMatchWorker } from "../src/lib/matching/auto-match-worker";
+import { getDefaultProjectWorkspaceId } from "./helpers/supabase-test-client";
 
 type ProjectContext = {
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   userId: string;
   consentTemplateId: string;
 };
@@ -155,6 +157,7 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     status: "active",
   }).select("id").single();
   assertNoError(projectError, "insert project");
+  const workspaceId = await getDefaultProjectWorkspaceId(supabase, tenant.id, project.id);
 
   const templateKey = `feature029-template-${randomUUID()}`;
   const { data: template, error: templateError } = await supabase.from("consent_templates").insert({
@@ -171,6 +174,7 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
   return {
     tenantId: tenant.id,
     projectId: project.id,
+    workspaceId,
     userId,
     consentTemplateId: template.id,
   };
@@ -183,6 +187,7 @@ async function createInviteToken(supabase: SupabaseClient, context: ProjectConte
   const { error } = await supabase.from("subject_invites").insert({
     tenant_id: context.tenantId,
     project_id: context.projectId,
+    workspace_id: context.workspaceId,
     created_by: context.userId,
     token_hash: tokenHash,
     status: "active",
@@ -205,6 +210,7 @@ async function createAsset(
   const { data, error } = await supabase.from("assets").insert({
     tenant_id: context.tenantId,
     project_id: context.projectId,
+    workspace_id: context.workspaceId,
     created_by: context.userId,
     storage_bucket: "project-assets",
     storage_path: `tenant/${context.tenantId}/project/${context.projectId}/asset/${randomUUID()}/test.jpg`,
@@ -492,6 +498,7 @@ async function replaceConsentHeadshot(
       consent_id: consentId,
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       link_source: "manual",
       match_confidence: null,
       matched_at: null,
@@ -509,6 +516,7 @@ async function enqueueHeadshotReadyWithBoundary(context: ProjectContext, consent
   await enqueueConsentHeadshotReadyJob({
     tenantId: context.tenantId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
     consentId,
     headshotAssetId,
     payload: {
@@ -595,6 +603,7 @@ test("photo-side bounded continuation reaches all in-boundary consent headshots 
     await enqueuePhotoUploadedJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       assetId: photoAssetId,
       payload: {
         source: "feature029_photo_multibatch",
@@ -650,6 +659,7 @@ test("headshot-side bounded continuation reaches all in-boundary photos across m
     await enqueueConsentHeadshotReadyJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       headshotAssetId: consent.headshotAssetId,
       payload: {
@@ -707,6 +717,7 @@ test("continuation batches are crash-safe and recover without duplicate compare 
     await enqueueConsentHeadshotReadyJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       headshotAssetId: consent.headshotAssetId,
       payload: {
@@ -783,6 +794,7 @@ test("headshot replacement supersedes the old continuation and creates a new val
     await enqueueConsentHeadshotReadyJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       headshotAssetId: consent.headshotAssetId,
       payload: {
@@ -804,6 +816,7 @@ test("headshot replacement supersedes the old continuation and creates a new val
     await enqueueConsentHeadshotReadyJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       headshotAssetId: replacementHeadshotAssetId,
       payload: {
@@ -862,6 +875,7 @@ test("revoked consent blocks canonical apply for already-enqueued compare work",
     await enqueueCompareMaterializedPairJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       assetId: photoAssetId,
       headshotMaterializationId: headshotMaterialization!.materialization.id,
@@ -935,6 +949,7 @@ test("progress stays active while continuations are still draining after all pho
     await enqueueConsentHeadshotReadyJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       headshotAssetId: consent.headshotAssetId,
       payload: {
@@ -950,7 +965,7 @@ test("progress stays active while continuations are still draining after all pho
     await runWorkerOnce(matcher, 2);
     await runWorkerOnce(matcher, 2);
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 4);
     assert.equal(progress.processedImages, 4);
     assert.equal(progress.isMatchingInProgress, true);
@@ -1068,7 +1083,12 @@ test("continuations retry mid-batch enqueue failures past the old threshold with
       );
     }
 
-    const degradedProgress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const degradedProgress = await getProjectMatchingProgress(
+      admin,
+      context.tenantId,
+      context.projectId,
+      context.workspaceId,
+    );
     assert.equal(degradedProgress.isMatchingInProgress, true);
     assert.equal(degradedProgress.hasDegradedMatchingState, true);
 
@@ -1329,6 +1349,7 @@ test("terminal deduped compare jobs are requeued instead of silently skipping mi
     const compareJob = await enqueueCompareMaterializedPairJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       consentId: consent.consentId,
       assetId: photoAssetId,
       headshotMaterializationId: headshotMaterialization!.materialization.id,
@@ -1404,6 +1425,7 @@ test("terminal deduped materialize jobs are requeued instead of silently skippin
     const materializeJob = await enqueueMaterializeAssetFacesJob({
       tenantId: context.tenantId,
       projectId: context.projectId,
+      workspaceId: context.workspaceId,
       assetId: photoAssetId,
       materializerVersion: getAutoMatchMaterializerVersion(),
       payload: {
@@ -1512,7 +1534,7 @@ test("nonretryable continuation invariants dead-letter and surface degraded prog
     assert.equal(continuation.attempt_count, 1);
     assert.equal(continuation.last_error_code, "feature030_nonretryable_invariant");
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.isMatchingInProgress, false);
     assert.equal(progress.hasDegradedMatchingState, true);
   } finally {

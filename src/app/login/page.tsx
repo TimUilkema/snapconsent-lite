@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 type LoginPageProps = {
   searchParams: Promise<{
     error?: string;
+    next?: string;
   }>;
 };
 
@@ -24,10 +25,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   const resolvedSearchParams = await searchParams;
   const errorCode = resolvedSearchParams.error;
+  const next = resolvedSearchParams.next;
   const errorMessage = errorCode
     ? ({
         invalid_credentials: t("errors.invalidCredentials"),
         invalid_input: t("errors.invalidInput"),
+        account_exists: t("errors.accountExists"),
+        weak_password: t("errors.weakPassword"),
+        sign_up_failed: t("errors.signUpFailed"),
       }[errorCode] ?? t("errors.fallback"))
     : null;
 
@@ -47,6 +52,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         ) : null}
 
         <form action="/auth/login" method="post" className="mt-6 space-y-4">
+          {typeof next === "string" && next.startsWith("/") ? <input type="hidden" name="next" value={next} /> : null}
           <label className="block text-sm">
             <span className="mb-1 block font-medium">{t("emailLabel")}</span>
             <input

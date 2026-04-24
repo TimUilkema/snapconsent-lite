@@ -11,6 +11,7 @@ type QueueProjectAssetPostFinalizeProcessingInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
   assetType: "photo" | "headshot" | "video";
   consentIds: string[];
@@ -64,16 +65,20 @@ export async function queueProjectAssetPostFinalizeProcessing(
       matchingSupabase,
       input.tenantId,
       input.projectId,
+      input.workspaceId ?? null,
     );
     const recurringBoundary = await getCurrentProjectRecurringSourceBoundary(matchingSupabase, {
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId ?? null,
     });
     await enqueuePhotoUploadedJob({
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId ?? null,
       assetId: input.assetId,
       payload: {
+        workspaceId: input.workspaceId ?? null,
         source: input.source,
         consent_ids: input.consentIds,
         boundarySnapshotAt: boundary.boundarySnapshotAt,

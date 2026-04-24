@@ -1,5 +1,6 @@
 import { prepareProjectAssetBatch } from "@/lib/assets/prepare-project-asset-batch";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import type { ProjectUploadPrepareItemInput } from "@/lib/uploads/project-upload-types";
@@ -11,6 +12,7 @@ type RouteContext = {
 };
 
 type PrepareBatchBody = {
+  workspaceId?: string;
   assetType?: string;
   duplicatePolicy?: string;
   items?: ProjectUploadPrepareItemInput[];
@@ -51,18 +53,25 @@ export async function POST(request: Request, context: RouteContext) {
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const { projectId } = await context.params;
     const body = (await request.json().catch(() => null)) as PrepareBatchBody | null;
     if (!body) {
       throw new HttpError(400, "invalid_body", "Invalid request body.");
     }
+    const { workspace } = await requireWorkspaceCaptureMutationAccessForRequest({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      requestedWorkspaceId: body.workspaceId,
+    });
     const assetType = normalizeAssetType(body.assetType);
 
     const results = await prepareProjectAssetBatch({
       supabase,
       tenantId,
       projectId,
+      workspaceId: workspace.id,
       userId: user.id,
       assetType,
       duplicatePolicy: parseDuplicatePolicy(body.duplicatePolicy),

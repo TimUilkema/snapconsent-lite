@@ -38,6 +38,7 @@ type MatchingScopeInput = {
   tenantId: string;
   projectId: string;
   consentId: string;
+  workspaceId?: string | null;
   actorUserId: string;
   matcher?: AutoMatcher;
 };
@@ -127,6 +128,7 @@ type FaceReviewSessionRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string | null;
   consent_id: string;
   created_by: string;
   selection_hash: string;
@@ -143,6 +145,7 @@ type FaceReviewSessionItemRow = {
   session_id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string | null;
   consent_id: string;
   asset_id: string;
   position: number;
@@ -308,6 +311,7 @@ async function loadReviewableAssetsMap(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -315,7 +319,7 @@ async function loadReviewableAssetsMap(
   }
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("assets")
       .select(
         "id, tenant_id, project_id, asset_type, original_filename, status, uploaded_at, archived_at, storage_bucket, storage_path, created_at",
@@ -323,6 +327,12 @@ async function loadReviewableAssetsMap(
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "review_asset_lookup_failed", "Unable to load review assets.");
@@ -338,6 +348,7 @@ async function loadCurrentPhotoMaterializationMap(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -346,7 +357,7 @@ async function loadCurrentPhotoMaterializationMap(
 
   const version = getAutoMatchMaterializerVersion();
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("asset_face_materializations")
       .select(
         "id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at",
@@ -356,6 +367,12 @@ async function loadCurrentPhotoMaterializationMap(
       .eq("asset_type", "photo")
       .eq("materializer_version", version)
       .in("asset_id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "photo_materialization_lookup_failed", "Unable to load photo materializations.");
@@ -409,6 +426,7 @@ async function loadCurrentFaceLinksForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -416,14 +434,20 @@ async function loadCurrentFaceLinksForAssets(
   }
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("asset_face_consent_links")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, consent_id, tenant_id, project_id, workspace_id, link_source, match_confidence, matched_at, reviewed_at, reviewed_by, matcher_version, created_at, updated_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("asset_id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "photo_face_link_lookup_failed", "Unable to load current photo face links.");
@@ -439,6 +463,7 @@ async function loadCurrentFaceSuppressionsForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -446,14 +471,20 @@ async function loadCurrentFaceSuppressionsForAssets(
   }
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("asset_face_assignee_link_suppressions")
       .select(
-        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, tenant_id, project_id, reason, created_at, created_by",
+        "asset_face_id, asset_materialization_id, asset_id, project_face_assignee_id, tenant_id, project_id, workspace_id, reason, created_at, created_by",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("asset_id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "photo_face_suppression_lookup_failed", "Unable to load face suppressions.");
@@ -469,6 +500,7 @@ async function loadManualFallbacksForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -478,7 +510,7 @@ async function loadManualFallbacksForAssets(
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
     const { data, error } = await supabase
       .from("asset_consent_manual_photo_fallbacks")
-      .select("asset_id, consent_id, tenant_id, project_id, created_by, created_at, updated_at")
+      .select("asset_id, consent_id, tenant_id, project_id, workspace_id, created_by, created_at, updated_at")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("asset_id", assetIdChunk);
@@ -495,7 +527,7 @@ async function loadManualFallbacksForAssets(
 
 async function expireStaleOpenSessionsForConsent(input: MatchingScopeInput) {
   const nowIso = new Date().toISOString();
-  const { error } = await input.supabase
+  let query = input.supabase
     .from("face_review_sessions")
     .update({
       status: "expired",
@@ -508,6 +540,12 @@ async function expireStaleOpenSessionsForConsent(input: MatchingScopeInput) {
     .eq("status", "open")
     .lt("expires_at", nowIso);
 
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { error } = await query;
+
   if (error) {
     throw new HttpError(500, "review_session_write_failed", "Unable to update expired review sessions.");
   }
@@ -515,10 +553,10 @@ async function expireStaleOpenSessionsForConsent(input: MatchingScopeInput) {
 
 async function loadOpenSessionForConsent(input: MatchingScopeInput) {
   const nowIso = new Date().toISOString();
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("face_review_sessions")
     .select(
-      "id, tenant_id, project_id, consent_id, created_by, selection_hash, status, selected_asset_count, expires_at, last_accessed_at, created_at, updated_at",
+      "id, tenant_id, project_id, workspace_id, consent_id, created_by, selection_hash, status, selected_asset_count, expires_at, last_accessed_at, created_at, updated_at",
     )
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
@@ -526,7 +564,14 @@ async function loadOpenSessionForConsent(input: MatchingScopeInput) {
     .eq("created_by", input.actorUserId)
     .eq("status", "open")
     .gte("expires_at", nowIso)
-    .maybeSingle();
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "review_session_lookup_failed", "Unable to load the current review session.");
@@ -552,6 +597,10 @@ async function cancelOtherOpenSessions(
     .eq("created_by", input.actorUserId)
     .eq("status", "open");
 
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
   if (keepSessionId) {
     query = query.neq("id", keepSessionId);
   }
@@ -563,17 +612,22 @@ async function cancelOtherOpenSessions(
 }
 
 async function loadSessionById(input: FaceReviewSessionLookupInput) {
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("face_review_sessions")
     .select(
-      "id, tenant_id, project_id, consent_id, created_by, selection_hash, status, selected_asset_count, expires_at, last_accessed_at, created_at, updated_at",
+      "id, tenant_id, project_id, workspace_id, consent_id, created_by, selection_hash, status, selected_asset_count, expires_at, last_accessed_at, created_at, updated_at",
     )
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("consent_id", input.consentId)
     .eq("created_by", input.actorUserId)
-    .eq("id", input.sessionId)
-    .maybeSingle();
+    .eq("id", input.sessionId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "review_session_lookup_failed", "Unable to load the review session.");
@@ -591,19 +645,25 @@ async function loadSessionItems(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   consentId: string,
   sessionId: string,
 ) {
-  const { data, error } = await supabase
+  let query = supabase
     .from("face_review_session_items")
     .select(
-      "id, session_id, tenant_id, project_id, consent_id, asset_id, position, status, completion_kind, block_code, prepared_materialization_id, selected_asset_face_id, detected_face_count, last_reconciled_at, created_at, updated_at",
+      "id, session_id, tenant_id, project_id, workspace_id, consent_id, asset_id, position, status, completion_kind, block_code, prepared_materialization_id, selected_asset_face_id, detected_face_count, last_reconciled_at, created_at, updated_at",
     )
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("consent_id", consentId)
-    .eq("session_id", sessionId)
-    .order("position", { ascending: true });
+    .eq("session_id", sessionId);
+
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
+  }
+
+  const { data, error } = await query.order("position", { ascending: true });
 
   if (error) {
     throw new HttpError(500, "review_session_lookup_failed", "Unable to load review session items.");
@@ -630,6 +690,7 @@ async function enqueueBulkMaterialization(
   return enqueueMaterializeAssetFacesJob({
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assetId: input.assetId,
     materializerVersion: getAutoMatchMaterializerVersion(),
     mode: "repair_requeue",
@@ -666,6 +727,7 @@ async function attemptDirectReviewSessionMaterialization(
       matcher: input.matcher ?? getAutoMatcher(),
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetId: input.assetId,
       materializerVersion: getAutoMatchMaterializerVersion(),
       includeFaces: true,
@@ -695,7 +757,7 @@ async function upsertSessionItem(
   row: Partial<FaceReviewSessionItemRow> &
     Pick<
       FaceReviewSessionItemRow,
-      "id" | "session_id" | "tenant_id" | "project_id" | "consent_id" | "asset_id" | "position" | "status"
+      "id" | "session_id" | "tenant_id" | "project_id" | "workspace_id" | "consent_id" | "asset_id" | "position" | "status"
     >,
 ) {
   const nowIso = new Date().toISOString();
@@ -775,6 +837,7 @@ async function classifyAssetForSession(
       tenantId: input.tenantId,
       projectId: input.projectId,
       consentId: input.consentId,
+      workspaceId: input.workspaceId,
       actorUserId: input.actorUserId,
       assetId: input.assetId,
       mode: "asset_fallback",
@@ -796,6 +859,7 @@ async function classifyAssetForSession(
       tenantId: input.tenantId,
       projectId: input.projectId,
       consentId: input.consentId,
+      workspaceId: input.workspaceId,
       actorUserId: input.actorUserId,
       assetId: input.assetId,
       mode: "face",
@@ -896,7 +960,14 @@ async function setSessionStatus(
 }
 
 async function reconcileSessionState(input: MatchingScopeInput & { session: FaceReviewSessionRow }) {
-  const items = await loadSessionItems(input.supabase, input.tenantId, input.projectId, input.consentId, input.session.id);
+  const items = await loadSessionItems(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    input.consentId,
+    input.session.id,
+  );
   const rematerializedItemIds = new Set<string>();
   const consent = await assertConsentInProject(input);
   let remainingDirectMaterializationBudget = MAX_DIRECT_MATERIALIZATIONS_PER_SESSION_READ;
@@ -925,7 +996,13 @@ async function reconcileSessionState(input: MatchingScopeInput & { session: Face
       continue;
     }
 
-    const assetMap = await loadReviewableAssetsMap(input.supabase, input.tenantId, input.projectId, [item.asset_id]);
+    const assetMap = await loadReviewableAssetsMap(
+      input.supabase,
+      input.tenantId,
+      input.projectId,
+      input.workspaceId,
+      [item.asset_id],
+    );
     const asset = assetMap.get(item.asset_id) ?? null;
     const current = await loadCurrentAssetFaceMaterialization(
       input.supabase,
@@ -1062,6 +1139,7 @@ async function reconcileSessionState(input: MatchingScopeInput & { session: Face
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.consentId,
     input.session.id,
   );
@@ -1096,20 +1174,45 @@ async function buildSessionReadModel(
   },
 ) {
   const assetIds = Array.from(new Set(input.items.map((item) => item.asset_id)));
-  const assets = await loadReviewableAssetsMap(input.supabase, input.tenantId, input.projectId, assetIds);
-  const materializations = await loadCurrentPhotoMaterializationMap(input.supabase, input.tenantId, input.projectId, assetIds);
+  const assets = await loadReviewableAssetsMap(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    assetIds,
+  );
+  const materializations = await loadCurrentPhotoMaterializationMap(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    assetIds,
+  );
   const facesByMaterializationId = await loadMaterializationFacesMap(
     input.supabase,
     Array.from(new Set(Array.from(materializations.values()).map((row) => row.id))),
   );
-  const faceLinks = await loadCurrentFaceLinksForAssets(input.supabase, input.tenantId, input.projectId, assetIds);
+  const faceLinks = await loadCurrentFaceLinksForAssets(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    assetIds,
+  );
   const faceSuppressions = await loadCurrentFaceSuppressionsForAssets(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     assetIds,
   );
-  const fallbacks = await loadManualFallbacksForAssets(input.supabase, input.tenantId, input.projectId, assetIds);
+  const fallbacks = await loadManualFallbacksForAssets(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    assetIds,
+  );
   const faceIds = Array.from(new Set(faceLinks.map((row) => row.asset_face_id)));
   input.items.forEach((item) => {
     const materialization = materializations.get(item.asset_id);
@@ -1134,6 +1237,7 @@ async function buildSessionReadModel(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assigneeIds: Array.from(new Set(faceSuppressions.map((row) => row.project_face_assignee_id))),
   });
   const currentMaterializationIdByAssetId = new Map(
@@ -1144,6 +1248,7 @@ async function buildSessionReadModel(
     tenantId: input.tenantId,
     projectId: input.projectId,
     consentId: input.consentId,
+    workspaceId: input.workspaceId,
     assetIds,
     currentMaterializationIdByAssetId,
   });
@@ -1240,6 +1345,7 @@ async function createSessionAndItems(
     id: sessionId,
     tenant_id: input.tenantId,
     project_id: input.projectId,
+    workspace_id: input.workspaceId ?? null,
     consent_id: input.consentId,
     created_by: input.actorUserId,
     selection_hash: input.selectionHash,
@@ -1255,11 +1361,18 @@ async function createSessionAndItems(
     throw new HttpError(500, "review_session_write_failed", "Unable to create the review session.");
   }
 
-  const assetMap = await loadReviewableAssetsMap(input.supabase, input.tenantId, input.projectId, input.assetIds);
+  const assetMap = await loadReviewableAssetsMap(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId,
+    input.assetIds,
+  );
   const materializations = await loadCurrentPhotoMaterializationMap(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.assetIds,
   );
 
@@ -1278,6 +1391,7 @@ async function createSessionAndItems(
       session_id: sessionId,
       tenant_id: input.tenantId,
       project_id: input.projectId,
+      workspace_id: input.workspaceId ?? null,
       consent_id: input.consentId,
       asset_id: assetId,
       position,
@@ -1375,7 +1489,14 @@ export async function getFaceReviewSession(input: FaceReviewSessionLookupInput):
         })
       : {
           session,
-          items: await loadSessionItems(input.supabase, input.tenantId, input.projectId, input.consentId, session.id),
+          items: await loadSessionItems(
+            input.supabase,
+            input.tenantId,
+            input.projectId,
+            input.workspaceId,
+            input.consentId,
+            session.id,
+          ),
           rematerializedItemIds: new Set<string>(),
         };
 
@@ -1460,6 +1581,7 @@ export async function applyFaceReviewSessionItemAction(
       tenantId: input.tenantId,
       projectId: input.projectId,
       consentId: input.consentId,
+      workspaceId: input.workspaceId,
       actorUserId: input.actorUserId,
       assetId: targetItem.assetId,
       assetFaceId: input.assetFaceId ?? null,
@@ -1471,6 +1593,7 @@ export async function applyFaceReviewSessionItemAction(
       tenantId: input.tenantId,
       projectId: input.projectId,
       consentId: input.consentId,
+      workspaceId: input.workspaceId,
       actorUserId: input.actorUserId,
       assetId: targetItem.assetId,
       assetFaceId: input.assetFaceId ?? null,

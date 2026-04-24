@@ -3,6 +3,11 @@ import { headers } from "next/headers";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { serializeFaceReviewSessionResponse } from "@/lib/matching/face-review-response";
 import { getFaceReviewSession } from "@/lib/matching/face-review-sessions";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -29,13 +34,48 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, consentId, sessionId } = await context.params;
+  const consentRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  await requireWorkspaceReviewAccessForRow({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  const sessionRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "face_review_sessions",
+    rowId: sessionId,
+    notFoundCode: "review_session_not_found",
+    notFoundMessage: "Review session not found.",
+  });
+  assertWorkspaceScopedRowMatchesWorkspace(
+    sessionRow,
+    consentRow.workspace_id,
+    "review_session_not_found",
+    "Review session not found.",
+  );
+
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     consentId,
+    workspaceId: consentRow.workspace_id,
     sessionId,
     userId: user.id,
   };
@@ -43,12 +83,13 @@ async function requireAuthAndScope(context: RouteContext) {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId, sessionId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId, sessionId, userId } = await requireAuthAndScope(context);
     const readModel = await getFaceReviewSession({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId,
       sessionId,
       actorUserId: userId,
     });

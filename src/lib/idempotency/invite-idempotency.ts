@@ -14,6 +14,7 @@ type CreateInviteInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   userId: string;
   idempotencyKey: string;
   consentTemplateId: string;
@@ -26,7 +27,10 @@ function getExpiryDateIso() {
 }
 
 export async function createInviteWithIdempotency(input: CreateInviteInput) {
-  const operation = `create_project_invite:${input.projectId}`;
+  const workspaceId = input.workspaceId?.trim() || null;
+  const operation = workspaceId
+    ? `create_project_invite:${input.projectId}:${workspaceId}`
+    : `create_project_invite:${input.projectId}`;
 
   const { data: existingIdempotency, error: idempotencyReadError } = await input.supabase
     .from("idempotency_keys")
@@ -82,22 +86,21 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
 
   const expiresAt = getExpiryDateIso();
   const tokenHash = hashPublicToken(inviteToken);
+  const inviteInsert = {
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    created_by: input.userId,
+    token_hash: tokenHash,
+    status: "active",
+    expires_at: expiresAt,
+    max_uses: 1,
+    consent_template_id: input.consentTemplateId,
+  };
 
   const { data: invite, error: inviteError } = await input.supabase
     .from("subject_invites")
-    .upsert(
-      {
-        tenant_id: input.tenantId,
-        project_id: input.projectId,
-        created_by: input.userId,
-        token_hash: tokenHash,
-        status: "active",
-        expires_at: expiresAt,
-        max_uses: 1,
-        consent_template_id: input.consentTemplateId,
-      },
-      { onConflict: "token_hash" },
-    )
+    .upsert(inviteInsert, { onConflict: "token_hash" })
     .select("id, expires_at")
     .single();
 

@@ -3,8 +3,10 @@ import { validateConsentBaseFields } from "@/lib/consent/validate-consent-base-f
 import { sendRecurringConsentReceiptEmail } from "@/lib/email/send-receipt";
 import { HttpError } from "@/lib/http/errors";
 import { redirectRelative } from "@/lib/http/redirect-relative";
+import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
 import {
   markRecurringConsentReceiptSent,
+  resolvePublicRecurringConsentRequestScope,
   submitRecurringProfileConsent,
 } from "@/lib/recurring-consent/public-recurring-consent";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -79,6 +81,15 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     const supabase = await createClient();
+    const requestScope = await resolvePublicRecurringConsentRequestScope(token);
+    if (requestScope?.consentKind === "project" && requestScope.projectId && requestScope.workspaceId) {
+      await assertWorkspacePublicSubmissionAllowed(
+        createAdminClient(),
+        requestScope.tenantId,
+        requestScope.projectId,
+        requestScope.workspaceId,
+      );
+    }
     const consent = await submitRecurringProfileConsent({
       supabase,
       token,
@@ -141,6 +152,10 @@ export async function POST(request: Request, context: RouteContext) {
       }
 
       if (error.status === 409) {
+        if (error.code === "workspace_not_accepting_submissions" || error.code === "project_finalized") {
+          return redirectWithStatus(request, token, { error: "unavailable" });
+        }
+
         return redirectWithStatus(request, token, { duplicate: "1" });
       }
     }

@@ -1,5 +1,6 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { blockAssetFace, clearBlockedAssetFace } from "@/lib/matching/photo-face-linking";
+import { loadWorkspaceScopedRow, requireWorkspaceReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -26,25 +27,46 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, assetId, assetFaceId } = await context.params;
+  const assetRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "assets",
+    rowId: assetId,
+    notFoundCode: "asset_not_found",
+    notFoundMessage: "Asset not found.",
+  });
+  await requireWorkspaceReviewMutationAccessForRow({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectId,
+    table: "assets",
+    rowId: assetId,
+    notFoundCode: "asset_not_found",
+    notFoundMessage: "Asset not found.",
+  });
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     assetId,
     assetFaceId,
+    workspaceId: assetRow.workspace_id,
     userId: user.id,
   };
 }
 
 export async function POST(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, assetFaceId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, assetFaceId, workspaceId, userId } =
+      await requireAuthAndScope(context);
     const result = await blockAssetFace({
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       assetFaceId,
       actorUserId: userId,
@@ -68,11 +90,13 @@ export async function POST(_request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, assetFaceId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, assetFaceId, workspaceId, userId } =
+      await requireAuthAndScope(context);
     const result = await clearBlockedAssetFace({
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       assetFaceId,
       actorUserId: userId,

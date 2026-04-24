@@ -46,6 +46,7 @@ type MatchingScopeInput = {
   tenantId: string;
   projectId: string;
   assetId: string;
+  workspaceId?: string | null;
   requestHostHeader?: string | null;
 };
 
@@ -327,13 +328,18 @@ function summarizeStructuredSnapshot(snapshot: StructuredFieldsSnapshot | null) 
 }
 
 async function requirePhotoAsset(input: MatchingScopeInput) {
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("assets")
     .select("id, status, asset_type, archived_at")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
-    .eq("id", input.assetId)
-    .maybeSingle();
+    .eq("id", input.assetId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "asset_lookup_failed", "Unable to load asset preview details.");
@@ -348,13 +354,18 @@ async function requirePhotoAsset(input: MatchingScopeInput) {
 }
 
 async function requirePreviewableAsset(input: MatchingScopeInput) {
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("assets")
     .select("id, status, asset_type, archived_at")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
-    .eq("id", input.assetId)
-    .maybeSingle();
+    .eq("id", input.assetId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "asset_lookup_failed", "Unable to load asset preview details.");
@@ -377,18 +388,25 @@ async function loadConsentSummaryMap(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   consentIds: string[],
 ) {
   if (consentIds.length === 0) {
     return new Map<string, ConsentRow>();
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("consents")
     .select("id, signed_at, consent_version, structured_fields_snapshot, face_match_opt_in, revoked_at, subjects(email, full_name)")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .in("id", consentIds);
+
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "consent_lookup_failed", "Unable to load consent preview details.");
@@ -409,11 +427,17 @@ async function loadHeadshotThumbnailMap(input: MatchingScopeInput, consentIds: s
     };
   }
 
-  const currentHeadshots = await loadCurrentProjectConsentHeadshots(input.supabase, input.tenantId, input.projectId, {
+  const currentHeadshots = await loadCurrentProjectConsentHeadshots(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    input.workspaceId ?? undefined,
+    {
     optInOnly: false,
     notRevokedOnly: false,
     limit: null,
-  });
+    },
+  );
   const headshotAssetIdByConsentId = new Map(
     currentHeadshots
       .filter((headshot) => consentIds.includes(headshot.consentId))
@@ -428,7 +452,7 @@ async function loadHeadshotThumbnailMap(input: MatchingScopeInput, consentIds: s
     };
   }
 
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("assets")
     .select("id, status, storage_bucket, storage_path")
     .eq("tenant_id", input.tenantId)
@@ -437,6 +461,12 @@ async function loadHeadshotThumbnailMap(input: MatchingScopeInput, consentIds: s
     .eq("status", "uploaded")
     .is("archived_at", null)
     .in("id", headshotAssetIds);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "headshot_lookup_failed", "Unable to load consent headshots.");
@@ -546,14 +576,21 @@ async function loadProjectRecurringParticipants(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
 }) {
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("project_profile_participants")
     .select("id, recurring_profile_id")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "preview_candidate_lookup_failed", "Unable to load recurring preview details.");
@@ -566,6 +603,7 @@ async function loadCurrentHeadshotMaterializationIds(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   consentIds: string[],
 ) {
   if (consentIds.length === 0) {
@@ -574,12 +612,18 @@ async function loadCurrentHeadshotMaterializationIds(
 
   const nowIso = new Date().toISOString();
   const headshotLinks = await runChunkedRead(consentIds, async (consentIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("asset_consent_links")
       .select("asset_id, consent_id")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("consent_id", consentIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "headshot_link_lookup_failed", "Unable to load consent headshots.");
@@ -594,7 +638,7 @@ async function loadCurrentHeadshotMaterializationIds(
   }
 
   const headshots = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("assets")
       .select("id, uploaded_at")
       .eq("tenant_id", tenantId)
@@ -604,6 +648,12 @@ async function loadCurrentHeadshotMaterializationIds(
       .is("archived_at", null)
       .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`)
       .in("id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "headshot_asset_lookup_failed", "Unable to validate consent headshots.");
@@ -856,6 +906,7 @@ export async function getAssetReviewSummaries(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetIds: string[];
 }): Promise<Map<string, AssetReviewSummary>> {
   const uniqueAssetIds = Array.from(new Set(input.assetIds));
@@ -868,7 +919,7 @@ export async function getAssetReviewSummaries(input: {
   }
 
   const materializationRows = await runChunkedRead(uniqueAssetIds, async (assetIdChunk) => {
-    const { data, error } = await input.supabase
+    let query = input.supabase
       .from("asset_face_materializations")
       .select("id, asset_id, face_count, materialized_at")
       .eq("tenant_id", input.tenantId)
@@ -876,6 +927,12 @@ export async function getAssetReviewSummaries(input: {
       .eq("materializer_version", getAutoMatchMaterializerVersion())
       .in("asset_id", assetIdChunk)
       .order("materialized_at", { ascending: false });
+
+    if (input.workspaceId) {
+      query = query.eq("workspace_id", input.workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "asset_review_summary_lookup_failed", "Unable to load asset face materializations.");
@@ -922,6 +979,7 @@ export async function getAssetReviewSummaries(input: {
       input.projectId,
       uniqueAssetIds,
       currentMaterializationIdByAssetId,
+      input.workspaceId,
     ),
     loadCurrentBlockedFacesForAssets(
       input.supabase,
@@ -929,11 +987,13 @@ export async function getAssetReviewSummaries(input: {
       input.projectId,
       uniqueAssetIds,
       currentMaterializationIdByAssetId,
+      input.workspaceId,
     ),
     listLinkedFaceOverlaysForAssetIds({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetIds: uniqueAssetIds,
     }),
   ]);
@@ -1076,6 +1136,7 @@ async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assetId: input.assetId,
   });
   const consentIds = Array.from(
@@ -1103,21 +1164,24 @@ async function loadAssetPreviewWholeAssetData(input: MatchingScopeInput) {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assigneeIds: rows.map((link) => link.project_face_assignee_id),
     }),
-    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, consentIds),
+    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, input.workspaceId, consentIds),
     loadHeadshotThumbnailMap(input, consentIds),
     loadRecurringHeadshotThumbnailMap(input, recurringProfileIds),
     loadProjectConsentScopeStatesByConsentIds({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds,
     }),
     loadProjectConsentScopeStatesByParticipantIds({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       participantIds: recurringParticipantIds,
     }),
   ]);
@@ -1263,7 +1327,7 @@ export async function getAssetPreviewFaces(
         ...currentWholeAssetLinks.map((link) => link.project_face_assignee_id),
       ],
     }),
-    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, exactConsentIds),
+    loadConsentSummaryMap(input.supabase, input.tenantId, input.projectId, input.workspaceId, exactConsentIds),
     loadFaceImageDerivativesForFaceIds(input.supabase, input.tenantId, input.projectId, faceIds),
     loadHeadshotThumbnailMap(input, exactConsentIds),
     loadRecurringHeadshotThumbnailMap(input, exactRecurringProfileIds),
@@ -1432,6 +1496,7 @@ export async function getAssetPreviewFaceCandidates(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     compareFaceScoreConsentIds,
   );
   const compareFaceScoreRowsByConsentId = new Map(
@@ -1466,6 +1531,7 @@ export async function getAssetPreviewFaceCandidates(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     compareConsentIds,
   );
   const compareRowsByConsentId = new Map(

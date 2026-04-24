@@ -51,6 +51,7 @@ test("project consent upgrade request route rejects unauthenticated requests", a
     {
       createClient: async () => createUnauthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async () => undefined,
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -83,6 +84,7 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async () => undefined,
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -113,6 +115,7 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async () => undefined,
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -141,6 +144,13 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async ({ client, tenantId, userId, projectId, consentId }) => {
+        assert.equal(tenantId, "tenant-1");
+        assert.equal(userId, "user-1");
+        assert.equal(projectId, "project-1");
+        assert.equal(consentId, "consent-1");
+        assert.ok(client);
+      },
       createProjectConsentUpgradeRequest: async (input) => {
         assert.equal(input.tenantId, "tenant-1");
         assert.equal(input.userId, "user-1");
@@ -197,6 +207,7 @@ test("project consent upgrade request route returns service-shaped errors", asyn
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async () => undefined,
       createProjectConsentUpgradeRequest: async () => {
         throw new HttpError(
           409,
@@ -211,5 +222,46 @@ test("project consent upgrade request route returns service-shaped errors", asyn
   assert.deepEqual(await response.json(), {
     error: "consent_upgrade_template_not_newer",
     message: "Select a newer published version before requesting updated consent.",
+  });
+});
+
+test("project consent upgrade route rejects users without review permission", async () => {
+  const response = await handleCreateProjectConsentUpgradeRequestPost(
+    new Request("http://localhost/api/projects/project-1/consents/consent-1/upgrade-request", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "feature067-upgrade-forbidden",
+      },
+      body: JSON.stringify({
+        targetTemplateId: "template-2",
+      }),
+    }),
+    {
+      params: Promise.resolve({
+        projectId: "project-1",
+        consentId: "consent-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-photographer") as never,
+      resolveTenantId: async () => "tenant-1",
+      requireWorkspaceReviewMutationAccessForRow: async () => {
+        throw new HttpError(
+          403,
+          "project_review_forbidden",
+          "Only workspace owners, admins, and reviewers can perform review actions.",
+        );
+      },
+      createProjectConsentUpgradeRequest: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: "project_review_forbidden",
+    message: "Only workspace owners, admins, and reviewers can perform review actions.",
   });
 });

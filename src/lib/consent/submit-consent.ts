@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
-
 type ConsentSubmitInput = {
   supabase: SupabaseClient;
   token: string;
@@ -89,6 +88,56 @@ export async function submitConsent(input: ConsentSubmitInput): Promise<ConsentS
 
   if (!row) {
     throw new HttpError(500, "consent_submit_failed", "Unable to submit consent.");
+  }
+
+  if (!row.duplicate) {
+    let consentRow:
+      | {
+          id: string;
+          tenant_id: string;
+          project_id: string;
+          subject_id: string;
+          workspace_id?: string | null;
+        }
+      | null = null;
+
+    const consentLookup = await input.supabase
+      .from("consents")
+      .select("id, tenant_id, project_id, subject_id, workspace_id")
+      .eq("id", row.consent_id)
+      .maybeSingle();
+
+    if (consentLookup.error || !consentLookup.data) {
+      throw new HttpError(500, "consent_submit_failed", "Unable to submit consent.");
+    }
+
+    consentRow = consentLookup.data as typeof consentRow;
+    const workspaceId = String(consentRow.workspace_id ?? "").trim();
+    if (!workspaceId) {
+      throw new HttpError(500, "consent_submit_failed", "Unable to submit consent.");
+    }
+
+    const { error: subjectWorkspaceError } = await input.supabase
+      .from("subjects")
+      .update({ workspace_id: workspaceId })
+      .eq("tenant_id", consentRow.tenant_id)
+      .eq("project_id", consentRow.project_id)
+      .eq("id", consentRow.subject_id);
+
+    if (subjectWorkspaceError) {
+      throw new HttpError(500, "consent_submit_failed", "Unable to submit consent.");
+    }
+
+    const { error: linkWorkspaceError } = await input.supabase
+      .from("asset_consent_links")
+      .update({ workspace_id: workspaceId })
+      .eq("tenant_id", consentRow.tenant_id)
+      .eq("project_id", consentRow.project_id)
+      .eq("consent_id", row.consent_id);
+
+    if (linkWorkspaceError) {
+      throw new HttpError(500, "consent_submit_failed", "Unable to submit consent.");
+    }
   }
 
   return {

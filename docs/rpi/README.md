@@ -80,6 +80,24 @@ After implementation:
 - Ensure tenant isolation and security rules remain intact
 
 ---
+## Development data and migrations
+
+During feature development, this repo assumes a fresh local database is acceptable.
+
+- Prefer clean forward migrations over complex historical backfills when a feature changes schema shape.
+- It is acceptable for local testing to use `supabase db reset` and start from fresh seed/dev data.
+- Do not spend implementation time preserving arbitrary old local development rows unless the feature explicitly requires migration/backfill compatibility.
+- Still write migrations so a fresh database reset applies cleanly from scratch.
+- Still preserve production-safety where explicitly requested, but default RPI feature work may optimize for clean schema evolution and fresh local validation.
+
+## Implementation notes and comments
+
+During implementation, add concise code comments where they help preserve important product or security invariants.
+
+Comments should explain non-obvious decisions discovered during Research or Plan, especially around tenant scoping, workspace boundaries, permission checks, retry/idempotency, public-token safety, consent history, and matching/review rules.
+
+Do not over-comment obvious code. If the explanation is broad architectural context, keep it in the RPI documents instead of scattering it through code.
+
 
 # Naming Convention
 

@@ -62,6 +62,7 @@ type MatchingScopeInput = {
   tenantId: string;
   projectId: string;
   consentId: string;
+  workspaceId?: string | null;
   actorUserId?: string | null;
 };
 

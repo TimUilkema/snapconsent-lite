@@ -13,3 +13,7 @@ export function buildRecurringProfileConsentPath(token: string) {
 export function buildRecurringProfileRevokePath(token: string) {
   return `/rr/${token}`;
 }
+
+export function buildTenantMembershipInvitePath(token: string) {
+  return `/join/${token}`;
+}

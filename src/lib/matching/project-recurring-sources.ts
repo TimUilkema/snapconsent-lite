@@ -13,6 +13,7 @@ type ProjectProfileParticipantRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string | null;
   recurring_profile_id: string;
   created_at: string;
 };
@@ -121,7 +122,7 @@ async function loadProjectProfileParticipant(
 ) {
   const { data, error } = await supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("id", participantId)
@@ -145,7 +146,7 @@ async function loadProjectProfileParticipantsForProfile(
 ) {
   const { data, error } = await supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_at")
     .eq("tenant_id", tenantId)
     .eq("recurring_profile_id", profileId)
     .order("created_at", { ascending: true })
@@ -167,6 +168,7 @@ async function listProjectProfileParticipantsPage(
   input: {
     tenantId: string;
     projectId: string;
+    workspaceId?: string | null;
     limit: number;
     cursorCreatedAt?: string | null;
     cursorParticipantId?: string | null;
@@ -176,12 +178,16 @@ async function listProjectProfileParticipantsPage(
 ) {
   let query = supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_at")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .order("created_at", { ascending: true })
     .order("id", { ascending: true })
     .limit(Math.max(1, Math.min(input.limit * 4, 750)));
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
 
   if (input.cursorCreatedAt) {
     query = query.gte("created_at", input.cursorCreatedAt);
@@ -432,6 +438,7 @@ export async function getCurrentProjectRecurringSourceBoundary(
   input: {
     tenantId: string;
     projectId: string;
+    workspaceId?: string | null;
   },
 ): Promise<ProjectRecurringSourceBoundary> {
   const client = getInternalSupabaseClient(supabase);
@@ -444,6 +451,47 @@ export async function getCurrentProjectRecurringSourceBoundary(
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(250);
+
+  if (input.workspaceId) {
+    const { data: workspaceRows, error: workspaceError } = await client
+      .from("project_profile_participants")
+      .select("id, created_at")
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", input.projectId)
+      .eq("workspace_id", input.workspaceId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(250);
+
+    if (workspaceError) {
+      throw new HttpError(
+        500,
+        "project_profile_participant_lookup_failed",
+        "Unable to load project participants.",
+      );
+    }
+
+    for (const participant of ((workspaceRows ?? []) as Array<{ id: string; created_at: string }>)) {
+      const source = await resolveAutoEligibleProjectRecurringSource(client, {
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        projectProfileParticipantId: participant.id,
+      });
+      if (source && source.sourceUpdatedAt <= boundarySnapshotAt) {
+        return {
+          boundarySnapshotAt,
+          boundaryParticipantCreatedAt: source.participantCreatedAt,
+          boundaryProjectProfileParticipantId: source.projectProfileParticipantId,
+        };
+      }
+    }
+
+    return {
+      boundarySnapshotAt,
+      boundaryParticipantCreatedAt: null,
+      boundaryProjectProfileParticipantId: null,
+    };
+  }
 
   if (error) {
     throw new HttpError(
@@ -480,6 +528,7 @@ export async function listReadyProjectRecurringSourcesPage(
   input: {
     tenantId: string;
     projectId: string;
+    workspaceId?: string | null;
     boundarySnapshotAt: string;
     limit: number;
     cursorParticipantCreatedAt?: string | null;
@@ -499,6 +548,7 @@ export async function listReadyProjectRecurringSourcesPage(
     const candidates = await listProjectProfileParticipantsPage(client, {
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId ?? null,
       limit: Math.max(pageSize, input.limit * 3),
       cursorCreatedAt,
       cursorParticipantId,

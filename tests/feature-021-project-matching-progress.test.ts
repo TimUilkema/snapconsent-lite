@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
 import { createClient, type PostgrestError, type SupabaseClient } from "@supabase/supabase-js";
 
+import { submitConsent } from "../src/lib/consent/submit-consent";
 import { getAutoMatchMaterializerVersion } from "../src/lib/matching/auto-match-config";
 import { getProjectMatchingProgress } from "../src/lib/matching/project-matching-progress";
+import { getDefaultProjectWorkspaceId } from "./helpers/supabase-test-client";
 
 type ProjectContext = {
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   userId: string;
 };
 
@@ -156,10 +159,12 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     .select("id")
     .single();
   assertNoError(projectError, "insert project");
+  const workspaceId = await getDefaultProjectWorkspaceId(supabase, tenant.id, project.id);
 
   return {
     tenantId: tenant.id,
     projectId: project.id,
+    workspaceId,
     userId,
   };
 }
@@ -171,6 +176,7 @@ async function createPhotoAsset(supabase: SupabaseClient, context: ProjectContex
     .insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       created_by: context.userId,
       storage_bucket: "project-assets",
       storage_path: `tenant/${context.tenantId}/project/${context.projectId}/asset/${randomUUID()}/test.jpg`,
@@ -196,6 +202,7 @@ async function createPhotoAssets(supabase: SupabaseClient, context: ProjectConte
   const rows = Array.from({ length: count }, () => ({
     tenant_id: context.tenantId,
     project_id: context.projectId,
+    workspace_id: context.workspaceId,
     created_by: context.userId,
     storage_bucket: "project-assets",
     storage_path: `tenant/${context.tenantId}/project/${context.projectId}/asset/${randomUUID()}/test.jpg`,
@@ -212,6 +219,48 @@ async function createPhotoAssets(supabase: SupabaseClient, context: ProjectConte
   return ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
 }
 
+async function createBoundaryConsent(supabase: SupabaseClient, context: ProjectContext) {
+  const { data: template, error: templateError } = await supabase
+    .from("consent_templates")
+    .insert({
+      template_key: `feature021-template-${randomUUID()}`,
+      name: "Feature 021 Template",
+      version: "v1",
+      version_number: 1,
+      body: "Feature 021 template",
+      status: "published",
+      created_by: context.userId,
+    })
+    .select("id")
+    .single();
+  assertNoError(templateError, "insert consent template");
+
+  const token = `feature021-consent-${randomUUID()}`;
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const { error: inviteError } = await supabase.from("subject_invites").insert({
+    tenant_id: context.tenantId,
+    project_id: context.projectId,
+    workspace_id: context.workspaceId,
+    created_by: context.userId,
+    token_hash: tokenHash,
+    status: "active",
+    max_uses: 1,
+    consent_template_id: template.id,
+  });
+  assertNoError(inviteError, "insert subject invite");
+
+  return submitConsent({
+    supabase,
+    token,
+    fullName: "Feature 021 Boundary Subject",
+    email: `feature021-boundary-${randomUUID()}@example.com`,
+    faceMatchOptIn: false,
+    headshotAssetId: null,
+    captureIp: null,
+    captureUserAgent: "feature-021-test",
+  });
+}
+
 test("materialized pipeline progress counts current photo materializations and active jobs", async () => {
   const restorePipelineMode = withPipelineMode("materialized_apply");
 
@@ -226,6 +275,7 @@ test("materialized pipeline progress counts current photo materializations and a
       {
         tenant_id: context.tenantId,
         project_id: context.projectId,
+        workspace_id: context.workspaceId,
         asset_id: firstPhotoId,
         asset_type: "photo",
         materializer_version: materializerVersion,
@@ -238,6 +288,7 @@ test("materialized pipeline progress counts current photo materializations and a
       {
         tenant_id: context.tenantId,
         project_id: context.projectId,
+        workspace_id: context.workspaceId,
         asset_id: secondPhotoId,
         asset_type: "photo",
         materializer_version: materializerVersion,
@@ -253,6 +304,7 @@ test("materialized pipeline progress counts current photo materializations and a
     const { error: jobError } = await admin.from("face_match_jobs").insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       scope_asset_id: thirdPhotoId,
       job_type: "materialize_asset_faces",
       dedupe_key: `feature021:materialize:${thirdPhotoId}`,
@@ -260,7 +312,7 @@ test("materialized pipeline progress counts current photo materializations and a
     });
     assertNoError(jobError, "insert queued materialize job");
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 3);
     assert.equal(progress.processedImages, 2);
     assert.equal(progress.progressPercent, 67);
@@ -283,6 +335,7 @@ test("materialized pipeline progress handles large projects without URI-length f
       photoIds.slice(0, 240).map((assetId) => ({
         tenant_id: context.tenantId,
         project_id: context.projectId,
+        workspace_id: context.workspaceId,
         asset_id: assetId,
         asset_type: "photo",
         materializer_version: materializerVersion,
@@ -298,6 +351,7 @@ test("materialized pipeline progress handles large projects without URI-length f
     const { error: jobError } = await admin.from("face_match_jobs").insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       scope_asset_id: photoIds[240],
       job_type: "materialize_asset_faces",
       dedupe_key: `feature021:large-materialized:${photoIds[240]}`,
@@ -305,7 +359,7 @@ test("materialized pipeline progress handles large projects without URI-length f
     });
     assertNoError(jobError, "insert queued materialize job");
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 360);
     assert.equal(progress.processedImages, 240);
     assert.equal(progress.progressPercent, 67);
@@ -327,6 +381,7 @@ test("materialized pipeline progress ignores stale processing jobs but counts va
     const { error: staleJobError } = await admin.from("face_match_jobs").insert({
       tenant_id: staleContext.tenantId,
       project_id: staleContext.projectId,
+      workspace_id: staleContext.workspaceId,
       scope_asset_id: stalePhotoId,
       job_type: "materialize_asset_faces",
       dedupe_key: `feature021:stale:${stalePhotoId}`,
@@ -338,7 +393,12 @@ test("materialized pipeline progress ignores stale processing jobs but counts va
     });
     assertNoError(staleJobError, "insert stale processing job");
 
-    const staleProgress = await getProjectMatchingProgress(admin, staleContext.tenantId, staleContext.projectId);
+    const staleProgress = await getProjectMatchingProgress(
+      admin,
+      staleContext.tenantId,
+      staleContext.projectId,
+      staleContext.workspaceId,
+    );
     assert.equal(staleProgress.totalImages, 1);
     assert.equal(staleProgress.processedImages, 0);
     assert.equal(staleProgress.isMatchingInProgress, false);
@@ -351,6 +411,7 @@ test("materialized pipeline progress ignores stale processing jobs but counts va
     const { error: activeJobError } = await admin.from("face_match_jobs").insert({
       tenant_id: activeContext.tenantId,
       project_id: activeContext.projectId,
+      workspace_id: activeContext.workspaceId,
       scope_asset_id: activePhotoId,
       job_type: "materialize_asset_faces",
       dedupe_key: `feature021:active:${activePhotoId}`,
@@ -362,7 +423,12 @@ test("materialized pipeline progress ignores stale processing jobs but counts va
     });
     assertNoError(activeJobError, "insert active processing job");
 
-    const activeProgress = await getProjectMatchingProgress(admin, activeContext.tenantId, activeContext.projectId);
+    const activeProgress = await getProjectMatchingProgress(
+      admin,
+      activeContext.tenantId,
+      activeContext.projectId,
+      activeContext.workspaceId,
+    );
     assert.equal(activeProgress.totalImages, 1);
     assert.equal(activeProgress.processedImages, 0);
     assert.equal(activeProgress.isMatchingInProgress, true);
@@ -378,6 +444,7 @@ test("materialized pipeline progress exposes degraded queued continuations", asy
   try {
     const context = await createProjectContext(admin);
     const photoId = await createPhotoAsset(admin, context);
+    const boundaryConsent = await createBoundaryConsent(admin, context);
     const materializerVersion = getAutoMatchMaterializerVersion();
 
     const { data: materialization, error: materializationError } = await admin
@@ -385,6 +452,7 @@ test("materialized pipeline progress exposes degraded queued continuations", asy
       .insert({
         tenant_id: context.tenantId,
         project_id: context.projectId,
+        workspace_id: context.workspaceId,
         asset_id: photoId,
         asset_type: "photo",
         materializer_version: materializerVersion,
@@ -401,12 +469,14 @@ test("materialized pipeline progress exposes degraded queued continuations", asy
     const { error: continuationError } = await admin.from("face_match_fanout_continuations").insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       direction: "photo_to_headshots",
       source_asset_id: photoId,
       source_materialization_id: materialization.id,
       source_materializer_version: materializerVersion,
       compare_version: "feature021-progress",
       boundary_snapshot_at: new Date().toISOString(),
+      boundary_consent_id: boundaryConsent.consentId,
       dispatch_mode: "normal",
       status: "queued",
       attempt_count: 6,
@@ -418,7 +488,7 @@ test("materialized pipeline progress exposes degraded queued continuations", asy
     });
     assertNoError(continuationError, "insert degraded continuation");
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 1);
     assert.equal(progress.processedImages, 1);
     assert.equal(progress.isMatchingInProgress, true);
@@ -434,6 +504,7 @@ test("materialized pipeline progress exposes dead continuations as degraded with
   try {
     const context = await createProjectContext(admin);
     const photoId = await createPhotoAsset(admin, context);
+    const boundaryConsent = await createBoundaryConsent(admin, context);
     const materializerVersion = getAutoMatchMaterializerVersion();
 
     const { data: materialization, error: materializationError } = await admin
@@ -441,6 +512,7 @@ test("materialized pipeline progress exposes dead continuations as degraded with
       .insert({
         tenant_id: context.tenantId,
         project_id: context.projectId,
+        workspace_id: context.workspaceId,
         asset_id: photoId,
         asset_type: "photo",
         materializer_version: materializerVersion,
@@ -457,12 +529,14 @@ test("materialized pipeline progress exposes dead continuations as degraded with
     const { error: continuationError } = await admin.from("face_match_fanout_continuations").insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       direction: "photo_to_headshots",
       source_asset_id: photoId,
       source_materialization_id: materialization.id,
       source_materializer_version: materializerVersion,
       compare_version: "feature021-progress-dead",
       boundary_snapshot_at: new Date().toISOString(),
+      boundary_consent_id: boundaryConsent.consentId,
       dispatch_mode: "normal",
       status: "dead",
       attempt_count: 50,
@@ -475,7 +549,7 @@ test("materialized pipeline progress exposes dead continuations as degraded with
     });
     assertNoError(continuationError, "insert dead continuation");
 
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 1);
     assert.equal(progress.processedImages, 1);
     assert.equal(progress.isMatchingInProgress, false);
@@ -491,7 +565,7 @@ test("project progress returns zeroes for projects without uploaded photos", asy
 
   try {
     const context = await createProjectContext(admin);
-    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+    const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
     assert.equal(progress.totalImages, 0);
     assert.equal(progress.processedImages, 0);
     assert.equal(progress.progressPercent, 0);

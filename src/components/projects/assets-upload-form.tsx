@@ -59,6 +59,7 @@ import {
 
 type AssetsUploadFormProps = {
   projectId: string;
+  workspaceId: string;
 };
 
 type PreflightResponse = {
@@ -166,7 +167,7 @@ function validateSelectedFiles(selectedFiles: File[]): SelectedFileValidation {
   };
 }
 
-export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
+export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormProps) {
   const router = useRouter();
   const t = useTranslations("projects.assetsUploadForm");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -184,6 +185,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("upload_anyway");
+  const manifestScopeKey = `${projectId}:${workspaceId}`;
 
   const acceptValue = useMemo(() => getAcceptedProjectAssetUploadAcceptValue(), []);
 
@@ -193,7 +195,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
   }
 
   function updateManifest(updater: (current: ProjectUploadManifest) => ProjectUploadManifest) {
-    const current = manifestRef.current ?? createProjectUploadManifest(projectId, []);
+    const current = manifestRef.current ?? createProjectUploadManifest(manifestScopeKey, []);
     const next = updater(current);
     setManifest(next);
     return next;
@@ -211,7 +213,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     setManifest(null);
     const storage = storageRef.current;
     if (storage) {
-      clearProjectUploadManifest(storage, projectId);
+      clearProjectUploadManifest(storage, manifestScopeKey);
     }
     clearFileInput();
     if (clearMessages) {
@@ -271,6 +273,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        workspaceId,
         assetType,
         files: targetItems.map((item) => ({
           name: item.originalFilename,
@@ -441,6 +444,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        workspaceId,
         assetType,
         duplicatePolicy,
         items: itemsToPrepare.map((item) => ({
@@ -492,7 +496,10 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       }
     });
     applyManifestAndFiles(
-      applyPrepareResults(manifestRef.current ?? createProjectUploadManifest(projectId, []), payload.items),
+      applyPrepareResults(
+        manifestRef.current ?? createProjectUploadManifest(manifestScopeKey, []),
+        payload.items,
+      ),
     );
     return true;
   }
@@ -591,6 +598,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        workspaceId,
         items: itemsToFinalize
           .filter((item) => item.assetId)
           .map((item) => ({
@@ -630,7 +638,10 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     }
 
     applyManifestAndFiles(
-      applyFinalizeResults(manifestRef.current ?? createProjectUploadManifest(projectId, []), payload.items),
+      applyFinalizeResults(
+        manifestRef.current ?? createProjectUploadManifest(manifestScopeKey, []),
+        payload.items,
+      ),
     );
     return true;
   }
@@ -859,7 +870,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     });
 
     const nextManifest = createProjectUploadManifest(
-      projectId,
+      manifestScopeKey,
       workingItems,
       current?.duplicatePolicy ?? duplicatePolicy,
     );
@@ -969,7 +980,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       return;
     }
 
-    const loaded = loadProjectUploadManifest(storage, projectId);
+    const loaded = loadProjectUploadManifest(storage, manifestScopeKey);
     if (!loaded) {
       return;
     }
@@ -981,7 +992,7 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
     if (hasUnfinishedProjectUploadItems(recovered)) {
       setWarning(t("recoveredUploadWarning"));
     }
-  }, [projectId, t]);
+  }, [manifestScopeKey, t]);
 
   useEffect(() => {
     const storage = storageRef.current;
@@ -993,12 +1004,12 @@ export function AssetsUploadForm({ projectId }: AssetsUploadFormProps) {
       if (manifest && manifest.items.length > 0) {
         saveProjectUploadManifest(storage, manifest);
       } else {
-        storage.removeItem(getProjectUploadManifestStorageKey(projectId));
+        storage.removeItem(getProjectUploadManifestStorageKey(manifestScopeKey));
       }
     }, 150);
 
     return () => window.clearTimeout(timeoutId);
-  }, [manifest, projectId]);
+  }, [manifest, manifestScopeKey]);
 
   const isBusy = isPreparing || isSubmitting;
   const duplicateCount =

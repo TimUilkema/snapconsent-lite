@@ -8,6 +8,8 @@ import {
   buildPreparedProjectExport,
   loadProjectExportRecords,
 } from "@/lib/project-export/project-export";
+import { resolveProjectWorkspaceSelection } from "@/lib/projects/project-workspaces-service";
+import { resolveWorkspacePermissions } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type ProjectRow = {
@@ -18,6 +20,7 @@ type ProjectRow = {
 async function requireAuthenticatedProjectScope(input: {
   authSupabase: SupabaseClient;
   projectId: string;
+  requestedWorkspaceId?: string | null;
 }) {
   const {
     data: { user },
@@ -47,9 +50,34 @@ async function requireAuthenticatedProjectScope(input: {
     throw new HttpError(404, "project_not_found", "Project not found.");
   }
 
+  const workspaceSelection = await resolveProjectWorkspaceSelection({
+    supabase: input.authSupabase,
+    tenantId,
+    projectId: input.projectId,
+    userId: user.id,
+    requestedWorkspaceId: input.requestedWorkspaceId ?? null,
+  });
+
+  if (workspaceSelection.requiresExplicitSelection || !workspaceSelection.selectedWorkspace) {
+    throw new HttpError(400, "workspace_required", "Select a project workspace before exporting.");
+  }
+
+  const workspacePermissions = await resolveWorkspacePermissions(
+    input.authSupabase,
+    tenantId,
+    user.id,
+    input.projectId,
+    workspaceSelection.selectedWorkspace.id,
+  );
+
+  if (!workspacePermissions.canReviewProjects) {
+    throw new HttpError(403, "project_export_forbidden", "Only owners, admins, and reviewers can export workspaces.");
+  }
+
   return {
     tenantId,
     project: project as ProjectRow,
+    workspace: workspaceSelection.selectedWorkspace,
   };
 }
 
@@ -129,16 +157,19 @@ export async function createProjectExportResponse(input: {
   authSupabase: SupabaseClient;
   adminSupabase: SupabaseClient;
   projectId: string;
+  requestedWorkspaceId?: string | null;
 }) {
-  const { tenantId, project } = await requireAuthenticatedProjectScope({
+  const { tenantId, project, workspace } = await requireAuthenticatedProjectScope({
     authSupabase: input.authSupabase,
     projectId: input.projectId,
+    requestedWorkspaceId: input.requestedWorkspaceId ?? null,
   });
 
   const records = await loadProjectExportRecords({
     supabase: input.adminSupabase,
     tenantId,
     projectId: project.id,
+    workspaceId: workspace?.id ?? null,
   });
   const preparedExport = buildPreparedProjectExport({
     projectId: project.id,

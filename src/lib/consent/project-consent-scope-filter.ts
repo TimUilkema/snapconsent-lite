@@ -55,6 +55,7 @@ export async function resolveProjectAssetIdsByConsentScopeFilter(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetIds: string[];
   scopeTemplateKey: string;
   scopeKey: string;
@@ -70,12 +71,14 @@ export async function resolveProjectAssetIdsByConsentScopeFilter(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetIds,
     }),
     loadCurrentWholeAssetLinksForAssets({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       assetIds,
     }),
   ]);
@@ -102,12 +105,14 @@ export async function resolveProjectAssetIdsByConsentScopeFilter(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       consentIds,
     }),
     loadProjectConsentScopeStatesByParticipantIds({
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       participantIds,
     }),
   ]);
@@ -167,21 +172,38 @@ export async function loadProjectConsentScopeFilterFamilies(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
 }) {
-  const [oneOffResponse, recurringResponse] = await Promise.all([
-    input.supabase
-      .from("consents")
-      .select("structured_fields_snapshot")
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .not("signed_at", "is", null),
-    input.supabase
-      .from("recurring_profile_consents")
-      .select("structured_fields_snapshot")
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("consent_kind", "project"),
-  ]);
+  const oneOffQuery = input.workspaceId
+    ? input.supabase
+        .from("consents")
+        .select("structured_fields_snapshot")
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("workspace_id", input.workspaceId)
+        .not("signed_at", "is", null)
+    : input.supabase
+        .from("consents")
+        .select("structured_fields_snapshot")
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .not("signed_at", "is", null);
+  const recurringQuery = input.workspaceId
+    ? input.supabase
+        .from("recurring_profile_consents")
+        .select("structured_fields_snapshot")
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("workspace_id", input.workspaceId)
+        .eq("consent_kind", "project")
+    : input.supabase
+        .from("recurring_profile_consents")
+        .select("structured_fields_snapshot")
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("consent_kind", "project");
+
+  const [oneOffResponse, recurringResponse] = await Promise.all([oneOffQuery, recurringQuery]);
 
   if (oneOffResponse.error || recurringResponse.error) {
     throw new HttpError(500, "consent_scope_filter_lookup_failed", "Unable to load consent scope filters.");

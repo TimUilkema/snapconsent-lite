@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { serializeFaceReviewSessionResponse } from "@/lib/matching/face-review-response";
 import { getCurrentFaceReviewSession } from "@/lib/matching/face-review-sessions";
+import { loadWorkspaceScopedRow, requireWorkspaceReviewAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -28,25 +29,46 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, consentId } = await context.params;
+  const consentRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  await requireWorkspaceReviewAccessForRow({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     consentId,
+    workspaceId: consentRow.workspace_id,
     userId: user.id,
   };
 }
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId, userId } = await requireAuthAndScope(context);
     const readModel = await getCurrentFaceReviewSession({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId,
       actorUserId: userId,
     });
     const requestHeaders = await headers();

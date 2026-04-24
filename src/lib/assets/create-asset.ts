@@ -18,6 +18,7 @@ type CreateAssetInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   userId: string;
   idempotencyKey: string;
   originalFilename: string;
@@ -75,6 +76,7 @@ async function validateConsents(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   consentIds: string[],
 ) {
   if (consentIds.length === 0) {
@@ -83,12 +85,18 @@ async function validateConsents(
 
   const data = await runChunkedRead(consentIds, async (consentIdChunk) => {
     // safe-in-filter: asset consent validation is request-bounded and chunked by shared helper.
-    const { data: rows, error } = await supabase
+    const query = supabase
       .from("consents")
       .select("id")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("id", consentIdChunk);
+
+    if (workspaceId) {
+      query.eq("workspace_id", workspaceId);
+    }
+
+    const { data: rows, error } = await query;
 
     if (error) {
       throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
@@ -224,13 +232,20 @@ function createStorageAdminClient() {
 export async function createAssetWithIdempotency(
   input: CreateAssetInput,
 ): Promise<CreateAssetResult> {
+  const workspaceId = input.workspaceId?.trim() || null;
   const consentIds = normalizeConsentIds(input.consentIds);
   const assetType = normalizeAssetType(input.assetType ?? "photo");
   validateFileMetadata(assetType, input.originalFilename, input.contentType, input.fileSizeBytes);
   if (!input.projectAccessValidated) {
     await ensureProjectAccess(input.supabase, input.tenantId, input.projectId);
   }
-  await validateConsents(input.supabase, input.tenantId, input.projectId, consentIds);
+  await validateConsents(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    workspaceId,
+    consentIds,
+  );
 
   const contentHash = normalizeContentHash(input.contentHash ?? null);
   const duplicatePolicy = normalizeDuplicatePolicy(input.duplicatePolicy);
@@ -238,7 +253,9 @@ export async function createAssetWithIdempotency(
     throw new HttpError(400, "invalid_hash_algo", "Unsupported content hash algorithm.");
   }
 
-  const operation = `create_project_asset:${input.projectId}`;
+  const operation = workspaceId
+    ? `create_project_asset:${input.projectId}:${workspaceId}`
+    : `create_project_asset:${input.projectId}`;
   const admin = createStorageAdminClient();
 
   const { data: existingIdempotency, error: idempotencyReadError } = await input.supabase
@@ -255,13 +272,18 @@ export async function createAssetWithIdempotency(
 
   if (existingIdempotency?.response_json) {
     const payload = existingIdempotency.response_json as IdempotencyPayload;
-    const { data: asset } = await input.supabase
+    let assetQuery = input.supabase
       .from("assets")
       .select("id, storage_path, storage_bucket, asset_type")
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
-      .eq("id", payload.assetId)
-      .maybeSingle();
+      .eq("id", payload.assetId);
+
+    if (workspaceId) {
+      assetQuery = assetQuery.eq("workspace_id", workspaceId);
+    }
+
+    const { data: asset } = await assetQuery.maybeSingle();
 
     if (!asset) {
       throw new HttpError(409, "idempotency_mismatch", "Unable to reuse asset request.");
@@ -291,7 +313,7 @@ export async function createAssetWithIdempotency(
   }
 
   if (assetType !== "video" && contentHash && duplicatePolicy !== "upload_anyway") {
-    const { data: duplicates, error: duplicateError } = await input.supabase
+    let duplicateQuery = input.supabase
       .from("assets")
       .select("id")
       .eq("tenant_id", input.tenantId)
@@ -299,6 +321,12 @@ export async function createAssetWithIdempotency(
       .eq("asset_type", assetType)
       .eq("content_hash", contentHash)
       .limit(1);
+
+    if (workspaceId) {
+      duplicateQuery = duplicateQuery.eq("workspace_id", workspaceId);
+    }
+
+    const { data: duplicates, error: duplicateError } = await duplicateQuery;
 
     if (duplicateError) {
       throw new HttpError(500, "duplicate_lookup_failed", "Unable to check for duplicates.");
@@ -317,7 +345,7 @@ export async function createAssetWithIdempotency(
 
     if (hasDuplicate && duplicatePolicy === "overwrite") {
       const now = new Date().toISOString();
-      const { error: archiveError } = await input.supabase
+      let archiveQuery = input.supabase
         .from("assets")
         .update({ status: "archived", archived_at: now })
         .eq("tenant_id", input.tenantId)
@@ -325,6 +353,12 @@ export async function createAssetWithIdempotency(
         .eq("asset_type", assetType)
         .eq("content_hash", contentHash)
         .neq("status", "archived");
+
+      if (workspaceId) {
+        archiveQuery = archiveQuery.eq("workspace_id", workspaceId);
+      }
+
+      const { error: archiveError } = await archiveQuery;
 
       if (archiveError) {
         throw new HttpError(500, "duplicate_archive_failed", "Unable to archive duplicates.");
@@ -337,24 +371,27 @@ export async function createAssetWithIdempotency(
   const storagePath = `tenant/${input.tenantId}/project/${input.projectId}/asset/${assetId}/${safeName}`;
   const retentionExpiresAt = getRetentionExpiresAt(assetType);
 
+  const assetInsert = {
+    id: assetId,
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    created_by: input.userId,
+    storage_bucket: STORAGE_BUCKET,
+    storage_path: storagePath,
+    original_filename: input.originalFilename,
+    content_type: input.contentType,
+    file_size_bytes: input.fileSizeBytes,
+    content_hash: contentHash,
+    content_hash_algo: contentHash ? (input.contentHashAlgo ?? "sha256") : null,
+    asset_type: assetType,
+    retention_expires_at: retentionExpiresAt,
+    status: "pending",
+  };
+
   const { data: asset, error: assetError } = await input.supabase
     .from("assets")
-    .insert({
-      id: assetId,
-      tenant_id: input.tenantId,
-      project_id: input.projectId,
-      created_by: input.userId,
-      storage_bucket: STORAGE_BUCKET,
-      storage_path: storagePath,
-      original_filename: input.originalFilename,
-      content_type: input.contentType,
-      file_size_bytes: input.fileSizeBytes,
-      content_hash: contentHash,
-      content_hash_algo: contentHash ? (input.contentHashAlgo ?? "sha256") : null,
-      asset_type: assetType,
-      retention_expires_at: retentionExpiresAt,
-      status: "pending",
-    })
+    .insert(assetInsert)
     .select("id")
     .single();
 

@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { resolveSignedAssetDisplayUrlsForAssets } from "@/lib/assets/sign-asset-thumbnails";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { listMatchableProjectPhotosForConsent } from "@/lib/matching/consent-photo-matching";
+import { loadWorkspaceScopedRow, requireWorkspaceReviewAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -67,14 +68,33 @@ export async function GET(request: Request, context: RouteContext) {
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const { projectId, consentId } = await context.params;
+    const consentRow = await loadWorkspaceScopedRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
+    await requireWorkspaceReviewAccessForRow({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
     const url = new URL(request.url);
     const result = await listMatchableProjectPhotosForConsent({
       supabase: createAdminClient(),
       tenantId,
       projectId,
       consentId,
+      workspaceId: consentRow.workspace_id,
       query: url.searchParams.get("q"),
       limit: parseLimit(url.searchParams),
       page: parsePage(url.searchParams),

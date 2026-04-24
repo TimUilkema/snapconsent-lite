@@ -1,6 +1,7 @@
 create or replace function app.enqueue_face_match_job(
   p_tenant_id uuid,
   p_project_id uuid,
+  p_workspace_id uuid,
   p_job_type text,
   p_dedupe_key text,
   p_scope_asset_id uuid default null,
@@ -25,9 +26,14 @@ declare
   v_now timestamptz := now();
   v_run_after timestamptz := coalesce(p_run_after, v_now);
   v_dedupe_key text := nullif(trim(p_dedupe_key), '');
+  v_workspace_id uuid := coalesce(p_workspace_id, app.default_project_workspace_id(p_tenant_id, p_project_id));
 begin
   if p_tenant_id is null or p_project_id is null then
     raise exception 'face_match_job_missing_scope' using errcode = '23514';
+  end if;
+
+  if v_workspace_id is null then
+    raise exception 'project_workspace_required' using errcode = '23514';
   end if;
 
   if v_dedupe_key is null then
@@ -39,6 +45,7 @@ begin
     insert into public.face_match_jobs (
       tenant_id,
       project_id,
+      workspace_id,
       scope_asset_id,
       scope_consent_id,
       job_type,
@@ -54,6 +61,7 @@ begin
     values (
       p_tenant_id,
       p_project_id,
+      v_workspace_id,
       p_scope_asset_id,
       p_scope_consent_id,
       p_job_type,
@@ -66,7 +74,7 @@ begin
       v_now,
       v_now
     )
-    on conflict (tenant_id, project_id, dedupe_key)
+    on conflict (tenant_id, project_id, workspace_id, dedupe_key)
     do update
       set updated_at = v_now
     returning
@@ -318,6 +326,7 @@ $$;
 create or replace function public.enqueue_face_match_job(
   p_tenant_id uuid,
   p_project_id uuid,
+  p_workspace_id uuid,
   p_job_type text,
   p_dedupe_key text,
   p_scope_asset_id uuid default null,
@@ -342,6 +351,7 @@ as $$
   from app.enqueue_face_match_job(
     p_tenant_id,
     p_project_id,
+    p_workspace_id,
     p_job_type,
     p_dedupe_key,
     p_scope_asset_id,
@@ -439,17 +449,17 @@ as $$
   );
 $$;
 
-revoke all on function app.enqueue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) from public;
+revoke all on function app.enqueue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) from public;
 revoke all on function app.claim_face_match_jobs(text, integer) from public;
 revoke all on function app.complete_face_match_job(uuid) from public;
 revoke all on function app.fail_face_match_job(uuid, text, text, boolean, integer) from public;
 
-revoke all on function public.enqueue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) from public;
+revoke all on function public.enqueue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) from public;
 revoke all on function public.claim_face_match_jobs(text, integer) from public;
 revoke all on function public.complete_face_match_job(uuid) from public;
 revoke all on function public.fail_face_match_job(uuid, text, text, boolean, integer) from public;
 
-grant execute on function public.enqueue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) to service_role;
+grant execute on function public.enqueue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz) to service_role;
 grant execute on function public.claim_face_match_jobs(text, integer) to service_role;
 grant execute on function public.complete_face_match_job(uuid) to service_role;
 grant execute on function public.fail_face_match_job(uuid, text, text, boolean, integer) to service_role;

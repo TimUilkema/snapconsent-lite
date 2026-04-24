@@ -1,6 +1,7 @@
 create extension if not exists pgcrypto;
 
 create schema if not exists app;
+grant usage on schema app to service_role;
 
 create table if not exists public.tenants (
   id uuid primary key default gen_random_uuid(),

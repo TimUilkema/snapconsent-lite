@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 export const PROTECTED_NAV_ITEMS = [
   { href: "/dashboard", key: "dashboard" },
   { href: "/projects", key: "projects" },
+  { href: "/members", key: "members" },
   { href: "/profiles", key: "profiles" },
   { href: "/templates", key: "templates" },
 ] as const;
@@ -16,7 +17,7 @@ export type ProtectedNavStrings = {
 } & Record<(typeof PROTECTED_NAV_ITEMS)[number]["key"], string>;
 
 export function isProtectedNavActivePath(pathname: string, href: string) {
-  if (href === "/projects" || href === "/profiles" || href === "/templates") {
+  if (href === "/projects" || href === "/members" || href === "/profiles" || href === "/templates") {
     return pathname === href || pathname.startsWith(`${href}/`);
   }
 
@@ -26,12 +27,15 @@ export function isProtectedNavActivePath(pathname: string, href: string) {
 type ProtectedNavViewProps = {
   pathname: string;
   strings: ProtectedNavStrings;
+  showMembers?: boolean;
 };
 
-export function ProtectedNavView({ pathname, strings }: ProtectedNavViewProps) {
+export function ProtectedNavView({ pathname, strings, showMembers = false }: ProtectedNavViewProps) {
+  const items = PROTECTED_NAV_ITEMS.filter((item) => showMembers || item.href !== "/members");
+
   return (
     <nav aria-label={strings.ariaPrimary} className="flex flex-wrap items-center gap-2">
-      {PROTECTED_NAV_ITEMS.map((item) => {
+      {items.map((item) => {
         const active = isProtectedNavActivePath(pathname, item.href);
 
         return (
@@ -53,7 +57,11 @@ export function ProtectedNavView({ pathname, strings }: ProtectedNavViewProps) {
   );
 }
 
-export function ProtectedNav() {
+type ProtectedNavProps = {
+  showMembers?: boolean;
+};
+
+export function ProtectedNav({ showMembers = false }: ProtectedNavProps) {
   const pathname = usePathname();
   const t = useTranslations("nav");
 
@@ -64,9 +72,11 @@ export function ProtectedNav() {
         ariaPrimary: t("ariaPrimary"),
         dashboard: t("dashboard"),
         projects: t("projects"),
+        members: t("members"),
         profiles: t("profiles"),
         templates: t("templates"),
       }}
+      showMembers={showMembers}
     />
   );
 }

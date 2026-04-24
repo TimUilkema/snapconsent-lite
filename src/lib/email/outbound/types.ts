@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export const OUTBOUND_EMAIL_KINDS = ["consent_receipt"] as const;
+export const OUTBOUND_EMAIL_KINDS = ["consent_receipt", "tenant_membership_invite"] as const;
 export const OUTBOUND_EMAIL_JOB_STATUSES = ["pending", "processing", "sent", "cancelled", "dead"] as const;
 
 export type OutboundEmailKind = (typeof OUTBOUND_EMAIL_KINDS)[number];
@@ -39,8 +39,21 @@ export type ConsentReceiptEmailPayload = {
   consentVersion: string;
 };
 
+export type TenantMembershipInviteEmailPayload = {
+  inviteId: string;
+  tenantId: string;
+  tenantName: string;
+  invitedEmail: string;
+  role: "admin" | "reviewer" | "photographer";
+  inviteToken: string;
+  expiresAtIso: string;
+  lastSentAtIso: string;
+  inviterDisplayName: string;
+};
+
 export type OutboundEmailPayloadByKind = {
   consent_receipt: ConsentReceiptEmailPayload;
+  tenant_membership_invite: TenantMembershipInviteEmailPayload;
 };
 
 export type OutboundEmailValidationResult =

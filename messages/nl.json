@@ -12,6 +12,7 @@
     "backToLogin": "Terug naar inloggen",
     "appName": "SnapConsent",
     "workspace": "Werkruimte",
+    "switchWorkspace": "Wisselen",
     "signedIn": "Ingelogd",
     "signOut": "Uitloggen"
   },
@@ -19,6 +20,7 @@
     "ariaPrimary": "Primaire navigatie",
     "dashboard": "Dashboard",
     "projects": "Projecten",
+    "members": "Leden",
     "profiles": "Personen",
     "templates": "Verklaringen"
   },
@@ -42,7 +44,136 @@
     "errors": {
       "invalidCredentials": "Ongeldig e-mailadres of wachtwoord.",
       "invalidInput": "Vul zowel e-mail als wachtwoord in.",
+      "accountExists": "Er bestaat al een account voor dit e-mailadres. Log in in plaats van opnieuw te registreren.",
+      "weakPassword": "Kies een sterker wachtwoord.",
+      "signUpFailed": "Account aanmaken mislukt.",
       "fallback": "Inloggen mislukt."
+    }
+  },
+  "tenantMembershipInvite": {
+    "title": "Organisatie-uitnodiging",
+    "subtitle": "Log in met het uitgenodigde e-mailadres om deze werkruimte te openen.",
+    "labels": {
+      "organization": "Organisatie",
+      "role": "Rol",
+      "email": "E-mail",
+      "password": "Wachtwoord"
+    },
+    "roles": {
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Fotograaf"
+    },
+    "errors": {
+      "invalid": "Deze uitnodigingslink is ongeldig.",
+      "expired": "Deze uitnodiging is verlopen.",
+      "revoked": "Deze uitnodiging is ingetrokken.",
+      "mismatch": "Log eerst in met het uitgenodigde e-mailadres.",
+      "signInRequired": "Log in voordat je deze uitnodiging accepteert.",
+      "server": "Deze uitnodiging kan nu niet worden verwerkt."
+    },
+    "authErrors": {
+      "invalidCredentials": "Ongeldig e-mailadres of wachtwoord.",
+      "invalidInput": "Vul een geldig e-mailadres en wachtwoord in.",
+      "accountExists": "Er bestaat al een account voor dit e-mailadres. Log in in plaats van opnieuw te registreren.",
+      "weakPassword": "Kies een sterker wachtwoord.",
+      "signUpFailed": "Account aanmaken lukt nu niet."
+    },
+    "confirmationRequired": "Controleer je e-mail om je account af te ronden en log daarna hier in om de uitnodiging te accepteren.",
+    "states": {
+      "accepted": "Deze uitnodiging is al geaccepteerd.",
+      "revoked": "Deze uitnodiging is niet meer beschikbaar.",
+      "expired": "Deze uitnodiging is niet meer beschikbaar."
+    },
+    "signedInAs": "Ingelogd als {email}",
+    "readyToJoin": "Bevestig deze uitnodiging om lid te worden van deze organisatie.",
+    "wrongEmailBody": "Deze uitnodiging is verstuurd naar {invitedEmail}. Log uit en gebruik dat e-mailadres om verder te gaan.",
+    "signInTitle": "Inloggen",
+    "signInBody": "Gebruik het uitgenodigde e-mailadres als je al een account hebt.",
+    "signInSubmit": "Inloggen",
+    "signUpTitle": "Account maken",
+    "signUpBody": "Maak een nieuw account met het uitgenodigde e-mailadres.",
+    "signUpSubmit": "Account maken",
+    "accept": "Word lid van organisatie",
+    "signOut": "Uitloggen",
+    "signOutAndRetry": "Uitloggen en opnieuw proberen",
+    "unknownEmail": "onbekend e-mailadres",
+    "backToHome": "Terug naar home"
+  },
+  "members": {
+    "title": "Leden",
+    "subtitle": "Nodig mensen uit, wijzig werkruimterollen en trek openstaande organisatie-uitnodigingen in.",
+    "readOnly": "Alleen workspace owners en admins kunnen organisatieleden beheren.",
+    "backToProjects": "Terug naar projecten",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Fotograaf"
+    },
+    "invite": {
+      "title": "Lid uitnodigen",
+      "subtitle": "Uitnodigingen worden per e-mail verstuurd en hergebruiken een bestaand account als dat e-mailadres al bestaat.",
+      "emailLabel": "E-mail",
+      "emailPlaceholder": "naam@example.com",
+      "roleLabel": "Rol",
+      "submit": "Uitnodiging versturen",
+      "submitting": "Bezig met versturen...",
+      "success": "Uitnodiging opgeslagen en klaargezet voor verzending.",
+      "alreadyMember": "Dit e-mailadres hoort al bij een lid in deze werkruimte."
+    },
+    "membersTable": {
+      "title": "Huidige leden",
+      "subtitle": "Owners zijn hier zichtbaar maar blijven read-only in deze eerste slice.",
+      "columns": {
+        "email": "E-mail",
+        "role": "Rol",
+        "joined": "Toegevoegd",
+        "actions": "Acties"
+      },
+      "saveRole": "Rol opslaan",
+      "remove": "Verwijderen",
+      "removeConfirm": "{email} uit deze werkruimte verwijderen?",
+      "roleUpdated": "Lidmaatschapsrol bijgewerkt.",
+      "removed": "Lid verwijderd.",
+      "ownerNote": "Owner"
+    },
+    "pendingInvites": {
+      "title": "Openstaande uitnodigingen",
+      "subtitle": "Opnieuw versturen roteert de uitnodigingslink en kan ook eerst een nieuwe rol toepassen.",
+      "empty": "Geen openstaande uitnodigingen.",
+      "columns": {
+        "email": "E-mail",
+        "role": "Rol",
+        "expires": "Verloopt",
+        "actions": "Acties"
+      },
+      "resend": "Opnieuw versturen",
+      "revoke": "Intrekken",
+      "resent": "Uitnodiging opnieuw verstuurd.",
+      "revoked": "Uitnodiging ingetrokken.",
+      "revokeConfirm": "Openstaande uitnodiging voor {email} intrekken?"
+    },
+    "errors": {
+      "fallback": "Organisatieleden kunnen nu niet worden bijgewerkt."
+    }
+  },
+  "activeTenant": {
+    "title": "Kies een werkruimte",
+    "subtitle": "Dit account hoort bij meer dan een organisatie. Kies de werkruimte die je nu wilt gebruiken.",
+    "choose": "Werkruimte openen",
+    "roleLabel": "Rol: {role}",
+    "signedInFallback": "Ingelogd",
+    "signOut": "Uitloggen",
+    "backToHome": "Terug naar home",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Fotograaf"
+    },
+    "errors": {
+      "invalidSelection": "Kies een werkruimte waar je nu lid van bent."
     }
   },
   "dashboard": {
@@ -364,6 +495,10 @@
       "breadcrumbProjects": "Projecten",
       "projectSectionsAria": "Projectsecties",
       "exportProject": "Project exporteren",
+      "workspaceSectionLabel": "Workspaces",
+      "workspaceSelected": "Geselecteerde workspace: {name}",
+      "workspaceNoneAssigned": "Er zijn nog geen workspaces aan dit project toegewezen.",
+      "workspaceNoData": "Selecteer of wijs een workspace toe om verder te gaan.",
       "sectionParticipants": "Deelnemers",
       "sectionAssets": "Assets",
       "subtitle": "Beheer bekende profielen, eenmalige toestemmingsintake, persoonsgegevens en projectfotomatching op één plek.",
@@ -419,7 +554,59 @@
       },
       "noInvitesYet": "Nog geen uitnodigingen.",
       "assetsTitle": "Assets",
-      "assetsSubtitle": "Upload projectfoto's en video's, filter grote verzamelingen en bekijk gekoppelde personen."
+      "assetsSubtitle": "Upload projectfoto's en video's, filter grote verzamelingen en bekijk gekoppelde personen.",
+      "workflow": {
+        "workspaceTitle": "Workflow workspace",
+        "projectTitle": "Workflow project",
+        "workspaceUnavailable": "Selecteer een workspace om workflowacties te zien.",
+        "workspaceActiveHelper": "Capture blijft open totdat deze workspace wordt overgedragen.",
+        "workspaceHandedOffAt": "Overgedragen {date}",
+        "workspaceValidatedAt": "Gevalideerd {date}",
+        "workspaceNeedsChangesAt": "Needs changes sinds {date}",
+        "projectProgress": "{validated} van {total} workspaces gevalideerd",
+        "projectActiveHelper": "Finaliseer het project nadat elke workspace is gevalideerd en alle blokkades zijn opgelost.",
+        "projectReadyHelper": "Alle zichtbare workspaces zijn gevalideerd en klaar voor finalisatie.",
+        "projectFinalizedAt": "Gefinaliseerd {date}",
+        "captureLockedHandedOff": "Geauthenticeerde capture-wijzigingen zijn na handoff vergrendeld. Bestaande publieke links kunnen nog wel worden afgerond tot validatie.",
+        "captureLockedValidated": "Geauthenticeerde capture-wijzigingen zijn vergrendeld terwijl deze workspace is gevalideerd.",
+        "reviewLockedValidated": "Reviewwijzigingen zijn vergrendeld terwijl deze workspace is gevalideerd. Heropen de workspace om correcties te maken.",
+        "projectFinalizedReadOnly": "Dit project is gefinaliseerd. Capture, review, staffing en templates zijn alleen-lezen.",
+        "projectArchivedReadOnly": "Dit project is gearchiveerd, dus workflowwijzigingen zijn niet beschikbaar.",
+        "staffingLockedFinalized": "Workspace-staffing is vergrendeld na projectfinalisatie.",
+        "blockersTitle": "Validatieblokkades",
+        "workspaceStates": {
+          "active": "Actief",
+          "handed_off": "Overgedragen",
+          "needs_changes": "Needs changes",
+          "validated": "Gevalideerd"
+        },
+        "projectStates": {
+          "active": "Actief",
+          "ready_to_finalize": "Klaar voor finalisatie",
+          "finalized": "Gefinaliseerd"
+        },
+        "actions": {
+          "handoff": "Workspace overdragen",
+          "handoffPending": "Overdragen...",
+          "validate": "Markeer als gevalideerd",
+          "validatePending": "Valideren...",
+          "needsChanges": "Needs changes",
+          "needsChangesPending": "Opslaan...",
+          "reopen": "Workspace heropenen",
+          "reopenPending": "Heropenen...",
+          "finalize": "Project finaliseren",
+          "finalizePending": "Finaliseren..."
+        },
+        "blockers": {
+          "matchingInProgress": "Matching is nog bezig.",
+          "degradedMatchingState": "Matching is gedegradeerd en heeft aandacht nodig.",
+          "pendingAssets": "{count, plural, one {# foto wacht nog op materialisatie.} other {# foto's wachten nog op materialisatie.}}",
+          "needsReviewAssets": "{count, plural, one {# foto moet nog worden beoordeeld.} other {# foto's moeten nog worden beoordeeld.}}",
+          "activeInvites": "{count, plural, one {# eenmalige uitnodiging is nog actief.} other {# eenmalige uitnodigingen zijn nog actief.}}",
+          "pendingRecurringRequests": "{count, plural, one {# terugkerend projectverzoek staat nog open.} other {# terugkerende projectverzoeken staan nog open.}}",
+          "pendingUpgradeRequests": "{count, plural, one {# toestemmingsupgrade staat nog open.} other {# toestemmingsupgrades staan nog open.}}"
+        }
+      }
     },
     "participants": {
       "knownProfilesTitle": "Profielen",
@@ -509,6 +696,15 @@
         "copied": "Link voor vervangende toestemming gekopieerd.",
         "copyError": "Link voor vervangende toestemming kon niet worden gekopieerd."
       }
+    },
+    "workspaces": {
+      "staffingTitle": "Fotograaf toewijzen",
+      "staffingSubtitle": "Maak per toegewezen fotograaf een aparte capture-workspace.",
+      "photographerLabel": "Fotograaf",
+      "workspaceNameLabel": "Workspacenaam",
+      "assigning": "Bezig met toewijzen...",
+      "assign": "Fotograaf toewijzen",
+      "allPhotographersAssigned": "Alle beschikbare fotografen hebben al een workspace op dit project."
     }
   },
   "publicInvite": {
@@ -1076,7 +1272,16 @@
       "consent_upgrade_template_family_mismatch": "Kies een nieuwere gepubliceerde versie uit dezelfde templatefamilie.",
       "consent_upgrade_template_not_newer": "Kies een nieuwere gepubliceerde versie voordat je een bijgewerkte toestemming aanvraagt.",
       "project_template_unavailable": "De gekozen gepubliceerde toestemmingsverklaring is niet beschikbaar voor dit projectverzoek.",
-      "default_template_unavailable": "De projectstandaard is niet beschikbaar. Kies een andere gepubliceerde toestemmingsverklaring."
+      "default_template_unavailable": "De projectstandaard is niet beschikbaar. Kies een andere gepubliceerde toestemmingsverklaring.",
+      "project_archived": "Gearchiveerde projecten accepteren geen workflowwijzigingen.",
+      "project_finalized": "Gefinaliseerde projecten zijn alleen-lezen.",
+      "workspace_capture_locked": "Deze workspace accepteert geen geauthenticeerde capture-wijzigingen.",
+      "workspace_review_locked": "Deze workspace accepteert geen reviewwijzigingen.",
+      "workspace_not_accepting_submissions": "Deze workspace accepteert geen nieuwe inzendingen meer.",
+      "workspace_transition_conflict": "Deze workflowovergang is niet toegestaan vanuit de huidige workspacestatus.",
+      "workspace_validation_blocked": "Deze workspace heeft nog openstaande validatieblokkades.",
+      "project_finalize_blocked": "Dit project is nog niet klaar voor finalisatie.",
+      "project_finalize_conflict": "De projectfinalisatie botste met een andere update."
     }
   }
 }

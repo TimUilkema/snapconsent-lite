@@ -9,6 +9,12 @@ import {
   manualLinkPhotoToConsent,
   manualUnlinkPhotoFromConsent,
 } from "@/lib/matching/consent-photo-matching";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewAccessForRow,
+  requireWorkspaceReviewMutationAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -28,7 +34,7 @@ type ModifyLinksBody = {
   forceReplace?: boolean;
 };
 
-async function requireAuthAndScope(context: RouteContext) {
+async function requireAuthAndScope(context: RouteContext, mutation = false) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -42,13 +48,45 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, consentId } = await context.params;
+  const consentRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  if (mutation) {
+    await requireWorkspaceReviewMutationAccessForRow({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
+  } else {
+    await requireWorkspaceReviewAccessForRow({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
+  }
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     consentId,
+    workspaceId: consentRow.workspace_id,
     userId: user.id,
   };
 }
@@ -64,13 +102,14 @@ function parseLinkBody(body: ModifyLinksBody | null) {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId } = await requireAuthAndScope(context);
 
     const assets = await listLinkedPhotosForConsent({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId,
     });
 
     const requestHeaders = await headers();
@@ -147,18 +186,29 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId, userId } = await requireAuthAndScope(context, true);
     const body = (await request.json().catch(() => null)) as ModifyLinksBody | null;
     const parsed = parseLinkBody(body);
     if (!parsed.assetId) {
       throw new HttpError(400, "invalid_body", "Asset ID is required.");
     }
+    const assetRow = await loadWorkspaceScopedRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "assets",
+      rowId: parsed.assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+    assertWorkspaceScopedRowMatchesWorkspace(assetRow, workspaceId, "asset_not_found", "Asset not found.");
 
     const result = await manualLinkPhotoToConsent({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId,
       actorUserId: userId,
       assetId: parsed.assetId,
       assetFaceId: parsed.assetFaceId,
@@ -196,18 +246,29 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId, userId } = await requireAuthAndScope(context, true);
     const body = (await request.json().catch(() => null)) as ModifyLinksBody | null;
     const parsed = parseLinkBody(body);
     if (!parsed.assetId) {
       throw new HttpError(400, "invalid_body", "Asset ID is required.");
     }
+    const assetRow = await loadWorkspaceScopedRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "assets",
+      rowId: parsed.assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+    assertWorkspaceScopedRowMatchesWorkspace(assetRow, workspaceId, "asset_not_found", "Asset not found.");
 
     const result = await manualUnlinkPhotoFromConsent({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId,
       actorUserId: userId,
       assetId: parsed.assetId,
       assetFaceId: parsed.assetFaceId,

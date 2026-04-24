@@ -28,8 +28,13 @@ import {
   type ProjectAssetReviewFilter,
 } from "@/lib/projects/project-asset-review-list";
 import { filterCurrentOneOffPeopleOptions } from "@/lib/projects/current-one-off-consent";
+import {
+  requireWorkspaceCaptureMutationAccessForRequest,
+  resolveSelectedWorkspaceForRequest,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { resolveWorkspacePermissions } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
 
@@ -40,6 +45,7 @@ type RouteContext = {
 };
 
 type CreateAssetBody = {
+  workspaceId?: string;
   originalFilename?: string;
   contentType?: string;
   fileSizeBytes?: number;
@@ -237,13 +243,30 @@ async function requireAuthAndScope(context: RouteContext) {
   }
 
   const { projectId } = await context.params;
-  return { supabase: createAdminClient(), tenantId, projectId, userId: user.id };
+  return { authSupabase, supabase: createAdminClient(), tenantId, projectId, userId: user.id };
 }
 
 export async function GET(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, userId, authSupabase } = await requireAuthAndScope(context);
     const url = new URL(request.url);
+    const workspace = await resolveSelectedWorkspaceForRequest({
+      supabase: authSupabase,
+      tenantId,
+      userId,
+      projectId,
+      requestedWorkspaceId: url.searchParams.get("workspaceId"),
+    });
+    const workspacePermissions = await resolveWorkspacePermissions(
+      authSupabase,
+      tenantId,
+      userId,
+      projectId,
+      workspace.id,
+    );
+    if (!workspacePermissions.canCaptureProjects && !workspacePermissions.canReviewProjects) {
+      throw new HttpError(403, "workspace_read_forbidden", "Project workspace access is forbidden.");
+    }
     const limit = parseLimit(url.searchParams);
     const offset = parseOffset(url.searchParams);
     const sort = parseSort(url.searchParams);
@@ -258,6 +281,7 @@ export async function GET(request: Request, context: RouteContext) {
         .select("id, superseded_at, subjects(email, full_name)")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspace.id)
         .not("signed_at", "is", null)
         .is("superseded_at", null)
         .order("signed_at", { ascending: false }),
@@ -297,6 +321,7 @@ export async function GET(request: Request, context: RouteContext) {
         .select("id")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspace.id)
         .eq("asset_type", "photo");
 
       if (allPhotoIdsError) {
@@ -347,6 +372,7 @@ export async function GET(request: Request, context: RouteContext) {
       .select("id, asset_type, original_filename, status, file_size_bytes, created_at, uploaded_at, storage_bucket, storage_path")
       .eq("project_id", projectId)
       .eq("tenant_id", tenantId)
+      .eq("workspace_id", workspace.id)
       .in("asset_type", ["photo", "video"])
       .eq("status", "uploaded");
 
@@ -474,6 +500,7 @@ export async function GET(request: Request, context: RouteContext) {
         .select("asset_id, source_image_width, source_image_height, materialized_at")
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspace.id)
         .in("asset_id", photoAssetIds)
         .order("materialized_at", { ascending: false });
 
@@ -520,6 +547,7 @@ export async function GET(request: Request, context: RouteContext) {
           .select("id, subjects(email, full_name)")
           .eq("tenant_id", tenantId)
           .eq("project_id", projectId)
+          .eq("workspace_id", workspace.id)
           .in("id", consentIdsForLookup);
 
         if (consentDetails.error) {
@@ -574,11 +602,17 @@ export async function GET(request: Request, context: RouteContext) {
       const recurringHeadshotThumbnailUrlByProfileId = new Map<string, string | null>();
 
       if (overlayConsentIds.length > 0) {
-        const currentHeadshots = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, {
+        const currentHeadshots = await loadCurrentProjectConsentHeadshots(
+          supabase,
+          tenantId,
+          projectId,
+          workspace.id,
+          {
           optInOnly: false,
           notRevokedOnly: false,
           limit: null,
-        });
+          },
+        );
         const headshotAssetIdByConsentId = new Map(
           currentHeadshots
             .filter((headshot) => overlayConsentIds.includes(headshot.consentId))
@@ -592,6 +626,7 @@ export async function GET(request: Request, context: RouteContext) {
             .select("id, status, storage_bucket, storage_path")
             .eq("tenant_id", tenantId)
             .eq("project_id", projectId)
+            .eq("workspace_id", workspace.id)
             .eq("asset_type", "headshot")
             .eq("status", "uploaded")
             .is("archived_at", null)
@@ -782,7 +817,7 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, userId } = await requireAuthAndScope(context);
+    const { authSupabase, supabase, tenantId, projectId, userId } = await requireAuthAndScope(context);
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     if (idempotencyKey.length < 8 || idempotencyKey.length > 200) {
       throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key header is required.");
@@ -792,6 +827,13 @@ export async function POST(request: Request, context: RouteContext) {
     if (!body) {
       throw new HttpError(400, "invalid_body", "Invalid request body.");
     }
+    const { workspace } = await requireWorkspaceCaptureMutationAccessForRequest({
+      supabase: authSupabase,
+      tenantId,
+      userId,
+      projectId,
+      requestedWorkspaceId: body.workspaceId,
+    });
 
     const consentIds = Array.isArray(body.consentIds)
       ? Array.from(
@@ -808,6 +850,7 @@ export async function POST(request: Request, context: RouteContext) {
       supabase,
       tenantId,
       projectId,
+      workspaceId: workspace.id,
       userId,
       idempotencyKey,
       originalFilename: String(body.originalFilename ?? "").trim(),

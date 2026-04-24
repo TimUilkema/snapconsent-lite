@@ -9,6 +9,7 @@ export type PublicInviteContext = {
   inviteId: string;
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   createdBy: string;
   status: string;
   expiresAt: string | null;
@@ -26,6 +27,7 @@ type UpgradeRequestRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   subject_id: string;
   prior_consent_id: string;
   target_template_id: string;
@@ -35,6 +37,7 @@ type UpgradeRequestRow = {
 type PriorConsentRow = {
   id: string;
   subject_id: string;
+  workspace_id: string;
   face_match_opt_in: boolean | null;
   structured_fields_snapshot: StructuredFieldsSnapshot | null;
   subjects: SubjectRelation | SubjectRelation[] | null;
@@ -71,11 +74,13 @@ export async function resolvePublicInviteContext(
   token: string,
 ): Promise<PublicInviteContext> {
   const tokenHash = hashPublicToken(token);
-  const { data, error } = await supabase
+  const inviteQuery = supabase
     .from("subject_invites")
-    .select("id, tenant_id, project_id, created_by, status, expires_at, used_count, max_uses, consent_template_id")
+    .select("id, tenant_id, project_id, workspace_id, created_by, status, expires_at, used_count, max_uses, consent_template_id")
     .eq("token_hash", tokenHash)
     .maybeSingle();
+
+  const { data, error } = await inviteQuery;
 
   if (error) {
     throw new HttpError(500, "invite_lookup_failed", "Unable to validate invite.");
@@ -94,10 +99,16 @@ export async function resolvePublicInviteContext(
     throw new HttpError(410, "invite_unavailable", "Invite is no longer available.");
   }
 
+  const workspaceId = String(data.workspace_id ?? "").trim();
+  if (!workspaceId) {
+    throw new HttpError(500, "invite_lookup_failed", "Invite is missing a workspace assignment.");
+  }
+
   return {
     inviteId: data.id,
     tenantId: data.tenant_id,
     projectId: data.project_id,
+    workspaceId,
     createdBy: data.created_by,
     status: data.status,
     expiresAt: data.expires_at,
@@ -113,7 +124,7 @@ export async function resolvePublicInviteUpgradeContext(
 ): Promise<PublicInviteUpgradeContext | null> {
   const { data: upgradeRequest, error: upgradeError } = await supabase
     .from("project_consent_upgrade_requests")
-    .select("id, tenant_id, project_id, subject_id, prior_consent_id, target_template_id, target_template_key")
+    .select("id, tenant_id, project_id, workspace_id, subject_id, prior_consent_id, target_template_id, target_template_key")
     .eq("invite_id", inviteId)
     .eq("status", "pending")
     .maybeSingle();
@@ -126,13 +137,15 @@ export async function resolvePublicInviteUpgradeContext(
     return null;
   }
 
-  const { data: priorConsent, error: priorConsentError } = await supabase
+  const priorConsentQuery = supabase
     .from("consents")
-    .select("id, subject_id, face_match_opt_in, structured_fields_snapshot, subjects(full_name, email)")
+    .select("id, subject_id, workspace_id, face_match_opt_in, structured_fields_snapshot, subjects(full_name, email)")
     .eq("tenant_id", (upgradeRequest as UpgradeRequestRow).tenant_id)
     .eq("project_id", (upgradeRequest as UpgradeRequestRow).project_id)
     .eq("id", upgradeRequest.prior_consent_id)
-    .maybeSingle();
+    .eq("workspace_id", (upgradeRequest as UpgradeRequestRow).workspace_id);
+
+  const { data: priorConsent, error: priorConsentError } = await priorConsentQuery.maybeSingle();
 
   if (priorConsentError) {
     throw new HttpError(500, "invite_lookup_failed", "Unable to load invite.");
@@ -146,18 +159,20 @@ export async function resolvePublicInviteUpgradeContext(
   let reusableHeadshotAvailable = false;
 
   if ((priorConsent as PriorConsentRow).face_match_opt_in === true) {
-    const { data: reusableHeadshotLink, error: reusableHeadshotError } = await supabase
+    const reusableHeadshotQuery = supabase
       .from("asset_consent_links")
       .select("asset_id, assets!inner(id)")
       .eq("tenant_id", (upgradeRequest as UpgradeRequestRow).tenant_id)
       .eq("project_id", (upgradeRequest as UpgradeRequestRow).project_id)
       .eq("consent_id", (priorConsent as PriorConsentRow).id)
+      .eq("workspace_id", (upgradeRequest as UpgradeRequestRow).workspace_id)
       .eq("assets.asset_type", "headshot")
       .eq("assets.status", "uploaded")
       .is("assets.archived_at", null)
       .or("retention_expires_at.is.null,retention_expires_at.gt.now()", { foreignTable: "assets" })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    const { data: reusableHeadshotLink, error: reusableHeadshotError } = await reusableHeadshotQuery.maybeSingle();
 
     if (reusableHeadshotError) {
       throw new HttpError(500, "invite_lookup_failed", "Unable to load invite.");

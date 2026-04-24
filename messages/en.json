@@ -12,6 +12,7 @@
     "backToLogin": "Back to login",
     "appName": "SnapConsent",
     "workspace": "Workspace",
+    "switchWorkspace": "Switch",
     "signedIn": "Signed in",
     "signOut": "Sign out"
   },
@@ -19,6 +20,7 @@
     "ariaPrimary": "Primary navigation",
     "dashboard": "Dashboard",
     "projects": "Projects",
+    "members": "Members",
     "profiles": "People",
     "templates": "Templates"
   },
@@ -42,7 +44,136 @@
     "errors": {
       "invalidCredentials": "Invalid email or password.",
       "invalidInput": "Enter both email and password.",
+      "accountExists": "An account already exists for this email address. Sign in instead.",
+      "weakPassword": "Choose a stronger password.",
+      "signUpFailed": "Unable to create your account.",
       "fallback": "Unable to sign in."
+    }
+  },
+  "tenantMembershipInvite": {
+    "title": "Organization invitation",
+    "subtitle": "Sign in with the invited email address to join this workspace.",
+    "labels": {
+      "organization": "Organization",
+      "role": "Role",
+      "email": "Email",
+      "password": "Password"
+    },
+    "roles": {
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Photographer"
+    },
+    "errors": {
+      "invalid": "This invitation link is invalid.",
+      "expired": "This invitation has expired.",
+      "revoked": "This invitation was revoked.",
+      "mismatch": "Sign in with the invited email address before accepting.",
+      "signInRequired": "Sign in before accepting this invitation.",
+      "server": "Unable to process this invitation right now."
+    },
+    "authErrors": {
+      "invalidCredentials": "Invalid email or password.",
+      "invalidInput": "Enter a valid email address and password.",
+      "accountExists": "An account already exists for this email address. Sign in instead.",
+      "weakPassword": "Choose a stronger password.",
+      "signUpFailed": "Unable to create your account right now."
+    },
+    "confirmationRequired": "Check your email to finish account setup, then return here and sign in to accept the invitation.",
+    "states": {
+      "accepted": "This invitation has already been accepted.",
+      "revoked": "This invitation is no longer available.",
+      "expired": "This invitation is no longer available."
+    },
+    "signedInAs": "Signed in as {email}",
+    "readyToJoin": "Confirm the invitation to join this organization.",
+    "wrongEmailBody": "This invite was sent to {invitedEmail}. Sign out and use that email address to continue.",
+    "signInTitle": "Sign in",
+    "signInBody": "Use the invited email address if you already have an account.",
+    "signInSubmit": "Sign in",
+    "signUpTitle": "Create account",
+    "signUpBody": "Create a new account with the invited email address.",
+    "signUpSubmit": "Create account",
+    "accept": "Join organization",
+    "signOut": "Sign out",
+    "signOutAndRetry": "Sign out and retry",
+    "unknownEmail": "unknown email",
+    "backToHome": "Back to home"
+  },
+  "members": {
+    "title": "Members",
+    "subtitle": "Invite people, adjust workspace roles, and revoke pending organization invites.",
+    "readOnly": "Only workspace owners and admins can manage organization members.",
+    "backToProjects": "Back to projects",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Photographer"
+    },
+    "invite": {
+      "title": "Invite member",
+      "subtitle": "Invites are sent by email and reuse an existing account when the invited email already belongs to one.",
+      "emailLabel": "Email",
+      "emailPlaceholder": "name@example.com",
+      "roleLabel": "Role",
+      "submit": "Send invite",
+      "submitting": "Sending...",
+      "success": "Invite saved and queued for delivery.",
+      "alreadyMember": "That email already belongs to a member in this workspace."
+    },
+    "membersTable": {
+      "title": "Current members",
+      "subtitle": "Owners are visible here but stay read-only in this first slice.",
+      "columns": {
+        "email": "Email",
+        "role": "Role",
+        "joined": "Joined",
+        "actions": "Actions"
+      },
+      "saveRole": "Save role",
+      "remove": "Remove",
+      "removeConfirm": "Remove {email} from this workspace?",
+      "roleUpdated": "Member role updated.",
+      "removed": "Member removed.",
+      "ownerNote": "Owner"
+    },
+    "pendingInvites": {
+      "title": "Pending invites",
+      "subtitle": "Resend rotates the invite link and can also apply a new role before delivery.",
+      "empty": "No pending invites.",
+      "columns": {
+        "email": "Email",
+        "role": "Role",
+        "expires": "Expires",
+        "actions": "Actions"
+      },
+      "resend": "Resend",
+      "revoke": "Revoke",
+      "resent": "Invite resent.",
+      "revoked": "Invite revoked.",
+      "revokeConfirm": "Revoke the pending invite for {email}?"
+    },
+    "errors": {
+      "fallback": "Unable to update organization members right now."
+    }
+  },
+  "activeTenant": {
+    "title": "Choose a workspace",
+    "subtitle": "This account belongs to more than one organization. Pick the workspace you want to use right now.",
+    "choose": "Open workspace",
+    "roleLabel": "Role: {role}",
+    "signedInFallback": "Signed in",
+    "signOut": "Sign out",
+    "backToHome": "Back to home",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "reviewer": "Reviewer",
+      "photographer": "Photographer"
+    },
+    "errors": {
+      "invalidSelection": "Select a workspace you currently belong to."
     }
   },
   "dashboard": {
@@ -364,6 +495,10 @@
       "breadcrumbProjects": "Projects",
       "projectSectionsAria": "Project sections",
       "exportProject": "Export project",
+      "workspaceSectionLabel": "Workspaces",
+      "workspaceSelected": "Selected workspace: {name}",
+      "workspaceNoneAssigned": "No workspaces are assigned to this project yet.",
+      "workspaceNoData": "Select or assign a workspace to continue.",
       "sectionParticipants": "Participants",
       "sectionAssets": "Assets",
       "subtitle": "Manage known profiles, one-off consent intake, subject details, and project photo matching in one place.",
@@ -419,7 +554,59 @@
       },
       "noInvitesYet": "No invites yet.",
       "assetsTitle": "Assets",
-      "assetsSubtitle": "Upload project photos and videos, filter large collections, and inspect linked subjects."
+      "assetsSubtitle": "Upload project photos and videos, filter large collections, and inspect linked subjects.",
+      "workflow": {
+        "workspaceTitle": "Workspace workflow",
+        "projectTitle": "Project workflow",
+        "workspaceUnavailable": "Select a workspace to view workflow actions.",
+        "workspaceActiveHelper": "Capture stays open until this workspace is handed off.",
+        "workspaceHandedOffAt": "Handed off {date}",
+        "workspaceValidatedAt": "Validated {date}",
+        "workspaceNeedsChangesAt": "Needs changes since {date}",
+        "projectProgress": "{validated} of {total} workspaces validated",
+        "projectActiveHelper": "Finalize the project after every workspace is validated and blockers are clear.",
+        "projectReadyHelper": "All visible workspaces are validated and ready for finalization.",
+        "projectFinalizedAt": "Finalized {date}",
+        "captureLockedHandedOff": "Authenticated capture changes are locked after handoff. Existing public links can still be completed until validation.",
+        "captureLockedValidated": "Authenticated capture changes are locked while this workspace is validated.",
+        "reviewLockedValidated": "Review changes are locked while this workspace is validated. Reopen it to make corrections.",
+        "projectFinalizedReadOnly": "This project is finalized. Capture, review, staffing, and template changes are read-only.",
+        "projectArchivedReadOnly": "This project is archived, so workflow changes are unavailable.",
+        "staffingLockedFinalized": "Workspace staffing is locked after project finalization.",
+        "blockersTitle": "Validation blockers",
+        "workspaceStates": {
+          "active": "Active",
+          "handed_off": "Handed off",
+          "needs_changes": "Needs changes",
+          "validated": "Validated"
+        },
+        "projectStates": {
+          "active": "Active",
+          "ready_to_finalize": "Ready to finalize",
+          "finalized": "Finalized"
+        },
+        "actions": {
+          "handoff": "Hand off workspace",
+          "handoffPending": "Handing off...",
+          "validate": "Mark validated",
+          "validatePending": "Validating...",
+          "needsChanges": "Needs changes",
+          "needsChangesPending": "Saving...",
+          "reopen": "Reopen workspace",
+          "reopenPending": "Reopening...",
+          "finalize": "Finalize project",
+          "finalizePending": "Finalizing..."
+        },
+        "blockers": {
+          "matchingInProgress": "Matching is still in progress.",
+          "degradedMatchingState": "Matching is degraded and needs attention.",
+          "pendingAssets": "{count, plural, one {# photo is still pending materialization.} other {# photos are still pending materialization.}}",
+          "needsReviewAssets": "{count, plural, one {# photo still needs review.} other {# photos still need review.}}",
+          "activeInvites": "{count, plural, one {# one-off invite is still active.} other {# one-off invites are still active.}}",
+          "pendingRecurringRequests": "{count, plural, one {# recurring project consent request is still pending.} other {# recurring project consent requests are still pending.}}",
+          "pendingUpgradeRequests": "{count, plural, one {# consent upgrade request is still pending.} other {# consent upgrade requests are still pending.}}"
+        }
+      }
     },
     "participants": {
       "knownProfilesTitle": "Profiles",
@@ -509,6 +696,15 @@
         "copied": "Replacement consent link copied.",
         "copyError": "Unable to copy the replacement consent link."
       }
+    },
+    "workspaces": {
+      "staffingTitle": "Assign photographer",
+      "staffingSubtitle": "Create one capture workspace per assigned photographer.",
+      "photographerLabel": "Photographer",
+      "workspaceNameLabel": "Workspace name",
+      "assigning": "Assigning...",
+      "assign": "Assign photographer",
+      "allPhotographersAssigned": "All available photographers already have a workspace on this project."
     }
   },
   "publicInvite": {
@@ -1078,7 +1274,16 @@
       "consent_upgrade_template_family_mismatch": "Select a newer published version from the same consent template family.",
       "consent_upgrade_template_not_newer": "Select a newer published version before requesting updated consent.",
       "project_template_unavailable": "The selected published template is not available for this project request.",
-      "default_template_unavailable": "The project default template is not available. Choose another published template."
+      "default_template_unavailable": "The project default template is not available. Choose another published template.",
+      "project_archived": "Archived projects do not accept workflow changes.",
+      "project_finalized": "Finalized projects are read-only.",
+      "workspace_capture_locked": "This workspace is not accepting authenticated capture changes.",
+      "workspace_review_locked": "This workspace is not accepting review changes.",
+      "workspace_not_accepting_submissions": "This workspace is no longer accepting submissions.",
+      "workspace_transition_conflict": "This workflow transition is not allowed from the current workspace state.",
+      "workspace_validation_blocked": "This workspace still has unresolved validation blockers.",
+      "project_finalize_blocked": "This project is not ready to finalize.",
+      "project_finalize_conflict": "This project finalization conflicted with another update."
     }
   }
 }

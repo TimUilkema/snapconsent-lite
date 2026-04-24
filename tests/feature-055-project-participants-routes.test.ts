@@ -42,6 +42,7 @@ test("add project profile participant route rejects unauthenticated requests", a
       },
       body: JSON.stringify({
         recurringProfileId: "profile-1",
+        workspaceId: "workspace-1",
       }),
     }),
     {
@@ -52,6 +53,7 @@ test("add project profile participant route rejects unauthenticated requests", a
     {
       createClient: async () => createUnauthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => undefined,
       addProjectProfileParticipant: async () => {
         throw new Error("should not be called");
       },
@@ -82,6 +84,7 @@ test("add project profile participant route validates bodies and forwards payloa
     {
       createClient: async () => createAuthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      assertCanCaptureWorkspaceAction: async () => undefined,
       addProjectProfileParticipant: async () => {
         throw new Error("should not be called");
       },
@@ -102,6 +105,7 @@ test("add project profile participant route validates bodies and forwards payloa
       },
       body: JSON.stringify({
         recurringProfileId: "profile-1",
+        workspaceId: "workspace-1",
       }),
     }),
     {
@@ -112,10 +116,24 @@ test("add project profile participant route validates bodies and forwards payloa
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async ({
+        supabase: client,
+        tenantId,
+        userId,
+        projectId,
+        requestedWorkspaceId: workspaceId,
+      }) => {
+        assert.equal(tenantId, "tenant-1");
+        assert.equal(userId, "user-1");
+        assert.equal(projectId, "project-1");
+        assert.equal(workspaceId, "workspace-1");
+        assert.ok(client);
+      },
       addProjectProfileParticipant: async (input) => {
         assert.equal(input.tenantId, "tenant-1");
         assert.equal(input.userId, "user-1");
         assert.equal(input.projectId, "project-1");
+        assert.equal(input.workspaceId, "workspace-1");
         assert.equal(input.recurringProfileId, "profile-1");
 
         return {
@@ -145,8 +163,12 @@ test("project participant consent request route accepts empty bodies and forward
     new Request("http://localhost/api/projects/project-1/profile-participants/participant-1/consent-request", {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         "Idempotency-Key": "feature055-project-request",
       },
+      body: JSON.stringify({
+        workspaceId: "workspace-1",
+      }),
     }),
     {
       params: Promise.resolve({
@@ -157,10 +179,12 @@ test("project participant consent request route accepts empty bodies and forward
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => undefined,
       createProjectProfileConsentRequest: async (input) => {
         assert.equal(input.tenantId, "tenant-1");
         assert.equal(input.userId, "user-1");
         assert.equal(input.projectId, "project-1");
+        assert.equal(input.workspaceId, "workspace-1");
         assert.equal(input.participantId, "participant-1");
         assert.equal(input.idempotencyKey, "feature055-project-request");
         assert.equal(input.consentTemplateId, null);
@@ -195,6 +219,7 @@ test("project participant consent request route accepts empty bodies and forward
       },
       body: JSON.stringify({
         consentTemplateId: "template-2",
+        workspaceId: "workspace-1",
       }),
     }),
     {
@@ -206,8 +231,10 @@ test("project participant consent request route accepts empty bodies and forward
     {
       createClient: async () => createAuthenticatedClient("user-2") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => undefined,
       createProjectProfileConsentRequest: async (input) => {
         assert.equal(input.userId, "user-2");
+        assert.equal(input.workspaceId, "workspace-1");
         assert.equal(input.idempotencyKey, "feature055-project-request-template");
         assert.equal(input.consentTemplateId, "template-2");
 
@@ -239,8 +266,12 @@ test("project participant consent request route returns service-shaped errors", 
     new Request("http://localhost/api/projects/project-1/profile-participants/participant-1/consent-request", {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         "Idempotency-Key": "feature055-project-request-error",
       },
+      body: JSON.stringify({
+        workspaceId: "workspace-1",
+      }),
     }),
     {
       params: Promise.resolve({
@@ -251,6 +282,7 @@ test("project participant consent request route returns service-shaped errors", 
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => undefined,
       createProjectProfileConsentRequest: async () => {
         throw new HttpError(
           409,
@@ -265,5 +297,84 @@ test("project participant consent request route returns service-shaped errors", 
   assert.deepEqual(await response.json(), {
     error: "project_consent_already_signed",
     message: "This profile already has an active project consent.",
+  });
+});
+
+test("project participant routes reject users without capture permission", async () => {
+  const addResponse = await handleAddProjectProfileParticipantPost(
+    new Request("http://localhost/api/projects/project-1/profile-participants", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        recurringProfileId: "profile-1",
+        workspaceId: "workspace-1",
+      }),
+    }),
+    {
+      params: Promise.resolve({
+        projectId: "project-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-reviewer") as never,
+      resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => {
+        throw new HttpError(
+          403,
+          "workspace_capture_forbidden",
+          "Only workspace owners, admins, and assigned photographers can perform capture actions.",
+        );
+      },
+      addProjectProfileParticipant: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  );
+
+  assert.equal(addResponse.status, 403);
+  assert.deepEqual(await addResponse.json(), {
+    error: "workspace_capture_forbidden",
+    message: "Only workspace owners, admins, and assigned photographers can perform capture actions.",
+  });
+
+  const requestResponse = await handleCreateProjectProfileConsentRequestPost(
+    new Request("http://localhost/api/projects/project-1/profile-participants/participant-1/consent-request", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "feature055-project-request-forbidden",
+      },
+      body: JSON.stringify({
+        workspaceId: "workspace-1",
+      }),
+    }),
+    {
+      params: Promise.resolve({
+        projectId: "project-1",
+        participantId: "participant-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-reviewer") as never,
+      resolveTenantId: async () => "tenant-1",
+      requireWorkspaceCaptureMutationAccessForRequest: async () => {
+        throw new HttpError(
+          403,
+          "workspace_capture_forbidden",
+          "Only workspace owners, admins, and assigned photographers can perform capture actions.",
+        );
+      },
+      createProjectProfileConsentRequest: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  );
+
+  assert.equal(requestResponse.status, 403);
+  assert.deepEqual(await requestResponse.json(), {
+    error: "workspace_capture_forbidden",
+    message: "Only workspace owners, admins, and assigned photographers can perform capture actions.",
   });
 });

@@ -14,6 +14,7 @@ import { runChunkedRead } from "@/lib/supabase/safe-in-filter";
 export type EligibleAssetForMaterialization = {
   assetId: string;
   assetType: "photo" | "headshot";
+  workspaceId: string;
   storage: AutoMatcherStorageRef;
   contentHash: string | null;
   contentHashAlgo: string | null;
@@ -24,6 +25,7 @@ export type AssetFaceMaterializationRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   asset_id: string;
   asset_type: "photo" | "headshot";
   source_content_hash: string | null;
@@ -47,6 +49,7 @@ export type AssetFaceMaterializationFaceRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   asset_id: string;
   materialization_id: string;
   face_rank: number;
@@ -67,6 +70,7 @@ export type AssetFaceImageDerivativeRow = {
   asset_id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   derivative_kind: "review_square_256";
   storage_bucket: string;
   storage_path: string;
@@ -195,7 +199,7 @@ async function loadMaterializationFaces(
 ): Promise<AssetFaceMaterializationFaceRow[]> {
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
-    .select("id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at")
+    .select("id, tenant_id, project_id, workspace_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at")
     .eq("materialization_id", materializationId)
     .order("face_rank", { ascending: true });
 
@@ -215,7 +219,7 @@ async function loadAssetFaceMaterialization(
 ) {
   const { data, error } = await supabase
     .from("asset_face_materializations")
-    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
+    .select("id, tenant_id, project_id, workspace_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("asset_id", assetId)
@@ -310,7 +314,7 @@ async function loadAssetFaceMaterializationHeadersForAssets(
     const { data, error } = await supabase
       .from("asset_face_materializations")
       .select(
-        "id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at",
+        "id, tenant_id, project_id, workspace_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
@@ -353,7 +357,7 @@ export async function loadEligibleAssetForMaterialization(
   const nowIso = new Date().toISOString();
   const { data, error } = await supabase
     .from("assets")
-    .select("id, asset_type, storage_bucket, storage_path, content_hash, content_hash_algo, uploaded_at, retention_expires_at")
+    .select("id, workspace_id, asset_type, storage_bucket, storage_path, content_hash, content_hash_algo, uploaded_at, retention_expires_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("id", assetId)
@@ -370,10 +374,19 @@ export async function loadEligibleAssetForMaterialization(
     return null;
   }
 
+  if (!data.workspace_id) {
+    throw new HttpError(
+      500,
+      "face_materialization_workspace_missing",
+      "Materialization asset is missing workspace scope.",
+    );
+  }
+
   const assetType = data.asset_type === "headshot" ? "headshot" : "photo";
   return {
     assetId: data.id,
     assetType,
+    workspaceId: data.workspace_id,
     storage: {
       storageBucket: data.storage_bucket,
       storagePath: data.storage_path,
@@ -448,6 +461,7 @@ export async function persistAssetFaceDerivative(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   assetId: string;
   materializationId: string;
   assetFaceId: string;
@@ -481,6 +495,7 @@ export async function persistAssetFaceDerivative(input: {
         asset_id: input.assetId,
         tenant_id: input.tenantId,
         project_id: input.projectId,
+        workspace_id: input.workspaceId,
         derivative_kind: input.derivative.derivativeKind,
         storage_bucket: FACE_DERIVATIVE_BUCKET,
         storage_path: storagePath,
@@ -501,6 +516,7 @@ async function persistFaceDerivatives(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   assetId: string;
   materializationId: string;
   faceRows: AssetFaceMaterializationFaceRow[];
@@ -528,6 +544,7 @@ async function persistFaceDerivatives(input: {
         supabase: input.supabase,
         tenantId: input.tenantId,
         projectId: input.projectId,
+        workspaceId: input.workspaceId,
         assetId: input.assetId,
         materializationId: input.materializationId,
         assetFaceId: entry.faceRow.id,
@@ -661,6 +678,7 @@ export async function ensureAssetFaceMaterialization(
   const materializationUpsert = {
     tenant_id: input.tenantId,
     project_id: input.projectId,
+    workspace_id: asset.workspaceId,
     asset_id: asset.assetId,
     asset_type: asset.assetType,
     source_content_hash: asset.contentHash,
@@ -684,7 +702,7 @@ export async function ensureAssetFaceMaterialization(
     .upsert(materializationUpsert, {
       onConflict: "tenant_id,project_id,asset_id,materializer_version",
     })
-    .select("id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
+    .select("id, tenant_id, project_id, workspace_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, source_image_width, source_image_height, source_coordinate_space, materialized_at, created_at")
     .single();
 
   if (materializationError || !materializationRow) {
@@ -714,6 +732,7 @@ export async function ensureAssetFaceMaterialization(
   const faceRows = providerResult.faces.map((face) => ({
     tenant_id: input.tenantId,
     project_id: input.projectId,
+    workspace_id: asset.workspaceId,
     asset_id: asset.assetId,
     materialization_id: materializationRow.id,
     face_rank: face.faceRank,
@@ -749,6 +768,7 @@ export async function ensureAssetFaceMaterialization(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: asset.workspaceId,
     assetId: asset.assetId,
     materializationId: materializationRow.id,
     faceRows: loadedFaces,
@@ -811,11 +831,11 @@ export async function loadFaceImageDerivativesForFaceIds(
   }
 
   const rows = await runChunkedRead(faceIds, async (faceIdChunk) => {
-    const { data, error } = await supabase
-      .from("asset_face_image_derivatives")
-      .select(
-        "id, asset_face_id, materialization_id, asset_id, tenant_id, project_id, derivative_kind, storage_bucket, storage_path, width, height, created_at",
-      )
+      const { data, error } = await supabase
+        .from("asset_face_image_derivatives")
+        .select(
+          "id, asset_face_id, materialization_id, asset_id, tenant_id, project_id, workspace_id, derivative_kind, storage_bucket, storage_path, width, height, created_at",
+        )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .eq("derivative_kind", derivativeKind)
@@ -857,18 +877,104 @@ export async function loadCurrentProjectConsentHeadshots(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceIdOrOptions?:
+    | string
+    | {
+        optInOnly?: boolean;
+        notRevokedOnly?: boolean;
+        limit?: number | null;
+      },
   options?: {
     optInOnly?: boolean;
     notRevokedOnly?: boolean;
     limit?: number | null;
   },
 ) {
+  const workspaceId =
+    typeof workspaceIdOrOptions === "string" ? workspaceIdOrOptions : null;
+  const resolvedOptions =
+    typeof workspaceIdOrOptions === "string" ? options : workspaceIdOrOptions;
+
+  if (workspaceId) {
+    const { data: links, error: linksError } = await supabase
+      .from("asset_consent_links")
+      .select("consent_id, asset_id, assets!inner(uploaded_at)")
+      .eq("tenant_id", tenantId)
+      .eq("project_id", projectId)
+      .eq("workspace_id", workspaceId)
+      .eq("assets.workspace_id", workspaceId)
+      .eq("assets.asset_type", "headshot")
+      .eq("assets.status", "uploaded")
+      .is("assets.archived_at", null);
+
+    if (linksError) {
+      throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to load consent headshots.");
+    }
+
+    const currentByConsentId = new Map<string, CurrentProjectConsentHeadshot>();
+    ((links ?? []) as Array<{
+      consent_id: string;
+      asset_id: string;
+      assets?: { uploaded_at: string | null } | Array<{ uploaded_at: string | null }> | null;
+    }>).forEach((row) => {
+      const uploadedAt = Array.isArray(row.assets)
+        ? row.assets[0]?.uploaded_at ?? null
+        : row.assets?.uploaded_at ?? null;
+      const current = currentByConsentId.get(row.consent_id);
+      if (current && (current.headshotUploadedAt ?? "") >= (uploadedAt ?? "")) {
+        return;
+      }
+      currentByConsentId.set(row.consent_id, {
+        consentId: row.consent_id,
+        headshotAssetId: row.asset_id,
+        headshotUploadedAt: uploadedAt,
+      });
+    });
+
+    let rows = Array.from(currentByConsentId.values());
+    if (resolvedOptions?.optInOnly !== false || resolvedOptions?.notRevokedOnly === true) {
+      const consentIds = rows.map((row) => row.consentId);
+      const filteredConsentIds = await runChunkedRead(consentIds, async (consentIdChunk) => {
+        let query = supabase
+          .from("consents")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("project_id", projectId)
+          .eq("workspace_id", workspaceId)
+          .in("id", consentIdChunk);
+
+        if (resolvedOptions?.optInOnly !== false) {
+          query = query.eq("face_match_opt_in", true);
+        }
+        if (resolvedOptions?.notRevokedOnly === true) {
+          query = query.is("revoked_at", null).is("superseded_at", null);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to load consent headshots.");
+        }
+
+        return (data ?? []) as Array<{ id: string }>;
+      });
+
+      const allowedConsentIds = new Set(filteredConsentIds.map((row) => row.id));
+      rows = rows.filter((row) => allowedConsentIds.has(row.consentId));
+    }
+
+    if (typeof resolvedOptions?.limit === "number" && resolvedOptions.limit > 0) {
+      rows = rows.slice(0, resolvedOptions.limit);
+    }
+
+    return rows;
+  }
+
   const { data, error } = await supabase.rpc("list_current_project_consent_headshots", {
     p_tenant_id: tenantId,
     p_project_id: projectId,
-    p_opt_in_only: options?.optInOnly ?? true,
-    p_not_revoked_only: options?.notRevokedOnly ?? false,
-    p_limit: options?.limit ?? null,
+    p_opt_in_only: resolvedOptions?.optInOnly ?? true,
+    p_not_revoked_only: resolvedOptions?.notRevokedOnly ?? false,
+    p_limit: resolvedOptions?.limit ?? null,
   });
 
   if (error) {
@@ -892,13 +998,20 @@ async function loadCurrentHeadshotAssetForConsent(
   tenantId: string,
   projectId: string,
   consentId: string,
+  workspaceId?: string | null,
 ) {
-  const { data: links, error: linksError } = await supabase
+  let linksQuery = supabase
     .from("asset_consent_links")
     .select("asset_id")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("consent_id", consentId);
+
+  if (workspaceId) {
+    linksQuery = linksQuery.eq("workspace_id", workspaceId);
+  }
+
+  const { data: links, error: linksError } = await linksQuery;
 
   if (linksError) {
     throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to load consent headshots.");
@@ -912,7 +1025,7 @@ async function loadCurrentHeadshotAssetForConsent(
   const nowIso = new Date().toISOString();
   const eligibleHeadshots = await runChunkedRead(linkedHeadshotIds, async (headshotIdChunk) => {
     // safe-in-filter: bounded single-consent headshot validation runs through shared chunking.
-    const { data, error } = await supabase
+    let query = supabase
       .from("assets")
       .select("id, uploaded_at")
       .eq("tenant_id", tenantId)
@@ -921,8 +1034,13 @@ async function loadCurrentHeadshotAssetForConsent(
       .eq("status", "uploaded")
       .is("archived_at", null)
       .or(`retention_expires_at.is.null,retention_expires_at.gt.${nowIso}`)
-      // safe-in-filter: headshot validation is batch-bounded and chunked by shared helper.
       .in("id", headshotIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "face_match_headshot_lookup_failed", "Unable to validate consent headshots.");
@@ -940,9 +1058,10 @@ async function loadEligibleConsentsWithHeadshotAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null,
   limit: number,
 ) {
-  const rows = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, {
+  const rows = await loadCurrentProjectConsentHeadshots(supabase, tenantId, projectId, workspaceId ?? undefined, {
     optInOnly: true,
     notRevokedOnly: true,
     limit,
@@ -958,12 +1077,36 @@ export async function loadEligibleConsentHeadshotMaterializations(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
-  limit: number,
-  materializerVersion = getAutoMatchMaterializerVersion(),
-  options?: MaterializationLoadOptions,
+  workspaceIdOrLimit: string | number,
+  limitOrMaterializerVersion?: number | string,
+  materializerVersionOrOptions?: string | MaterializationLoadOptions,
+  maybeOptions?: MaterializationLoadOptions,
 ) {
+  const workspaceId = typeof workspaceIdOrLimit === "string" ? workspaceIdOrLimit : null;
+  const limit =
+    typeof workspaceIdOrLimit === "string"
+      ? Number(limitOrMaterializerVersion ?? 0)
+      : workspaceIdOrLimit;
+  const materializerVersion =
+    typeof workspaceIdOrLimit === "string"
+      ? typeof materializerVersionOrOptions === "string"
+        ? materializerVersionOrOptions
+        : getAutoMatchMaterializerVersion()
+      : typeof limitOrMaterializerVersion === "string"
+        ? limitOrMaterializerVersion
+        : getAutoMatchMaterializerVersion();
+  const options =
+    typeof workspaceIdOrLimit === "string"
+      ? (typeof materializerVersionOrOptions === "object" ? materializerVersionOrOptions : maybeOptions)
+      : (typeof materializerVersionOrOptions === "object" ? materializerVersionOrOptions : undefined);
   const includeFaces = options?.includeFaces ?? false;
-  const eligibleConsents = await loadEligibleConsentsWithHeadshotAssets(supabase, tenantId, projectId, limit);
+  const eligibleConsents = await loadEligibleConsentsWithHeadshotAssets(
+    supabase,
+    tenantId,
+    projectId,
+    workspaceId,
+    limit,
+  );
   if (eligibleConsents.length === 0) {
     return [] as Array<ConsentHeadshotMaterialization>;
   }

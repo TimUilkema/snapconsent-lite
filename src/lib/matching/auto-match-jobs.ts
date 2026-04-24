@@ -17,6 +17,7 @@ export type FaceMatchJobType = (typeof FACE_MATCH_JOB_TYPES)[number];
 type EnqueueFaceMatchJobInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   jobType: FaceMatchJobType;
   dedupeKey: string;
   scopeAssetId?: string | null;
@@ -121,15 +122,22 @@ async function loadExistingFaceMatchJobByDedupeKey(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   dedupeKey: string,
 ) {
-  const { data, error } = await supabase
+  let query = supabase
     .from("face_match_jobs")
     .select("id, status, attempt_count, max_attempts, run_after, lease_expires_at, locked_at, updated_at, created_at")
     .eq("tenant_id", normalizeUuid(tenantId))
     .eq("project_id", normalizeUuid(projectId))
-    .eq("dedupe_key", String(dedupeKey).trim())
-    .maybeSingle();
+    .eq("dedupe_key", String(dedupeKey).trim());
+
+  const normalizedWorkspaceId = String(workspaceId ?? "").trim();
+  if (normalizedWorkspaceId) {
+    query = query.eq("workspace_id", normalizedWorkspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "face_match_job_lookup_failed", "Unable to inspect existing face-match job.");
@@ -166,6 +174,7 @@ async function recoverDuplicateEnqueueRace(
     supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.dedupeKey,
   );
   if (!existing) {
@@ -190,6 +199,7 @@ async function recoverDuplicateRequeueRace(
     supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.dedupeKey,
   );
   if (!existing) {
@@ -207,6 +217,30 @@ async function recoverDuplicateRequeueRace(
     alreadyProcessing: isExistingJobActivelyProcessing(existing),
     alreadyQueued: existing.status === "queued",
   };
+}
+
+async function attachWorkspaceScopeToJob(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+  workspaceId: string | null | undefined,
+) {
+  const normalizedWorkspaceId = String(workspaceId ?? "").trim();
+  if (!normalizedWorkspaceId) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("face_match_jobs")
+    .update({ workspace_id: normalizedWorkspaceId })
+    .eq("tenant_id", normalizeUuid(tenantId))
+    .eq("project_id", normalizeUuid(projectId))
+    .eq("id", normalizeUuid(jobId));
+
+  if (error) {
+    throw new HttpError(500, "face_match_enqueue_failed", "Unable to scope face-match job.");
+  }
 }
 
 export function buildPhotoUploadedDedupeKey(assetId: string) {
@@ -252,6 +286,7 @@ export async function enqueueFaceMatchJob(
   const { data, error } = await supabase.rpc("enqueue_face_match_job", {
     p_tenant_id: normalizeUuid(input.tenantId),
     p_project_id: normalizeUuid(input.projectId),
+    p_workspace_id: input.workspaceId ? normalizeUuid(input.workspaceId) : null,
     p_job_type: input.jobType,
     p_dedupe_key: String(input.dedupeKey).trim(),
     p_scope_asset_id: input.scopeAssetId ? normalizeUuid(input.scopeAssetId) : null,
@@ -278,6 +313,14 @@ export async function enqueueFaceMatchJob(
     throw new HttpError(500, "face_match_enqueue_failed", "Unable to enqueue face-match job.");
   }
 
+  await attachWorkspaceScopeToJob(
+    supabase,
+    input.tenantId,
+    input.projectId,
+    row.job_id,
+    input.workspaceId,
+  );
+
   return {
     jobId: row.job_id,
     status: row.status,
@@ -295,6 +338,7 @@ export async function requeueFaceMatchJob(
   const { data, error } = await supabase.rpc("requeue_face_match_job", {
     p_tenant_id: normalizeUuid(input.tenantId),
     p_project_id: normalizeUuid(input.projectId),
+    p_workspace_id: input.workspaceId ? normalizeUuid(input.workspaceId) : null,
     p_job_type: input.jobType,
     p_dedupe_key: String(input.dedupeKey).trim(),
     p_scope_asset_id: input.scopeAssetId ? normalizeUuid(input.scopeAssetId) : null,
@@ -322,6 +366,14 @@ export async function requeueFaceMatchJob(
     throw new HttpError(500, "face_match_requeue_failed", "Unable to requeue face-match job.");
   }
 
+  await attachWorkspaceScopeToJob(
+    supabase,
+    input.tenantId,
+    input.projectId,
+    row.job_id,
+    input.workspaceId,
+  );
+
   return {
     jobId: row.job_id,
     status: row.status,
@@ -338,6 +390,7 @@ export async function requeueFaceMatchJob(
 type EnqueuePhotoUploadedInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
   payload?: Record<string, unknown> | null;
   mode?: FaceMatchJobDispatchMode;
@@ -350,6 +403,7 @@ export async function enqueuePhotoUploadedJob(input: EnqueuePhotoUploadedInput) 
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "photo_uploaded",
     dedupeKey,
     scopeAssetId: input.assetId,
@@ -370,6 +424,7 @@ export async function enqueuePhotoUploadedJob(input: EnqueuePhotoUploadedInput) 
 type EnqueueConsentHeadshotReadyInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   consentId: string;
   headshotAssetId?: string | null;
   payload?: Record<string, unknown> | null;
@@ -383,6 +438,7 @@ export async function enqueueConsentHeadshotReadyJob(input: EnqueueConsentHeadsh
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "consent_headshot_ready",
     dedupeKey,
     scopeConsentId: input.consentId,
@@ -406,6 +462,7 @@ export async function enqueueConsentHeadshotReadyJob(input: EnqueueConsentHeadsh
 type EnqueueReconcileProjectInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   windowKey: string;
   payload?: Record<string, unknown> | null;
   mode?: FaceMatchJobDispatchMode;
@@ -418,6 +475,7 @@ export async function enqueueReconcileProjectJob(input: EnqueueReconcileProjectI
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "reconcile_project",
     dedupeKey,
     payload: input.payload ?? null,
@@ -437,6 +495,7 @@ export async function enqueueReconcileProjectJob(input: EnqueueReconcileProjectI
 type EnqueueMaterializeAssetFacesInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
   materializerVersion: string;
   payload?: Record<string, unknown> | null;
@@ -450,6 +509,7 @@ export async function enqueueMaterializeAssetFacesJob(input: EnqueueMaterializeA
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "materialize_asset_faces",
     dedupeKey,
     scopeAssetId: input.assetId,
@@ -473,6 +533,7 @@ export async function enqueueMaterializeAssetFacesJob(input: EnqueueMaterializeA
 type EnqueueCompareMaterializedPairInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   consentId: string;
   assetId: string;
   headshotMaterializationId: string;
@@ -496,6 +557,7 @@ export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMat
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "compare_materialized_pair",
     dedupeKey,
     scopeAssetId: input.assetId,
@@ -522,6 +584,7 @@ export async function enqueueCompareMaterializedPairJob(input: EnqueueCompareMat
 type EnqueueCompareRecurringProfileMaterializedPairInput = {
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   projectProfileParticipantId: string;
   profileId: string;
   recurringHeadshotId: string;
@@ -550,6 +613,7 @@ export async function enqueueCompareRecurringProfileMaterializedPairJob(
   const request = {
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId ?? null,
     jobType: "compare_recurring_profile_materialized_pair" as const,
     dedupeKey,
     scopeAssetId: input.assetId,

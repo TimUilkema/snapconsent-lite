@@ -124,6 +124,7 @@ export function InviteSharePanel({
 type InviteActionsProps = {
   inviteId: string;
   projectId: string;
+  workspaceId: string;
   invitePath: string | null;
   isShareable: boolean;
   isRevokable: boolean;
@@ -132,6 +133,7 @@ type InviteActionsProps = {
 export function InviteActions({
   inviteId,
   projectId,
+  workspaceId,
   invitePath,
   isShareable,
   isRevokable,
@@ -168,9 +170,15 @@ export function InviteActions({
     setError(null);
 
     try {
-      const response = await fetch(`/api/projects/${projectId}/invites/${inviteId}/revoke`, {
-        method: "POST",
+      const params = new URLSearchParams({
+        workspaceId,
       });
+      const response = await fetch(
+        `/api/projects/${projectId}/invites/${inviteId}/revoke?${params.toString()}`,
+        {
+          method: "POST",
+        },
+      );
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as

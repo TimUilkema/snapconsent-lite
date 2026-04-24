@@ -7,10 +7,15 @@ import type { ProjectMatchingProgress } from "@/lib/matching/project-matching-pr
 
 type ProjectMatchingProgressProps = {
   projectId: string;
+  workspaceId: string;
   initialProgress: ProjectMatchingProgress;
 };
 
-export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectMatchingProgressProps) {
+export function ProjectMatchingProgress({
+  projectId,
+  workspaceId,
+  initialProgress,
+}: ProjectMatchingProgressProps) {
   const t = useTranslations("projects.matchingProgress");
   const [progress, setProgress] = useState<ProjectMatchingProgress>(initialProgress);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -28,10 +33,16 @@ export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectM
     const intervalId = window.setInterval(async () => {
       try {
         setIsRefreshing(true);
-        const response = await fetch(`/api/projects/${projectId}/matching-progress`, {
-          method: "GET",
-          cache: "no-store",
+        const params = new URLSearchParams({
+          workspaceId,
         });
+        const response = await fetch(
+          `/api/projects/${projectId}/matching-progress?${params.toString()}`,
+          {
+            method: "GET",
+            cache: "no-store",
+          },
+        );
         const payload = (await response.json().catch(() => null)) as ProjectMatchingProgress | null;
         if (!response.ok || !payload || cancelled) {
           return;
@@ -49,7 +60,7 @@ export function ProjectMatchingProgress({ projectId, initialProgress }: ProjectM
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [projectId, progress.isMatchingInProgress]);
+  }, [projectId, progress.isMatchingInProgress, workspaceId]);
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4">

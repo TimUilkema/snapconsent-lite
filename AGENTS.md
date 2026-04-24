@@ -58,6 +58,34 @@ Research and plan documents should be created under:
 
 docs/rpi/<feature-id>/
 
+## Code comments for future maintainability
+
+When implementing non-obvious domain logic, add concise comments that explain **why** the code exists, not what the code mechanically does.
+
+Good places for comments:
+- permission and role checks
+- tenant/workspace scoping decisions
+- idempotency and retry-safety logic
+- public-token flows
+- consent current-vs-history behavior
+- matching/review invariants
+- migration constraints that encode product rules
+
+Avoid:
+- obvious line-by-line comments
+- comments that repeat the code
+- speculative future-roadmap comments
+- stale implementation notes that belong in RPI docs instead
+
+Prefer short comments that help future developers and AI coding agents avoid breaking important invariants.
+
+
+## Local development data policy
+
+For RPI feature work, assume local development can be reset with `supabase db reset`.
+
+Prefer clean schema changes and fresh-state validation over complex compatibility layers for old local data, unless the feature explicitly requires backfill or production migration safety.
+
 ## Internationalization (i18n)
 
 If the repo includes the UI language switch / i18n framework:

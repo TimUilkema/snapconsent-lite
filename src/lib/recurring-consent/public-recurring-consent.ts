@@ -42,6 +42,7 @@ export type PublicRecurringConsentRequest = {
   profileId: string;
   profileName: string;
   profileEmail: string;
+  workspaceId: string | null;
   expiresAt: string;
   requestStatus: "pending" | "signed" | "expired" | "superseded" | "cancelled";
   canSign: boolean;
@@ -71,8 +72,19 @@ type RecurringConsentRequestScopeRow = {
   tenant_id: string;
   profile_id: string;
   project_id: string | null;
+  workspace_id: string | null;
   consent_kind: "baseline" | "project";
   consent_template_id: string;
+};
+
+export type PublicRecurringConsentRequestScope = {
+  requestId: string;
+  tenantId: string;
+  profileId: string;
+  projectId: string | null;
+  workspaceId: string | null;
+  consentKind: "baseline" | "project";
+  consentTemplateId: string;
 };
 
 type RecurringProfileRow = {
@@ -116,7 +128,7 @@ async function loadRecurringConsentRequestScope(requestId: string) {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("recurring_profile_consent_requests")
-    .select("id, tenant_id, profile_id, project_id, consent_kind, consent_template_id")
+    .select("id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id")
     .eq("id", requestId)
     .maybeSingle();
 
@@ -131,7 +143,7 @@ async function loadRecurringConsentRequestScopeByToken(token: string) {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("recurring_profile_consent_requests")
-    .select("id, tenant_id, profile_id, project_id, consent_kind, consent_template_id")
+    .select("id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id")
     .eq("token_hash", hashPublicToken(token))
     .maybeSingle();
 
@@ -140,6 +152,25 @@ async function loadRecurringConsentRequestScopeByToken(token: string) {
   }
 
   return (data as RecurringConsentRequestScopeRow | null) ?? null;
+}
+
+export async function resolvePublicRecurringConsentRequestScope(
+  token: string,
+): Promise<PublicRecurringConsentRequestScope | null> {
+  const scope = await loadRecurringConsentRequestScopeByToken(token);
+  if (!scope) {
+    return null;
+  }
+
+  return {
+    requestId: scope.id,
+    tenantId: scope.tenant_id,
+    profileId: scope.profile_id,
+    projectId: scope.project_id,
+    workspaceId: scope.workspace_id,
+    consentKind: scope.consent_kind,
+    consentTemplateId: scope.consent_template_id,
+  };
 }
 
 async function loadTemplateKeyById(
@@ -165,6 +196,9 @@ async function loadRecurringProjectUpgradeContextForRequest(
   if (requestScope.consent_kind !== "project" || !requestScope.project_id) {
     return null;
   }
+  if (!requestScope.workspace_id) {
+    throw new HttpError(500, "recurring_consent_request_lookup_failed", "Recurring project consent request is missing a workspace assignment.");
+  }
 
   const supabase = createServiceRoleClient();
   const targetTemplateKey = await loadTemplateKeyById(supabase, requestScope.consent_template_id);
@@ -172,19 +206,21 @@ async function loadRecurringProjectUpgradeContextForRequest(
     return null;
   }
 
-  const { data: activeConsent, error: activeConsentError } = await supabase
+  const activeConsentQuery = supabase
     .from("recurring_profile_consents")
     .select("id, consent_template_id, face_match_opt_in, structured_fields_snapshot")
     .eq("tenant_id", requestScope.tenant_id)
     .eq("profile_id", requestScope.profile_id)
     .eq("project_id", requestScope.project_id)
+    .eq("workspace_id", requestScope.workspace_id)
     .eq("consent_kind", "project")
     .is("revoked_at", null)
     .is("superseded_at", null)
     .order("signed_at", { ascending: false })
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  const { data: activeConsent, error: activeConsentError } = await activeConsentQuery.maybeSingle();
 
   if (activeConsentError) {
     throw new HttpError(500, "recurring_consent_request_lookup_failed", "Unable to load recurring consent request.");
@@ -258,6 +294,7 @@ export async function getPublicRecurringConsentRequest(
     profileId: row.profile_id,
     profileName: row.profile_name,
     profileEmail: row.profile_email,
+    workspaceId: requestScope?.workspace_id ?? null,
     expiresAt: row.expires_at,
     requestStatus: row.request_status,
     canSign: row.can_sign,
@@ -333,6 +370,7 @@ export async function submitRecurringProfileConsent(
   }
 
   const requestScope = await loadRecurringConsentRequestScope(row.request_id);
+
   if (requestScope?.consent_kind === "baseline" && input.faceMatchOptIn === true) {
     await enqueueRecurringProjectReplayForProfile(undefined, {
       tenantId: row.tenant_id,
@@ -348,6 +386,7 @@ export async function submitRecurringProfileConsent(
     await enqueueReconcileProjectJob({
       tenantId: row.tenant_id,
       projectId: requestScope.project_id,
+      workspaceId: requestScope.workspace_id,
       windowKey: `project_recurring_consent:${requestScope.profile_id}`,
       payload: {
         replayKind: "project_recurring_consent",

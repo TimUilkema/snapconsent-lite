@@ -150,3 +150,45 @@ export async function createAuthUserWithRetry(
     `Unable to create auth user for tests: ${lastError?.code ?? "unknown"} ${lastError?.message ?? "no error message"}`,
   );
 }
+
+export async function getDefaultProjectWorkspaceId(
+  supabase: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+) {
+  const { data, error } = await supabase
+    .from("project_workspaces")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("project_id", projectId)
+    .eq("workspace_kind", "default")
+    .maybeSingle();
+  assertNoPostgrestError(error, "select default project workspace");
+  assert.ok(data?.id, "default project workspace should exist");
+  return data.id as string;
+}
+
+export async function createPhotographerProjectWorkspace(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  projectId: string;
+  createdBy: string;
+  photographerUserId: string;
+  name?: string;
+}) {
+  const { data, error } = await input.supabase
+    .from("project_workspaces")
+    .insert({
+      tenant_id: input.tenantId,
+      project_id: input.projectId,
+      workspace_kind: "photographer",
+      photographer_user_id: input.photographerUserId,
+      name: input.name ?? "Photographer workspace",
+      created_by: input.createdBy,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(error, "insert photographer project workspace");
+  assert.ok(data?.id, "photographer project workspace should exist");
+  return data.id as string;
+}

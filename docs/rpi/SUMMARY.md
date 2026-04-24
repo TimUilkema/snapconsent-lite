@@ -8,13 +8,13 @@ Source-of-truth order for this summary:
 2. Newer RPI docs in `docs/rpi/`
 3. Older RPI docs in `docs/rpi/`
 
-Where older docs and live code differ, this summary follows the live repository state as of 2026-04-22.
+Where older docs and live code differ, this summary follows the live repository state as of 2026-04-24.
 
 ## 1. Project overview
 
 SnapConsent is a multi-tenant web application for collecting, storing, reviewing, and operationalizing media-use consent. The product sits at the intersection of consent management and media review. It is not just a form-signing app and not just a photo organizer. The core product value comes from tying auditable consent records to actual project media, then giving staff a controlled way to decide which people are represented in which assets.
 
-The main internal users are tenant staff such as owners, admins, and photographers. They create projects, manage templates, invite one-off participants, maintain recurring profile directories, upload project media, review matches, and export approved project data. The public users are people who receive a tokenized link to sign or revoke consent. Public users never operate directly on tenant-scoped data; they only act through tightly bounded token flows.
+The main internal users are tenant staff such as owners, admins, reviewers, and photographers. Owners and admins manage tenants, members, templates, recurring profiles, and project staffing. Reviewers handle review and export workflows. Photographers handle capture inside assigned project workspaces. The public users are people who receive a tokenized link to sign, revoke, or accept an organization invite. Public users never operate directly on tenant-scoped data; they only act through tightly bounded token flows.
 
 The product solves four related business problems:
 
@@ -23,44 +23,51 @@ The product solves four related business problems:
 - It keeps project media private while still making upload, preview, thumbnailing, playback, and export practical.
 - It helps staff connect media to consenting people through exact-face review, whole-asset review, and matching-driven operator workflows.
 
-Consent, media, and project workflows are tightly linked. A project is the operational unit where staff create invites, collect one-off consents, add recurring participants, upload photos or videos, and review the resulting media. One-off consent and recurring consent are both upstream authorization layers. Uploaded media and generated face materializations are the downstream review layer. Matching and manual review connect the two.
+Consent, media, and project workflows are tightly linked. A project is now the umbrella organization-facing unit, and `project_workspaces` are the photographer-scoped operational units inside it. Staff create invites, collect one-off consents, add recurring participants, upload photos or videos, and review the resulting media inside a selected workspace. One-off consent and recurring consent are both upstream authorization layers. Uploaded media and generated face materializations are the downstream review layer. Matching and manual review connect the two.
 
 ## 2. Core product and domain model
 
-The current product has three overlapping scopes that matter in almost every feature:
+The current product has four overlapping scopes that matter in almost every feature:
 
 - Tenant scope: the workspace boundary. Most business data belongs here.
-- Project scope: the operational boundary for one campaign, event, or shoot.
+- Project scope: the umbrella boundary for one campaign, event, or shoot.
+- Project-workspace scope: the isolated capture, matching, review, and export boundary inside a project.
 - Public-token scope: narrow public access to exactly one invite, request, or revoke operation.
 
 ### Tenant-scoped foundation
 
-`tenants` and `memberships` define the workspace boundary. Every authenticated staff action resolves the active tenant server-side. Current code centralizes recovery in `src/lib/tenant/resolve-tenant.ts`, which first tries `current_tenant_id()`, then falls back to `ensure_tenant_for_current_user()`, then retries tenant resolution. Future work should reuse that path rather than inventing new membership lookups.
+`tenants` and `memberships` define the workspace boundary. Accounts can now belong to multiple tenants, and active-tenant resolution is server-side. Current code centralizes recovery in `src/lib/tenant/resolve-tenant.ts`, which validates the `sc_active_tenant` cookie against current memberships, auto-resolves the sole membership, blocks bootstrap while a pending organization-invite cookie is present, and only then falls back to `ensure_tenant_for_current_user()`. Future work should reuse that path rather than inventing new membership lookups.
 
 Consent templates are now effectively tenant-managed. The current live model in `src/lib/templates/template-service.ts` supports draft, published, and archived versions, structured fields, and form layout definitions. The type layer still recognizes `app` versus `tenant` scope, but current project usage and visible-template listing are tenant-centric, and the seeded app-template era has been removed from the live schema.
 
 Recurring profiles are also tenant-scoped. They represent known people that the tenant may work with repeatedly across projects. A recurring profile is not the same thing as a one-off project subject, and the product intentionally keeps those concepts separate.
 
-### Project-scoped operational model
+`memberships` now support four live roles: `owner`, `admin`, `reviewer`, and `photographer`. Owners and admins can manage tenant members through `tenant_membership_invites`, and organization join acceptance uses the public `GET /join/[token]` plus authenticated accept route. Organization invite delivery now reuses the outbound email foundation instead of a route-local SMTP path.
 
-`projects` are the root operational unit for one-off consent and project media. A project can have:
+### Project and workspace operational model
+
+`projects` are now the umbrella organization-facing unit. They hold project metadata, default template choices, staffing, and one or more `project_workspaces`.
+
+`project_workspaces` are the operational capture and review units inside a project. A workspace can have:
 
 - one-off subject invites
-- one-off signed consents
+- one-off subjects and signed consents
 - project assets such as photos and videos
 - project participants that point at recurring profiles
-- project-level recurring consent requests and signed recurring consents
-- project-level review state and matching state
+- workspace-scoped recurring consent requests and signed recurring consents
+- workspace-scoped matching, review, assignment, and export state
 
-`subject_invites` are project-scoped invite records for one-off signers. They are created by staff, tied to a specific project and consent template, and exposed publicly only through a tokenized invite path. The public invite flow is `GET /i/[token]` plus the submission route behind it. Invite rows are not public by themselves; only the hashed-token RPC path is public.
+This boundary matters. If a project has multiple photographer workspaces, each workspace keeps its own consent intake, asset pool, matching fanout, review queue, and export payload. Owners, admins, and reviewers can inspect project workspaces across the umbrella project. Photographers are constrained to their assigned workspace rows.
 
-`subjects` are tenant-scoped identity records for one-off signers. A subject is typically created or reused as part of public invite signing. A subject belongs to the tenant, but the signed consent itself belongs to a specific project.
+`subject_invites` are workspace-scoped invite records for one-off signers. They are created by staff, tied to a specific project workspace and consent template, and exposed publicly only through a tokenized invite path. The public invite flow is `GET /i/[token]` plus the submission route behind it. Invite rows are not public by themselves; only the hashed-token RPC path is public.
 
-`consents` are project-scoped, immutable one-off consent records. Each stores the text and version that were actually signed, plus current revocation state, `face_match_opt_in`, and current `structured_fields_snapshot`. Older docs often describe consent as simple text plus version. The live app now stores a richer template snapshot, including structured field values at signing time.
+`subjects` are one-off identity rows scoped by tenant, project, and workspace. A subject is typically created or reused as part of public invite signing. The one-off upgrade path reuses the same `subjects` row inside the same workspace rather than rebinding the consent to a different person.
+
+`consents` are project-workspace-scoped, immutable one-off consent records. Each stores the text and version that were actually signed, plus current revocation state, `face_match_opt_in`, and current `structured_fields_snapshot`. Older docs often describe consent as simple text plus version. The live app now stores a richer template snapshot, including structured field values at signing time.
 
 One-off consent revocation uses `revoke_tokens` and `consent_events`. Revocation changes future processing but does not delete the signed consent record or erase history.
 
-One-off consent now also has an explicit upgrade path. `project_consent_upgrade_requests` tracks pending upgrade requests bound to the same `subjects` row, and a newer signed one-off consent can supersede the prior current consent through `superseded_at` and `superseded_by_consent_id`. Old signed rows remain immutable history, but current one-off reads and current one-off assignment state follow the governing unsuperseded consent.
+One-off consent now also has an explicit upgrade path. `project_consent_upgrade_requests` tracks pending upgrade requests bound to the same `subjects` row and workspace, and a newer signed one-off consent can supersede the prior current consent through `superseded_at` and `superseded_by_consent_id`. Old signed rows remain immutable history, but current one-off reads and current one-off assignment state follow the governing unsuperseded consent. Public one-off upgrade UI now knows whether a reusable current headshot exists and only requires a fresh upload when no reusable headshot can be carried forward.
 
 ### Recurring profile and recurring consent model
 
@@ -69,11 +76,11 @@ One-off consent now also has an explicit upgrade path. `project_consent_upgrade_
 `recurring_profile_consent_requests` and `recurring_profile_consents` are the recurring-consent backbone. The current live schema supports two consent kinds:
 
 - `baseline`: tenant/profile scoped
-- `project`: tenant/project/profile scoped
+- `project`: tenant/project/workspace/profile scoped
 
-This distinction matters. Baseline recurring consent is the standing authorization for the tenant to work with a recurring profile at a general level, including whether face matching may be used. Project recurring consent is the project-specific authorization that makes a recurring profile eligible for assignment inside one project. A profile may have baseline consent without current project consent, and that is an expected state.
+This distinction matters. Baseline recurring consent is the standing authorization for the tenant to work with a recurring profile at a general level, including whether face matching may be used. Project recurring consent is the workspace-specific authorization that makes a recurring profile eligible for assignment inside one project workspace. A profile may have baseline consent without current project consent, and that is an expected state.
 
-`project_profile_participants` are the bridge that adds recurring profiles into a specific project. They do not themselves mean the person has granted project consent. They are the project-local participation record that later recurring consent, matching readiness, and assignment logic build on.
+`project_profile_participants` are the bridge that adds recurring profiles into a specific project workspace. They do not themselves mean the person has granted project consent. They are the workspace-local participation record that later recurring consent, matching readiness, and assignment logic build on.
 
 Recurring project replacement requests can now coexist with an active current project consent. Creating a replacement request does not demote the current signed project consent; the old row remains current until a newer project consent successfully signs and supersedes it.
 
@@ -82,19 +89,19 @@ Recurring public flows use separate public routes from one-off invites:
 - `GET /rp/[token]`: public recurring consent request
 - `GET /rr/[token]`: public recurring consent revoke flow
 
-The recurring public flow reuses the same core principles as one-off public consent: server-validated token access, immutable signed records, bounded revoke handling, and no client authority over tenant or project identity.
+The recurring public flow reuses the same core principles as one-off public consent: server-validated token access, immutable signed records, bounded revoke handling, and no client authority over tenant, project, or workspace identity.
 
-Project-media consent now also has a derived scope-state layer. `project_consent_scope_signed_projections` stores immutable per-scope signed projections for one-off project consent and recurring project consent, and `project_consent_scope_effective_states` derives the governing per-scope operational state by stable owner boundary plus template family. The effective vocabulary is `granted`, `not_granted`, `revoked`, and `not_collected`, where `not_collected` means the governing signed version did not include that scope.
+Project-media consent now also has a derived scope-state layer. `project_consent_scope_signed_projections` stores immutable per-scope signed projections for one-off project-workspace consent and recurring project-workspace consent, and `project_consent_scope_effective_states` derives the governing per-scope operational state by stable owner boundary plus template family. The effective vocabulary is `granted`, `not_granted`, `revoked`, and `not_collected`, where `not_collected` means the governing signed version did not include that scope.
 
 ### Media and asset model
 
-`assets` are project-scoped media records. The current live app supports three asset types:
+`assets` are project-workspace-scoped media records. The current live app supports three asset types:
 
 - `photo`
 - `headshot`
 - `video`
 
-Project photos and videos live in the project asset space. One-off consent headshots also reuse the `assets` table, but they are marked `asset_type = 'headshot'` and are governed by separate consent and retention rules. Headshot assets are not just generic project uploads.
+Project photos and videos live in the selected project workspace asset space. One-off consent headshots also reuse the `assets` table, but they are marked `asset_type = 'headshot'` and are governed by separate consent and retention rules. Headshot assets are not just generic project uploads.
 
 `asset_consent_links` still exists and still matters, but not as the modern exact-face ownership table. In current live behavior it is most relevant for headshot attachment and older asset-level link history. Future work should not mistake it for the canonical exact-face assignment model.
 
@@ -105,25 +112,25 @@ Recurring profile headshots are modeled separately from `assets`. They use:
 - `recurring_profile_headshot_materialization_faces`
 - `recurring_profile_headshot_repair_jobs`
 
-This separation matters because recurring headshots are tenant/profile infrastructure, not project assets. One-off consent headshots are project-linked; recurring headshots are reusable profile-linked matching inputs.
+This separation matters because recurring headshots are tenant/profile infrastructure, not project assets. One-off consent headshots are project-workspace-linked; recurring headshots are reusable profile-linked matching inputs.
 
 For recurring headshots, any upload with more than one detected face now requires manual canonical-face selection. The server no longer auto-selects a dominant face for multi-face recurring headshots.
 
 ### Exact-face materialization and ownership model
 
-For project photos, the live matching system is now face-centric. Current photos can have materialization rows in:
+For project photos inside one workspace, the live matching system is now face-centric. Current photos can have materialization rows in:
 
 - `asset_face_materializations`
 - `asset_face_materialization_faces`
 
 These represent SnapConsent-owned face materialization state, including current detected faces and manually created faces. The exact-face owner model does not assign a consent directly to a photo as a single blob. Instead, the product assigns one current assignee to one current face.
 
-The assignee bridge is `project_face_assignees`. It normalizes two identity kinds into one project-local assignment model:
+The assignee bridge is `project_face_assignees`. It normalizes two identity kinds into one project-workspace-local assignment model:
 
 - `project_consent`
 - `project_recurring_consent`
 
-That bridge is the key later-era design move. It lets one-off project consents and project-scoped recurring consents participate in the same exact-face and whole-asset linking flows without collapsing them into the same table.
+That bridge is the key later-era design move. It lets one-off project consents and workspace-scoped recurring project consents participate in the same exact-face and whole-asset linking flows without collapsing them into the same table.
 
 One-off upgrade completion can retarget the existing one-off assignee row and still-current consent-backed link rows from the prior consent to the new governing consent. That lets exact-face, fallback, and whole-asset behavior keep following the same person without treating an upgrade as a brand-new current owner.
 
@@ -154,13 +161,14 @@ The repo has several related but distinct classes of matching state:
 
 Manual faces are their own concept. A manual face is not a hidden face or a blocked face. It is a new persisted face row created by an operator when detector output missed someone. Manual faces live inside the same materialization model as detector faces, and they participate in linking and review like exact faces.
 
-### What is tenant-scoped, project-scoped, and public-token-scoped
+### What is tenant-scoped, project-scoped, project-workspace-scoped, and public-token-scoped
 
 The easiest way to reason about scope is this:
 
-- Tenant-scoped: tenants, memberships, recurring profiles, recurring profile types, baseline recurring consents and requests, consent templates, and the identity of staff users.
-- Project-scoped: projects, subject invites, one-off consents, project assets, project participants, project recurring consents and requests, exact-face materializations, exact-face links, whole-asset links, project matching progress, and export.
-- Public-token-scoped: public invite signing, one-off revoke, recurring request signing, recurring revoke, and public headshot-upload steps. Public flows never receive raw authority over tenant membership or project scoping; they are tightly limited to the token's server-validated scope.
+- Tenant-scoped: tenants, memberships, tenant membership invites, recurring profiles, recurring profile types, baseline recurring consents and requests, consent templates, and the identity of staff users.
+- Project-scoped: projects, project metadata, project staffing, project defaults, and project workspace roster.
+- Project-workspace-scoped: subject invites, one-off subjects and consents, project assets, project participants, project recurring consents and requests, exact-face materializations, exact-face links, whole-asset links, matching progress, review state, and export.
+- Public-token-scoped: public invite signing, one-off revoke, recurring request signing, recurring revoke, organization-join invites, and public headshot-upload steps. Public flows never receive raw authority over tenant membership, project scoping, or workspace scoping; they are tightly limited to the token's server-validated scope.
 
 ## 3. Core invariants and safety rules
 
@@ -169,6 +177,10 @@ The repo has several non-negotiable rules that future work should preserve.
 ### Tenant scoping is mandatory everywhere
 
 Every domain query is expected to carry tenant scope. Client input must never decide `tenant_id`. The server resolves tenant membership and applies tenant filters explicitly, with RLS and server-side checks acting as backstops rather than optional safeguards.
+
+### Active-tenant choice is validated against memberships
+
+Accounts can now belong to multiple tenants. The active-tenant cookie is only a hint; current server code validates it against current memberships, auto-resolves the sole membership, and routes multi-membership users through explicit active-tenant selection. Pending organization invites also suppress normal bootstrap so invited users do not accidentally create a new owner tenant before joining the intended organization.
 
 ### The client is not authoritative
 
@@ -179,9 +191,13 @@ Related security rules from repo policy still apply everywhere:
 - do not expose the Supabase service role key to the client
 - use parameterized queries, query-builder filters, or RPC arguments rather than string-built SQL
 
+### Roles and workspace assignments are real access boundaries
+
+`owner` and `admin` are the tenant-wide manager roles. `reviewer` is review-only. `photographer` is capture-only and only within assigned `project_workspaces`. Current RLS and server helpers treat workspace access as a real security boundary, not just a UI filter, so photographers must not see or mutate another workspace's rows.
+
 ### Public access is token-scoped and hash-backed
 
-Invite and recurring tokens are derived server-side, and only token hashes are stored. Public routes exist for exactly bounded actions such as signing or revoking consent. Public pages do not expose broader tenant or project data.
+Consent, recurring, and organization-invite tokens are derived server-side, and only token hashes are stored. Public routes exist for exactly bounded actions such as signing, revoking consent, or joining an organization. Public pages do not expose broader tenant, project, or workspace data.
 
 ### Writes are expected to be idempotent and retry-safe
 
@@ -282,7 +298,7 @@ These flows usually have the same shape:
 
 ### Email and external-link patterns
 
-Outbound email is still narrow today. The live app sends one-off and recurring receipt emails through a small server-side SMTP/Nodemailer helper, using `APP_ORIGIN` for absolute public links and local Inbucket for development. A broader typed outbound-email job foundation has been researched, but it is not live in the current repo.
+Outbound email is no longer just ad hoc receipt delivery. The live repo now has a typed outbound email foundation in `src/lib/email/outbound/` with durable job state, registry/renderers, local Inbucket support, and `APP_ORIGIN`-based external links. Current live email kinds are still narrow: `consent_receipt` and `tenant_membership_invite`. Some older recurring delivery paths are still narrower helpers rather than fully migrated job kinds.
 
 ### Matching architecture
 
@@ -421,6 +437,10 @@ Features `049-recurring-profiles-and-consent-management-foundations` through `06
 
 Features `061-link-consent-to-whole-asset` through `064-whole-asset-linking-for-video-assets` expanded the media model. Whole-asset linking became a real manual workflow beside exact-face linking. Video became a supported project asset type with upload, poster generation, private playback, and whole-asset assignment. Feature `062a-remove-video-duplicate-checking-from-upload-flow` later narrowed the duplicate-handling rules so videos skip normal upload-flow duplicate hashing while photos still use authoritative duplicate hashing.
 
+### Era 7: governing-consent upgrades, tenant RBAC, and workspace isolation
+
+Features `067-consent-scope-state-and-upgrade-requests` through `072-project-staffing-photographer-scoped-capture-workspaces-and-bounded-project-workflow-permissions` added scope-state derivation, governing/current supersedence, the live typed outbound email foundation, tenant RBAC with organization invites and active-tenant selection, upgrade headshot-reuse UX, and the shift from single operational projects to umbrella `projects` plus isolated `project_workspaces`. This is why current code must now be reasoned about in both tenant-role and workspace-scope terms.
+
 ### What newer features depend on
 
 The dependency chain matters:
@@ -430,26 +450,30 @@ The dependency chain matters:
 - Video preview depends on the derivative worker and signed private URL patterns already used for photos.
 - Structured consent templates and live preview depend on the versioned template system, not the original static template assumptions from early docs.
 - Project review queueing depends on the current face-level review summary model, including an explicit pending-materialization state for photos that are not ready to be judged as blocked, unresolved, or resolved yet.
+- Upgrade UX now depends on governing-consent semantics and reusable-headshot state rather than treating every newer template version as a fresh consent.
+- Workspace-scoped capture, matching, review, and export now depend on `project_workspaces` plus workspace-aware permissions and RLS, not just tenant membership.
 
 ## 7. Current product capabilities in plain English
 
-Today, a tenant can log in and manage a workspace with projects, templates, and a recurring profile directory.
+Today, a user can belong to multiple tenant workspaces, choose an active tenant when needed, and join an organization through tokenized membership invites. Owners and admins can manage tenant members, pending invites, templates, recurring profiles, and photographer staffing from the protected app.
 
-Inside a project, staff can create one-off public invite links, choose or inherit consent templates, and collect signed one-off consent records from public participants. Those signed consents preserve the exact text, version, and structured values that were signed. Participants can later revoke through tokenized public links without deleting history.
+Inside a project, the live product now distinguishes the umbrella project from one or more isolated `project_workspaces`. Owners and admins can add photographer workspaces. Reviewers can inspect any workspace in the active tenant. Photographers only see projects where they have an assigned workspace, and inside those projects they are constrained to their own workspace.
 
-Staff can also issue one-off upgrade requests to newer published template versions in the same family. Public upgrade signing reuses the same project subject, prefills prior values where keys still exist, keeps acceptance unchecked, and can reuse an existing one-off headshot instead of forcing a reupload. The newly signed unsuperseded consent becomes current; older signed rows remain history.
+Inside a selected workspace, staff can create one-off public invite links, choose or inherit consent templates, and collect signed one-off consent records from public participants. Those signed consents preserve the exact text, version, and structured values that were signed. Participants can later revoke through tokenized public links without deleting history.
 
-The same tenant can also maintain recurring profiles. A recurring profile can receive a baseline recurring consent request through a public tokenized flow. Once baseline consent exists, the tenant can manage recurring headshots and matching readiness. That profile can also be added to a project as a participant, and the project can request project-specific recurring consent from that participant when needed. Pending project replacement requests can coexist with an active current project consent until the newer version signs. This gives the product a mixed model: a project can contain both one-off invite signers and known recurring people.
+Staff can also issue one-off upgrade requests to newer published template versions in the same family. Public upgrade signing reuses the same workspace subject, prefills prior values where keys still exist, keeps acceptance unchecked, and can reuse an existing one-off headshot instead of forcing a reupload when a reusable headshot is already linked. The newly signed unsuperseded consent becomes current; older signed rows remain history.
 
-Project-media consent is now operationalized beyond raw signed snapshots. The app keeps immutable per-scope signed projections and derives current family-scoped scope state as `granted`, `not_granted`, `revoked`, or `not_collected` for one-off subjects and recurring project participants. Those derived states feed preview, filtering, and export without mutating signed history.
+The same tenant can also maintain recurring profiles. A recurring profile can receive a baseline recurring consent request through a public tokenized flow. Once baseline consent exists, the tenant can manage recurring headshots and matching readiness. That profile can also be added to a project workspace as a participant, and the workspace can request project-specific recurring consent from that participant when needed. Pending project replacement requests can coexist with an active current project consent until the newer version signs. This gives the product a mixed model: a project workspace can contain both one-off invite signers and known recurring people.
 
-For media, staff can upload project photos and videos through the protected app. Photos and videos are private assets, and the app renders preview or thumbnail derivatives rather than exposing storage objects directly. Videos also get poster thumbnails and signed playback URLs. One-off consent headshots are collected through the project and feed one-off matching. Recurring profile headshots are managed separately and feed recurring matching readiness, and multi-face recurring headshots now require a manual canonical-face choice instead of a server auto-pick.
+Project-media consent is now operationalized beyond raw signed snapshots. The app keeps immutable per-scope signed projections and derives current family-scoped scope state as `granted`, `not_granted`, `revoked`, or `not_collected` for one-off subjects and recurring project participants inside a workspace. Those derived states feed preview, filtering, and export without mutating signed history.
 
-For review, the app can materialize photo faces, generate candidate matches, auto-assign some exact faces when confidence and consent state allow it, and expose project-level review state through the assets surface. Newly finalized photos should normally enqueue matching and materialization work promptly, although repair and reconcile still backfill missed work. Once materialized, operators can use the same assets surface to find needs-review, blocked, and resolved items, then open the preview lightbox to link or unlink exact faces, review likely matches, hide irrelevant faces, block no-consent faces, draw manual face boxes when detection missed someone, and restore prior hidden or blocked states when appropriate.
+For media, staff can upload project photos and videos through the protected app inside the selected workspace. Photos and videos are private assets, and the app renders preview or thumbnail derivatives rather than exposing storage objects directly. Videos also get poster thumbnails and signed playback URLs. One-off consent headshots are collected through the workspace and feed one-off matching. Recurring profile headshots are managed separately and feed recurring matching readiness, and multi-face recurring headshots now require a manual canonical-face choice instead of a server auto-pick.
+
+For review, the app can materialize photo faces, generate candidate matches, auto-assign some exact faces when confidence and consent state allow it, and expose workspace-level review state through the assets surface. Newly finalized photos should normally enqueue matching and materialization work promptly, although repair and reconcile still backfill missed work. Once materialized, operators can use the same workspace assets surface to find needs-review, blocked, and resolved items, then open the preview lightbox to link or unlink exact faces, review likely matches, hide irrelevant faces, block no-consent faces, draw manual face boxes when detection missed someone, and restore prior hidden or blocked states when appropriate.
 
 The app also supports broader asset-level assignment. For photos with no usable exact face, there is manual fallback linking. For photos and videos, operators can create whole-asset links to a project assignee. Whole-asset linking is separate from exact-face ownership and is especially important for video, where the current app supports review and assignment without a photo-style exact-face pipeline.
 
-On the output side, the app can export a bounded ZIP for a single project. The current export is photo-only. It includes original project photos plus metadata JSON, consent JSON, face boxes when present, exact-face links, whole-asset links, and fallback links. It does not currently export videos.
+On the output side, the app can export a bounded ZIP for a single selected workspace. The current export is photo-only and limited to `owner`, `admin`, and `reviewer` users. It includes original project photos plus metadata JSON, consent JSON, face boxes when present, exact-face links, whole-asset links, and fallback links from that workspace. It does not currently export videos.
 
 ## 8. RPI feature index
 
@@ -526,8 +550,11 @@ This index lists every current top-level folder in `docs/rpi/` using the live fo
 - `065-recurring-profile-multi-face-manual-selection`: Recurring profile headshots with more than one detected face now always require manual canonical-face selection, with warning-specific low-quality states when needed.
 - `066-post-finalize-matching-job-enqueue-reliability`: Hardens photo finalize so matching/materialization enqueue uses the correct privileged boundary instead of leaving new photos permanently pending without a job.
 - `067-consent-scope-state-and-upgrade-requests`: Adds immutable per-scope signed projections and effective scope-state reads for one-off and recurring project consent, plus one-off upgrade-request and recurring supersedence foundations.
-- `068-outbound-email-foundation-with-local-emulation-and-typed-email-jobs`: Research-only design for durable typed outbound email jobs, provider abstraction, and local Inbucket/SMTP development flow; the generalized email-job system is not live yet.
+- `068-outbound-email-foundation-with-local-emulation-and-typed-email-jobs`: Live durable typed outbound email-job foundation with provider abstraction, local Inbucket/SMTP development flow, receipt delivery integration, and later reuse by tenant membership invites.
 - `069-consent-upgrade-flow-owner-reuse-and-prefill-refinement`: Makes one-off and recurring project upgrade flows owner-bound and prefilled, adds one-off supersedence and carry-forward behavior, and aligns governing-consent reads and matching eligibility with the new current consent.
+- `070-tenant-rbac-and-organization-user-management-foundation`: Adds fixed tenant RBAC (`owner`, `admin`, `reviewer`, `photographer`), member-management UI/API, organization invite and join flows, active-tenant selection, and typed invite-email delivery.
+- `071-consent-upgrade-flow-headshot-reuse-and-upgrade-ux-fixes`: Fixes upgrade presentation so one-off upgrades can reuse current headshots when available, filters superseded one-off rows out of current-facing reads, and makes recurring replacement flows read as replacements instead of generic requests.
+- `072-project-staffing-photographer-scoped-capture-workspaces-and-bounded-project-workflow-permissions`: Reframes `projects` as umbrella containers and adds isolated `project_workspaces`, workspace-scoped capture and review access, photographer-only project visibility, workspace-scoped read models and export, and staffing UI for assigning photographers.
 - `archive`: Non-feature holding folder for archived alternatives, currently including `062a-safer-video-duplicate-checking-for-slower-clients` and `062a-simpler-video-duplicate-checking-for-slower-clients`.
 
 ## 9. Current mental model for future AI work
@@ -539,15 +566,17 @@ The most useful mental model is to treat SnapConsent as four linked subsystems t
 3. Matching and assignment
 4. Review and operator control
 
-One-off project consent, baseline recurring consent, and project recurring consent are separate authorization layers that feed those subsystems in different ways. Photo exact-face ownership, photo whole-asset linking, and video whole-asset linking are separate review outputs that also should not be collapsed.
+Those subsystems now cross four scopes: tenant, umbrella project, project workspace, and public token. One-off project-workspace consent, baseline recurring consent, and project recurring consent are separate authorization layers that feed those subsystems in different ways. Umbrella-project behavior and workspace-local behavior should also be kept separate. Photo exact-face ownership, photo whole-asset linking, and video whole-asset linking are separate review outputs that also should not be collapsed.
 
 ### Reuse first
 
 Before designing new abstractions, check the current service seams that already encode domain rules:
 
 - `src/lib/tenant/resolve-tenant.ts` for active-tenant recovery and membership resolution
+- `src/lib/tenant/active-tenant.ts`, `permissions.ts`, `member-management-service.ts`, and `membership-invites.ts` for active-tenant selection, RBAC, member-management flows, and organization invites
 - `src/lib/templates/template-service.ts` for template lifecycle, visibility, validation, and project defaults
-- `src/lib/projects/project-participants-service.ts` for recurring participants inside projects
+- `src/lib/projects/project-workspaces-service.ts` for workspace selection, visibility, and staffing
+- `src/lib/projects/project-participants-service.ts` for recurring participants inside project workspaces
 - `src/lib/profiles/profile-headshot-service.ts` for recurring headshot lifecycle and matching readiness
 - `src/lib/matching/photo-face-linking.ts` for exact-face ownership, suppressions, hidden state, blocked state, and fallback behavior
 - `src/lib/matching/asset-preview-linking.ts` for preview payloads, candidate lists, whole-asset surfaces, and review summaries
@@ -562,10 +591,12 @@ If a new feature seems to need a fresh abstraction, first check whether one of t
 
 Future AI work should avoid casual redesign of these foundations:
 
-- tenant resolution and tenant scoping
+- active-tenant resolution, tenant scoping, and org-invite bootstrap suppression
+- tenant RBAC and organization-invite acceptance rules
 - immutable consent plus revocation history
 - the distinction between one-off consent and recurring consent
 - the distinction between baseline recurring consent and project recurring consent
+- umbrella-project versus workspace-scoped operational isolation
 - scope-state derivation by stable owner boundary plus template family
 - governing-consent versus historical-consent semantics for upgrade flows
 - project-local assignee bridging
@@ -588,17 +619,20 @@ For future AI prompts, the current source-of-truth is not one document. It is a 
 
 If older RPI docs talk about `asset_consent_links` as the canonical approved model for photo matching, that should now be read as historical context, not current truth. The live exact-face model now centers on `project_face_assignees` plus `asset_face_consent_links`, with whole-asset links and fallback links beside it.
 
+If older RPI docs describe `project` as the only operational scope, that should also be read historically. The live product now uses `projects` as umbrella containers and `project_workspaces` as the isolated unit for consent intake, assets, matching, review, and export.
+
 If older RPI docs describe app-global templates as the main template model, that should also be read historically. The live product now behaves like a tenant-managed template system with versioning, structured fields, and layout definition, even though some types still retain `app` scope vocabulary.
 
 ### How to layer new features correctly
 
 When adding new work, identify which of these axes the feature really touches:
 
-1. Is this about one-off project consent, recurring baseline consent, or project recurring consent?
-2. Is this about photo exact-face ownership, zero-face photo fallback, or whole-asset assignment?
-3. Is this about protected staff workflow, public-token workflow, or internal worker behavior?
-4. Is this about photos only, or does video also need explicit treatment?
-5. Is this synchronous request logic, or async queue/reconcile/repair logic?
+1. Is this about one-off project-workspace consent, recurring baseline consent, or project recurring consent?
+2. Is this about umbrella-project behavior or workspace-local capture/review behavior?
+3. Is this about photo exact-face ownership, zero-face photo fallback, or whole-asset assignment?
+4. Is this about protected staff workflow, public-token workflow, or internal worker behavior?
+5. Is this about photos only, or does video also need explicit treatment?
+6. Is this synchronous request logic, or async queue/reconcile/repair logic?
 
 That framing usually reveals the right existing files and invariants immediately.
 
@@ -608,9 +642,9 @@ Exact-face concerns belong to the photo matching and review pipeline. They depen
 
 Whole-asset concerns belong to asset-level review and assignment. They are manual, assignee-based, and especially relevant when there is no exact face or when the media type is video.
 
-Recurring profile concerns belong to tenant-managed identity and standing consent readiness. They become project concerns only after a recurring profile is added as a participant and a project-specific recurring consent state exists.
+Recurring profile concerns belong to tenant-managed identity and standing consent readiness. They become project-workspace concerns only after a recurring profile is added as a participant and a workspace-specific recurring consent state exists.
 
-Upload and media concerns belong to private storage, create/finalize flows, derivative generation, and preview delivery. Matching concerns belong to async comparison and canonical assignment. Review workflow concerns belong to surfaces that let operators inspect, correct, suppress, hide, block, link, or export results. The cleanest future changes keep those layers explicit instead of blending them together.
+Upload and media concerns belong to private storage, workspace-scoped create/finalize flows, derivative generation, and preview delivery. Matching concerns belong to async comparison and canonical assignment. Review workflow concerns belong to workspace-local surfaces that let operators inspect, correct, suppress, hide, block, link, or export results, with the umbrella project acting as the staffing and navigation shell. The cleanest future changes keep those layers explicit instead of blending them together.
 
 ### A practical rule for future AI prompts
 

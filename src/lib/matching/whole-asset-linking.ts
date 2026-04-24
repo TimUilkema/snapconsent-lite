@@ -14,6 +14,7 @@ export type WholeAssetLinkRow = {
   project_face_assignee_id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id?: string | null;
   link_source: "manual";
   created_at: string;
   created_by: string | null;
@@ -54,6 +55,7 @@ type WholeAssetScopeInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
   actorUserId?: string | null;
 };
@@ -97,6 +99,7 @@ async function loadCurrentWholeAssetLinkRowsForAssets(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   assetIds: string[],
 ) {
   if (assetIds.length === 0) {
@@ -104,14 +107,20 @@ async function loadCurrentWholeAssetLinkRowsForAssets(
   }
 
   const rows = await runChunkedRead(assetIds, async (assetIdChunk) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("asset_assignee_links")
       .select(
-        "asset_id, project_face_assignee_id, tenant_id, project_id, link_source, created_at, created_by, updated_at",
+        "asset_id, project_face_assignee_id, tenant_id, project_id, workspace_id, link_source, created_at, created_by, updated_at",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("asset_id", assetIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "whole_asset_link_lookup_failed", "Unable to load whole-asset links.");
@@ -127,12 +136,14 @@ export async function loadCurrentWholeAssetLinksForAssets(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetIds: string[];
 }) {
   const rows = await loadCurrentWholeAssetLinkRowsForAssets(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     Array.from(new Set(input.assetIds)),
   );
   if (rows.length === 0) {
@@ -143,6 +154,7 @@ export async function loadCurrentWholeAssetLinksForAssets(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assigneeIds: rows.map((row) => row.project_face_assignee_id),
   });
 
@@ -169,6 +181,7 @@ export async function loadCurrentWholeAssetLinksForAsset(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
 }) {
   const rows = await loadCurrentWholeAssetLinksForAssets({
@@ -180,14 +193,19 @@ export async function loadCurrentWholeAssetLinksForAsset(input: {
 }
 
 async function loadExactFaceConflictForAssignee(input: ManualWholeAssetProjectAssigneeInput) {
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("asset_face_consent_links")
     .select("asset_face_id, link_source")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("asset_id", input.assetId)
-    .eq("project_face_assignee_id", input.projectFaceAssigneeId)
-    .maybeSingle();
+    .eq("project_face_assignee_id", input.projectFaceAssigneeId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new HttpError(500, "photo_face_link_lookup_failed", "Unable to load current face assignments.");
@@ -222,13 +240,19 @@ async function loadExactFaceConflictForAssignee(input: ManualWholeAssetProjectAs
 }
 
 export async function deleteWholeAssetLinkForAssignee(input: ManualWholeAssetProjectAssigneeInput) {
-  const { error } = await input.supabase
+  let query = input.supabase
     .from("asset_assignee_links")
     .delete()
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("asset_id", input.assetId)
     .eq("project_face_assignee_id", input.projectFaceAssigneeId);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { error } = await query;
 
   if (error) {
     throw new HttpError(500, "whole_asset_link_delete_failed", "Unable to delete the whole-asset link.");
@@ -243,13 +267,19 @@ export async function deleteWholeAssetLinksForAssigneeIds(input: WholeAssetScope
     return;
   }
 
-  const { error } = await input.supabase
+  let query = input.supabase
     .from("asset_assignee_links")
     .delete()
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("asset_id", input.assetId)
     .in("project_face_assignee_id", uniqueAssigneeIds);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { error } = await query;
 
   if (error) {
     throw new HttpError(500, "whole_asset_link_delete_failed", "Unable to delete whole-asset links.");
@@ -265,6 +295,7 @@ export async function manualLinkWholeAssetToProjectFaceAssignee(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     assigneeIds: [input.projectFaceAssigneeId],
   });
   if (!assigneeRowsById.has(input.projectFaceAssigneeId)) {
@@ -303,6 +334,7 @@ export async function manualLinkWholeAssetToProjectFaceAssignee(
       project_face_assignee_id: input.projectFaceAssigneeId,
       tenant_id: input.tenantId,
       project_id: input.projectId,
+      workspace_id: input.workspaceId ?? null,
       link_source: "manual",
       created_by: input.actorUserId ?? null,
       updated_at: nowIso,
@@ -331,6 +363,7 @@ export async function manualLinkWholeAssetToConsent(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     consentId: input.consentId,
   });
 
@@ -349,6 +382,7 @@ export async function manualLinkWholeAssetToRecurringProjectParticipant(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     projectProfileParticipantId: input.projectProfileParticipantId,
   });
 
@@ -394,6 +428,7 @@ export async function manualUnlinkWholeAssetFromConsent(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     consentId: input.consentId,
   });
 

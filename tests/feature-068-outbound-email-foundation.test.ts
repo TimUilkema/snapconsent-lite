@@ -5,7 +5,9 @@ import nodemailer from "nodemailer";
 
 import { POST as outboundEmailWorkerPost } from "@/app/api/internal/email/worker/route";
 import { deliverConsentReceiptAfterSubmit } from "../src/lib/email/outbound/consent-receipt-delivery";
+import { deliverTenantMembershipInviteEmail } from "../src/lib/email/outbound/tenant-membership-invite-delivery";
 import { renderConsentReceiptEmail } from "../src/lib/email/outbound/renderers/consent-receipt";
+import { renderTenantMembershipInviteEmail } from "../src/lib/email/outbound/renderers/tenant-membership-invite";
 import { createSmtpOutboundEmailTransport } from "../src/lib/email/outbound/smtp-transport";
 import { formatOutboundEmailTimestampUtc } from "../src/lib/email/outbound/timestamps";
 import { runOutboundEmailWorker } from "../src/lib/email/outbound/worker";
@@ -34,6 +36,32 @@ test("consent receipt renderer builds an absolute revoke URL from APP_ORIGIN", (
     assert.match(rendered.text, /Signed at: 2026-04-22 08:09 UTC/);
     assert.match(rendered.text, /https:\/\/app\.example\.test\/r\/revoke-123/);
     assert.match(rendered.html ?? "", /https:\/\/app\.example\.test\/r\/revoke-123/);
+  } finally {
+    process.env.APP_ORIGIN = originalOrigin;
+  }
+});
+
+test("tenant membership invite renderer builds an absolute join URL from APP_ORIGIN", () => {
+  const originalOrigin = process.env.APP_ORIGIN;
+  process.env.APP_ORIGIN = "https://app.example.test";
+
+  try {
+    const rendered = renderTenantMembershipInviteEmail({
+      inviteId: "invite-1",
+      tenantId: "tenant-1",
+      tenantName: "Northwind Studio",
+      invitedEmail: "alex@example.com",
+      role: "reviewer",
+      inviteToken: "invite-token-123",
+      expiresAtIso: "2026-04-25T08:09:45.000Z",
+      lastSentAtIso: "2026-04-22T08:09:45.000Z",
+      inviterDisplayName: "Morgan",
+    });
+
+    assert.equal(rendered.subject, "Join Northwind Studio on SnapConsent");
+    assert.match(rendered.text, /Role: Reviewer/);
+    assert.match(rendered.text, /https:\/\/app\.example\.test\/join\/invite-token-123/);
+    assert.match(rendered.html ?? "", /https:\/\/app\.example\.test\/join\/invite-token-123/);
   } finally {
     process.env.APP_ORIGIN = originalOrigin;
   }
@@ -166,4 +194,40 @@ test("consent receipt delivery helper skips duplicate receipts", async () => {
   assert.equal(result.receiptStatus, "sent");
   assert.equal(result.jobId, null);
   assert.equal(enqueueCalled, false);
+});
+
+test("tenant membership invite delivery helper queues on dispatch failure without throwing", async () => {
+  const result = await deliverTenantMembershipInviteEmail(
+    {
+      tenantId: "tenant-1",
+      payload: {
+        inviteId: "invite-1",
+        tenantId: "tenant-1",
+        tenantName: "Northwind Studio",
+        invitedEmail: "alex@example.com",
+        role: "reviewer",
+        inviteToken: "invite-token-123",
+        expiresAtIso: "2026-04-25T08:09:45.000Z",
+        lastSentAtIso: "2026-04-22T08:09:45.000Z",
+        inviterDisplayName: "Morgan",
+      },
+    },
+    {
+      enqueueTenantMembershipInviteEmailJob: async () => ({
+        jobId: "job-2",
+        status: "pending",
+        attemptCount: 0,
+        maxAttempts: 5,
+        runAfter: new Date().toISOString(),
+        sentAt: null,
+        cancelledAt: null,
+        deadAt: null,
+        enqueued: true,
+      }),
+      dispatchOutboundEmailJobById: async () => ({ outcome: "retried", jobId: "job-2" }),
+    },
+  );
+
+  assert.equal(result.deliveryStatus, "queued");
+  assert.equal(result.jobId, "job-2");
 });

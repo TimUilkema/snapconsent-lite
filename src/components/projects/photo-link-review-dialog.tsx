@@ -108,6 +108,7 @@ type SessionState = {
 type Props = {
   projectId: string;
   consentId: string;
+  workspaceId: string;
   asset?: ReviewAsset | null;
   sessionId?: string | null;
   onClose: () => void;
@@ -255,7 +256,15 @@ function useMeasuredSize(ref: React.RefObject<HTMLElement | null>) {
   return size;
 }
 
-export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, onClose, onSaved }: Props) {
+export function PhotoLinkReviewDialog({
+  projectId,
+  consentId,
+  workspaceId,
+  asset,
+  sessionId,
+  onClose,
+  onSaved,
+}: Props) {
   const isSessionMode = Boolean(sessionId);
   const previewFrameRef = useRef<HTMLDivElement | null>(null);
   const previewFrameSize = useMeasuredSize(previewFrameRef);
@@ -368,7 +377,9 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
     try {
       if (isSessionMode && sessionId) {
         const response = await fetch(
-          `/api/projects/${projectId}/consents/${consentId}/review-sessions/${sessionId}`,
+          `/api/projects/${projectId}/consents/${consentId}/review-sessions/${sessionId}?${new URLSearchParams({
+            workspaceId,
+          }).toString()}`,
           { method: "GET", cache: "no-store" },
         );
         const payload = (await response.json().catch(() => null)) as (SessionState & { message?: string }) | null;
@@ -389,7 +400,9 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
       }
 
       const response = await fetch(
-        `/api/projects/${projectId}/consents/${consentId}/assets/${asset.id}/manual-link-state`,
+        `/api/projects/${projectId}/consents/${consentId}/assets/${asset.id}/manual-link-state?${new URLSearchParams({
+          workspaceId,
+        }).toString()}`,
         { method: "GET", cache: "no-store" },
       );
       const payload = (await response.json().catch(() => null)) as (ManualLinkState & { message?: string }) | null;
@@ -406,11 +419,11 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
     } finally {
       setIsLoading(false);
     }
-  }, [asset, consentId, isSessionMode, projectId, sessionId]);
+  }, [asset, consentId, isSessionMode, projectId, sessionId, workspaceId]);
 
   useEffect(() => {
     void loadState();
-  }, [asset?.id, consentId, isSessionMode, loadState, projectId, sessionId]);
+  }, [asset?.id, consentId, isSessionMode, loadState, projectId, sessionId, workspaceId]);
 
   useEffect(() => {
     const shouldPoll =
@@ -458,8 +471,14 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
         },
         body: JSON.stringify(
           manualState.detectedFaceCount === 0
-            ? { assetId: currentAsset.id, mode: "asset_fallback" }
-            : { assetId: currentAsset.id, mode: "face", assetFaceId: selectedFaceId, forceReplace },
+            ? { workspaceId, assetId: currentAsset.id, mode: "asset_fallback" }
+            : {
+                workspaceId,
+                assetId: currentAsset.id,
+                mode: "face",
+                assetFaceId: selectedFaceId,
+                forceReplace,
+              },
         ),
       });
       const payload = (await response.json().catch(() => null)) as
@@ -507,6 +526,7 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          workspaceId,
           assetId: currentAsset.id,
           mode: manualState.currentConsentLink.mode,
           assetFaceId:
@@ -544,6 +564,7 @@ export function PhotoLinkReviewDialog({ projectId, consentId, asset, sessionId, 
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            workspaceId,
             action,
             assetFaceId: selectedFaceId,
             forceReplace,

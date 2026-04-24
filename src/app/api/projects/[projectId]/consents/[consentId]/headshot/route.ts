@@ -5,6 +5,11 @@ import {
   clearConsentAutoPhotoFaceLinks,
   clearConsentPhotoSuppressions,
 } from "@/lib/matching/consent-photo-matching";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewMutationAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -35,15 +40,48 @@ export async function POST(request: Request, context: RouteContext) {
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
+    const { projectId, consentId } = await context.params;
+    const consentRow = await loadWorkspaceScopedRow({
+      supabase: authSupabase,
+      tenantId,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
+    await requireWorkspaceReviewMutationAccessForRow({
+      supabase: authSupabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "consents",
+      rowId: consentId,
+      notFoundCode: "consent_not_found",
+      notFoundMessage: "Consent not found.",
+    });
 
     const supabase = createAdminClient();
-
-    const { projectId, consentId } = await context.params;
     const body = (await request.json().catch(() => null)) as ReplaceHeadshotBody | null;
     const assetId = String(body?.assetId ?? "").trim();
     if (!assetId) {
       throw new HttpError(400, "invalid_body", "Asset ID is required.");
     }
+    const replacementAssetRow = await loadWorkspaceScopedRow({
+      supabase,
+      tenantId,
+      projectId,
+      table: "assets",
+      rowId: assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Replacement headshot not found.",
+    });
+    assertWorkspaceScopedRowMatchesWorkspace(
+      replacementAssetRow,
+      consentRow.workspace_id,
+      "asset_not_found",
+      "Replacement headshot not found.",
+    );
 
     const { data: consent, error: consentError } = await supabase
       .from("consents")
@@ -51,6 +89,7 @@ export async function POST(request: Request, context: RouteContext) {
       .eq("id", consentId)
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
+      .eq("workspace_id", consentRow.workspace_id)
       .maybeSingle();
 
     if (consentError) {
@@ -74,6 +113,7 @@ export async function POST(request: Request, context: RouteContext) {
       .select("asset_id")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
+      .eq("workspace_id", consentRow.workspace_id)
       .eq("consent_id", consentId);
 
     if (existingLinkError) {
@@ -94,6 +134,7 @@ export async function POST(request: Request, context: RouteContext) {
       .select("id")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
+      .eq("workspace_id", consentRow.workspace_id)
       .eq("asset_type", "headshot")
       .in("id", existingAssetIds);
 
@@ -115,6 +156,7 @@ export async function POST(request: Request, context: RouteContext) {
       .select("id, asset_type, status, archived_at")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
+      .eq("workspace_id", consentRow.workspace_id)
       .eq("id", assetId)
       .maybeSingle();
 
@@ -139,6 +181,7 @@ export async function POST(request: Request, context: RouteContext) {
       .delete()
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
+      .eq("workspace_id", consentRow.workspace_id)
       .eq("consent_id", consentId)
       .in("asset_id", existingHeadshotIds);
 
@@ -152,6 +195,7 @@ export async function POST(request: Request, context: RouteContext) {
         consent_id: consentId,
         tenant_id: tenantId,
         project_id: projectId,
+        workspace_id: consentRow.workspace_id,
         link_source: "manual",
         match_confidence: null,
         matched_at: null,
@@ -173,12 +217,14 @@ export async function POST(request: Request, context: RouteContext) {
       tenantId,
       projectId,
       consentId,
+      workspaceId: consentRow.workspace_id,
     });
     await clearConsentAutoPhotoFaceLinks({
       supabase,
       tenantId,
       projectId,
       consentId,
+      workspaceId: consentRow.workspace_id,
     });
 
     const now = new Date().toISOString();
@@ -192,6 +238,7 @@ export async function POST(request: Request, context: RouteContext) {
         .select("*", { count: "exact", head: true })
         .eq("tenant_id", tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", consentRow.workspace_id)
         .eq("asset_id", oldAssetId);
 
       if (remainingLinkError) {
@@ -204,6 +251,7 @@ export async function POST(request: Request, context: RouteContext) {
           .update({ status: "archived", archived_at: now })
           .eq("tenant_id", tenantId)
           .eq("project_id", projectId)
+          .eq("workspace_id", consentRow.workspace_id)
           .eq("id", oldAssetId)
           .eq("asset_type", "headshot")
           .neq("status", "archived");
@@ -215,10 +263,11 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     try {
-      const boundary = await getPhotoFanoutBoundary(supabase, tenantId, projectId);
+      const boundary = await getPhotoFanoutBoundary(supabase, tenantId, projectId, consentRow.workspace_id);
       await enqueueConsentHeadshotReadyJob({
         tenantId,
         projectId,
+        workspaceId: consentRow.workspace_id,
         consentId,
         headshotAssetId: assetId,
         payload: {

@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createInviteWithIdempotency } from "@/lib/idempotency/invite-idempotency";
+import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
 import { getVisiblePublishedTemplateById } from "@/lib/templates/template-service";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -25,7 +26,6 @@ export async function POST(request: Request, context: RouteContext) {
     if (!tenantId) {
       throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
     }
-
     const { projectId } = await context.params;
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     if (idempotencyKey.length < 8 || idempotencyKey.length > 200) {
@@ -37,6 +37,17 @@ export async function POST(request: Request, context: RouteContext) {
       typeof (body as { consentTemplateId?: unknown } | null)?.consentTemplateId === "string"
         ? String((body as { consentTemplateId?: unknown }).consentTemplateId).trim()
         : "";
+    const requestedWorkspaceId =
+      typeof (body as { workspaceId?: unknown } | null)?.workspaceId === "string"
+        ? String((body as { workspaceId?: unknown }).workspaceId).trim()
+        : "";
+    const { workspace } = await requireWorkspaceCaptureMutationAccessForRequest({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      requestedWorkspaceId,
+    });
 
     const { data: project, error: projectError } = await supabase
       .from("projects")
@@ -84,6 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
       supabase,
       tenantId,
       projectId,
+      workspaceId: workspace.id,
       userId: user.id,
       idempotencyKey,
       consentTemplateId,

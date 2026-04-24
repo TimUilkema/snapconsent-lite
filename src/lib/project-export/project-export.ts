@@ -440,8 +440,9 @@ export async function loadProjectExportRecords(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
 }) {
-  const { data: assetsData, error: assetsError } = await input.supabase
+  let assetsQuery = input.supabase
     .from("assets")
     .select("id, original_filename, content_type, file_size_bytes, uploaded_at, created_at, storage_bucket, storage_path")
     .eq("tenant_id", input.tenantId)
@@ -452,6 +453,12 @@ export async function loadProjectExportRecords(input: {
     .order("uploaded_at", { ascending: true })
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
+
+  if (input.workspaceId) {
+    assetsQuery = assetsQuery.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data: assetsData, error: assetsError } = await assetsQuery;
 
   if (assetsError) {
     throw new HttpError(500, "project_export_failed", "Unable to load project export data.");
@@ -477,7 +484,7 @@ export async function loadProjectExportRecords(input: {
     storagePath: asset.storage_path,
   })) satisfies ProjectExportAssetRecord[];
 
-  const { data: consentsData, error: consentsError } = await input.supabase
+  let consentsQuery = input.supabase
     .from("consents")
     .select(
       "id, subject_id, invite_id, signed_at, created_at, consent_text, consent_version, face_match_opt_in, revoked_at, revoke_reason, structured_fields_snapshot, subjects(email, full_name)",
@@ -487,6 +494,12 @@ export async function loadProjectExportRecords(input: {
     .order("signed_at", { ascending: true })
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
+
+  if (input.workspaceId) {
+    consentsQuery = consentsQuery.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data: consentsData, error: consentsError } = await consentsQuery;
 
   if (consentsError) {
     throw new HttpError(500, "project_export_failed", "Unable to load project export data.");

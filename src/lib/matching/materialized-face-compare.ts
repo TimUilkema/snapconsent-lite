@@ -14,6 +14,7 @@ export type AssetConsentFaceCompareRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   asset_id: string;
   consent_id: string;
   headshot_materialization_id: string;
@@ -81,7 +82,7 @@ async function loadMaterializationFaces(
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
     .select(
-      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
+      "id, tenant_id, project_id, workspace_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
     )
     .eq("materialization_id", materializationId)
     .order("face_rank", { ascending: true });
@@ -102,7 +103,7 @@ async function loadMaterialization(
   const { data, error } = await supabase
     .from("asset_face_materializations")
     .select(
-      "id, tenant_id, project_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, materialized_at, created_at",
+      "id, tenant_id, project_id, workspace_id, asset_id, asset_type, source_content_hash, source_content_hash_algo, source_uploaded_at, materializer_version, provider, provider_mode, provider_plugin_versions, face_count, usable_for_compare, unusable_reason, materialized_at, created_at",
     )
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
@@ -143,7 +144,7 @@ async function loadFaceCompare(
   const { data, error } = await supabase
     .from("asset_consent_face_compares")
     .select(
-      "id, tenant_id, project_id, asset_id, consent_id, headshot_materialization_id, asset_materialization_id, headshot_face_id, winning_asset_face_id, winning_asset_face_rank, winning_similarity, compare_status, compare_version, provider, provider_mode, provider_plugin_versions, target_face_count, compared_at, created_at",
+      "id, tenant_id, project_id, workspace_id, asset_id, consent_id, headshot_materialization_id, asset_materialization_id, headshot_face_id, winning_asset_face_id, winning_asset_face_rank, winning_similarity, compare_status, compare_version, provider, provider_mode, provider_plugin_versions, target_face_count, compared_at, created_at",
     )
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
@@ -207,7 +208,7 @@ async function loadFaceById(
   const { data, error } = await supabase
     .from("asset_face_materialization_faces")
     .select(
-      "id, tenant_id, project_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
+      "id, tenant_id, project_id, workspace_id, asset_id, materialization_id, face_rank, provider_face_index, detection_probability, face_box, face_box_normalized, embedding, face_source, created_by, created_at",
     )
     .eq("id", faceId)
     .maybeSingle();
@@ -238,6 +239,7 @@ async function syncFaceCompareScores(input: {
   const rows = input.targetFaces.map((face, index) => ({
     tenant_id: input.tenantId,
     project_id: input.projectId,
+    workspace_id: face.workspace_id,
     asset_id: input.assetId,
     consent_id: input.consentId,
     headshot_materialization_id: input.headshotMaterializationId,
@@ -406,6 +408,13 @@ export async function ensureMaterializedFaceCompare(
     (face): face is AssetFaceMaterializationFaceRow & { embedding: number[] } =>
       face.face_source === "detector" && Array.isArray(face.embedding) && face.embedding.length > 0,
   );
+  if (headshot.materialization.workspace_id !== asset.materialization.workspace_id) {
+    throw new HttpError(
+      400,
+      "face_compare_workspace_mismatch",
+      "Headshot and asset materializations must belong to the same workspace.",
+    );
+  }
   let compareStatus: AssetConsentFaceCompareStatus = "no_match";
   let winningAssetFace: AssetFaceMaterializationFaceRow | null = null;
   let winningSimilarity = 0;
@@ -440,6 +449,7 @@ export async function ensureMaterializedFaceCompare(
   const compareUpsert = {
     tenant_id: input.tenantId,
     project_id: input.projectId,
+    workspace_id: asset.materialization.workspace_id,
     asset_id: input.assetId,
     consent_id: input.consentId,
     headshot_materialization_id: headshot.materialization.id,
@@ -464,7 +474,7 @@ export async function ensureMaterializedFaceCompare(
         "tenant_id,project_id,consent_id,asset_id,headshot_materialization_id,asset_materialization_id,compare_version",
     })
     .select(
-      "id, tenant_id, project_id, asset_id, consent_id, headshot_materialization_id, asset_materialization_id, headshot_face_id, winning_asset_face_id, winning_asset_face_rank, winning_similarity, compare_status, compare_version, provider, provider_mode, provider_plugin_versions, target_face_count, compared_at, created_at",
+      "id, tenant_id, project_id, workspace_id, asset_id, consent_id, headshot_materialization_id, asset_materialization_id, headshot_face_id, winning_asset_face_id, winning_asset_face_rank, winning_similarity, compare_status, compare_version, provider, provider_mode, provider_plugin_versions, target_face_count, compared_at, created_at",
     )
     .single();
 

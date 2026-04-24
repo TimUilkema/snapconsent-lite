@@ -466,3 +466,16 @@ export async function enqueueConsentReceiptEmailJob(input: {
     supabase: input.supabase,
   });
 }
+
+export async function enqueueTenantMembershipInviteEmailJob(input: {
+  tenantId: string;
+  payload: OutboundEmailPayloadByKind["tenant_membership_invite"];
+  supabase?: SupabaseClient;
+}) {
+  return enqueueOutboundEmailJob({
+    tenantId: input.tenantId,
+    emailKind: "tenant_membership_invite",
+    payload: input.payload,
+    supabase: input.supabase,
+  });
+}

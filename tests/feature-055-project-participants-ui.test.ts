@@ -140,6 +140,7 @@ test("project participants panel renders known profiles, baseline context, and p
       { locale: "en", messages: enMessages },
       createElement(ProjectParticipantsPanelView, {
         projectId: randomUUID(),
+        workspaceId: randomUUID(),
         data,
         templates: [
           {
@@ -228,6 +229,7 @@ test("project participants panel renders request creation controls when project 
       { locale: "en", messages: enMessages },
       createElement(ProjectParticipantsPanelView, {
         projectId: randomUUID(),
+        workspaceId: randomUUID(),
         data,
         templates: [
           {
@@ -311,6 +313,7 @@ test("project participants panel renders replacement request controls when an ac
       { locale: "en", messages: enMessages },
       createElement(ProjectParticipantsPanelView, {
         projectId: randomUUID(),
+        workspaceId: randomUUID(),
         data,
         templates: [
           {
@@ -331,4 +334,41 @@ test("project participants panel renders replacement request controls when an ac
   assert.match(markup, /Updated consent template/);
   assert.match(markup, /Select a newer template/);
   assert.match(markup, /Create replacement request/);
+});
+
+test("project participants panel keeps pending request share actions visible when capture mutations are locked", async () => {
+  const { ProjectParticipantsPanelView } = await import(
+    "../src/components/projects/project-participants-panel"
+  );
+  const data = buildParticipantsData();
+
+  const markup = renderToStaticMarkup(
+    createElement(
+      NextIntlClientProvider,
+      { locale: "en", messages: enMessages },
+      createElement(ProjectParticipantsPanelView, {
+        projectId: randomUUID(),
+        workspaceId: randomUUID(),
+        data,
+        templates: [
+          {
+            id: randomUUID(),
+            name: "Project Consent",
+            version: "v2",
+            scope: "tenant",
+          },
+        ],
+        defaultTemplateId: randomUUID(),
+        defaultTemplateWarning: null,
+        allowCaptureActions: true,
+        allowCaptureMutations: false,
+        router: { refresh() {} },
+      }),
+    ),
+  );
+
+  assert.match(markup, /Copy link/);
+  assert.match(markup, /Open link/);
+  assert.doesNotMatch(markup, /Add existing profile/);
+  assert.doesNotMatch(markup, /Create project request/);
 });

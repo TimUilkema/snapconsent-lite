@@ -1,7 +1,9 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
+import { resolveSelectedWorkspaceForRequest } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { resolveWorkspacePermissions } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type RouteContext = {
@@ -42,13 +44,32 @@ async function requireAuthAndScope(context: RouteContext) {
     throw new HttpError(404, "project_not_found", "Project not found.");
   }
 
-  return { supabase, tenantId, projectId };
+  return { supabase, tenantId, projectId, userId: user.id };
 }
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   try {
-    const { tenantId, projectId } = await requireAuthAndScope(context);
-    const progress = await getProjectMatchingProgress(createAdminClient(), tenantId, projectId);
+    const { tenantId, projectId, userId, supabase } = await requireAuthAndScope(context);
+    const workspace = await resolveSelectedWorkspaceForRequest({
+      supabase,
+      tenantId,
+      userId,
+      projectId,
+      requestedWorkspaceId: new URL(request.url).searchParams.get("workspaceId"),
+    });
+    const permissions = await resolveWorkspacePermissions(
+      supabase,
+      tenantId,
+      userId,
+      projectId,
+      workspace.id,
+    );
+
+    if (!permissions.canCaptureProjects && !permissions.canReviewProjects) {
+      throw new HttpError(403, "workspace_read_forbidden", "Project workspace access is forbidden.");
+    }
+
+    const progress = await getProjectMatchingProgress(createAdminClient(), tenantId, projectId, workspace.id);
     return Response.json(progress, { status: 200 });
   } catch (error) {
     return jsonError(error);

@@ -15,6 +15,7 @@ type FinalizeProjectAssetBatchInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   items: ProjectUploadFinalizeItemInput[];
 };
 
@@ -63,6 +64,7 @@ export async function finalizeProjectAssetBatch(
         supabase: input.supabase,
         tenantId: input.tenantId,
         projectId: input.projectId,
+        workspaceId: input.workspaceId ?? null,
         assetId: item.assetId,
         consentIds: [],
       });
@@ -71,6 +73,7 @@ export async function finalizeProjectAssetBatch(
         supabase: input.supabase,
         tenantId: input.tenantId,
         projectId: input.projectId,
+        workspaceId: input.workspaceId ?? null,
         assetId: finalized.assetId,
         assetType: finalized.assetType,
         consentIds: [],

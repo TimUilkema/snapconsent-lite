@@ -17,6 +17,7 @@ type CreateInviteResponse = {
 
 type CreateInviteFormProps = {
   projectId: string;
+  workspaceId: string;
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
   warning?: string | null;
@@ -60,6 +61,7 @@ function normalizeInvitePath(payload: CreateInviteResponse | null) {
 
 export function CreateInviteForm({
   projectId,
+  workspaceId,
   templates,
   defaultTemplateId,
   warning,
@@ -98,7 +100,10 @@ export function CreateInviteForm({
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyKey,
         },
-        body: JSON.stringify({ consentTemplateId: selectedTemplateId }),
+        body: JSON.stringify({
+          consentTemplateId: selectedTemplateId,
+          workspaceId,
+        }),
       });
 
       const responsePayload = (await response.json().catch(() => null)) as

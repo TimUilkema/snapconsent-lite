@@ -5,6 +5,7 @@ import { getLocale, getTranslations } from "next-intl/server";
 import { CreateProjectForm } from "@/components/projects/create-project-form";
 import { formatDateTime } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/server";
+import { resolveTenantPermissions } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type ProjectRow = {
@@ -27,16 +28,44 @@ export default async function ProjectsPage() {
   }
 
   const tenantId = await resolveTenantId(supabase);
+  const permissions = tenantId
+    ? await resolveTenantPermissions(supabase, tenantId, user.id)
+    : null;
 
   let projects: ProjectRow[] = [];
   if (tenantId) {
-    const { data } = await supabase
-      .from("projects")
-      .select("id, name, status, created_at")
-      .eq("tenant_id", tenantId)
-      .order("created_at", { ascending: false });
+    if (permissions?.role === "photographer") {
+      const { data: assignedWorkspaces } = await supabase
+        .from("project_workspaces")
+        .select("project_id")
+        .eq("tenant_id", tenantId)
+        .eq("photographer_user_id", user.id);
 
-    projects = (data as ProjectRow[] | null) ?? [];
+      const visibleProjectIds = Array.from(
+        new Set(
+          ((assignedWorkspaces ?? []) as Array<{ project_id: string }>).map((workspace) => workspace.project_id),
+        ),
+      );
+
+      if (visibleProjectIds.length > 0) {
+        const { data } = await supabase
+          .from("projects")
+          .select("id, name, status, created_at")
+          .eq("tenant_id", tenantId)
+          .in("id", visibleProjectIds)
+          .order("created_at", { ascending: false });
+
+        projects = (data as ProjectRow[] | null) ?? [];
+      }
+    } else {
+      const { data } = await supabase
+        .from("projects")
+        .select("id, name, status, created_at")
+        .eq("tenant_id", tenantId)
+        .order("created_at", { ascending: false });
+
+      projects = (data as ProjectRow[] | null) ?? [];
+    }
   }
 
   return (
@@ -56,10 +85,18 @@ export default async function ProjectsPage() {
         </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]">
-        <div>
-          <CreateProjectForm />
-        </div>
+      <div
+        className={
+          permissions?.canCreateProjects
+            ? "grid gap-6 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]"
+            : "grid gap-6"
+        }
+      >
+        {permissions?.canCreateProjects ? (
+          <div>
+            <CreateProjectForm />
+          </div>
+        ) : null}
 
         <section className="content-card rounded-2xl p-5">
           <div className="flex items-center justify-between gap-3">

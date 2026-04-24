@@ -22,8 +22,10 @@ import { createStarterStructuredFieldsDefinition } from "../src/lib/templates/st
 import {
   adminClient,
   assertNoPostgrestError,
+  createPhotographerProjectWorkspace,
   createAnonClient,
   createAuthUserWithRetry,
+  getDefaultProjectWorkspaceId,
   signInClient,
 } from "./helpers/supabase-test-client";
 
@@ -33,6 +35,12 @@ type TenantContext = {
   photographerUserId: string;
   ownerClient: SupabaseClient;
   photographerClient: SupabaseClient;
+};
+
+type ProjectScope = {
+  projectId: string;
+  defaultWorkspaceId: string;
+  photographerWorkspaceId: string;
 };
 
 async function createTenantContext(supabase: SupabaseClient): Promise<TenantContext> {
@@ -73,12 +81,16 @@ async function createTenantContext(supabase: SupabaseClient): Promise<TenantCont
   };
 }
 
-async function createProject(tenantId: string, userId: string, client: SupabaseClient) {
-  const { data, error } = await client
+async function createProject(
+  tenantId: string,
+  ownerUserId: string,
+  photographerUserId: string,
+): Promise<ProjectScope> {
+  const { data, error } = await adminClient
     .from("projects")
     .insert({
       tenant_id: tenantId,
-      created_by: userId,
+      created_by: ownerUserId,
       name: `Feature 055 Project ${randomUUID()}`,
       description: null,
       status: "active",
@@ -87,7 +99,21 @@ async function createProject(tenantId: string, userId: string, client: SupabaseC
     .single();
 
   assertNoPostgrestError(error, "insert project");
-  return data.id as string;
+  const defaultWorkspaceId = await getDefaultProjectWorkspaceId(adminClient, tenantId, data.id);
+  const photographerWorkspaceId = await createPhotographerProjectWorkspace({
+    supabase: adminClient,
+    tenantId,
+    projectId: data.id,
+    createdBy: ownerUserId,
+    photographerUserId,
+    name: "Feature 055 Photographer workspace",
+  });
+
+  return {
+    projectId: data.id as string,
+    defaultWorkspaceId,
+    photographerWorkspaceId,
+  };
 }
 
 async function createProfile(tenantId: string, userId: string, client: SupabaseClient) {
@@ -168,7 +194,13 @@ function assertPostgrestConstraint(
 
 test("project profile participants are tenant-scoped, member-insertable, and unique per project/profile", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
 
   const { data: insertedParticipant, error: insertError } = await context.photographerClient
@@ -176,21 +208,24 @@ test("project profile participants are tenant-scoped, member-insertable, and uni
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.photographerUserId,
     })
-    .select("id, tenant_id, project_id, recurring_profile_id, created_by")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_by")
     .single();
 
   assertNoPostgrestError(insertError, "insert project profile participant");
   assert.equal(insertedParticipant.tenant_id, context.tenantId);
   assert.equal(insertedParticipant.project_id, projectId);
+  assert.equal(insertedParticipant.workspace_id, project.photographerWorkspaceId);
   assert.equal(insertedParticipant.recurring_profile_id, profileId);
   assert.equal(insertedParticipant.created_by, context.photographerUserId);
 
   const { error: duplicateError } = await context.ownerClient.from("project_profile_participants").insert({
     tenant_id: context.tenantId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     recurring_profile_id: profileId,
     created_by: context.ownerUserId,
   });
@@ -199,8 +234,20 @@ test("project profile participants are tenant-scoped, member-insertable, and uni
 
 test("recurring consent schema distinguishes baseline vs project context and scopes project uniqueness per project", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
-  const secondProjectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const secondProject = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
+  const secondProjectId = secondProject.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
 
@@ -262,6 +309,7 @@ test("recurring consent schema distinguishes baseline vs project context and sco
     tenant_id: context.tenantId,
     profile_id: profileId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -278,6 +326,7 @@ test("recurring consent schema distinguishes baseline vs project context and sco
     tenant_id: context.tenantId,
     profile_id: profileId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -295,6 +344,7 @@ test("recurring consent schema distinguishes baseline vs project context and sco
     tenant_id: context.tenantId,
     profile_id: profileId,
     project_id: secondProjectId,
+    workspace_id: secondProject.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -311,6 +361,7 @@ test("recurring consent schema distinguishes baseline vs project context and sco
     profile_id: profileId,
     request_id: projectRequestId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -337,6 +388,7 @@ test("recurring consent schema distinguishes baseline vs project context and sco
     profile_id: profileId,
     request_id: secondProjectRequestId,
     project_id: secondProjectId,
+    workspace_id: secondProject.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -388,7 +440,13 @@ test("recurring consent schema distinguishes baseline vs project context and sco
 test("project recurring public consent flow signs and revokes project context without affecting baseline consent", async () => {
   const context = await createTenantContext(adminClient);
   const anonClient = createAnonClient();
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
 
@@ -419,6 +477,7 @@ test("project recurring public consent flow signs and revokes project context wi
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.ownerUserId,
     })
@@ -431,6 +490,7 @@ test("project recurring public consent flow signs and revokes project context wi
     tenantId: context.tenantId,
     userId: context.photographerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-project-${randomUUID()}`,
@@ -445,6 +505,7 @@ test("project recurring public consent flow signs and revokes project context wi
   assert.ok(publicProjectRequest);
   assert.equal(publicProjectRequest.requestStatus, "pending");
   assert.equal(publicProjectRequest.canSign, true);
+  assert.equal(publicProjectRequest.workspaceId, project.photographerWorkspaceId);
 
   const projectSigned = await submitRecurringProfileConsent({
     supabase: anonClient,
@@ -464,12 +525,13 @@ test("project recurring public consent flow signs and revokes project context wi
 
   const { data: projectConsent, error: projectConsentError } = await context.ownerClient
     .from("recurring_profile_consents")
-    .select("project_id, consent_kind, revoked_at")
+    .select("project_id, workspace_id, consent_kind, revoked_at")
     .eq("tenant_id", context.tenantId)
     .eq("id", projectSigned.consentId)
     .single();
   assertNoPostgrestError(projectConsentError, "select signed project recurring consent");
   assert.equal(projectConsent.project_id, projectId);
+  assert.equal(projectConsent.workspace_id, project.photographerWorkspaceId);
   assert.equal(projectConsent.consent_kind, "project");
   assert.equal(projectConsent.revoked_at, null);
 
@@ -532,7 +594,13 @@ test("project recurring public consent flow signs and revokes project context wi
 
 test("project recurring consent sign and revoke enqueue reconcile_project replay only when project auto eligibility changes", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const anonClient = createAnonClient();
@@ -564,6 +632,7 @@ test("project recurring consent sign and revoke enqueue reconcile_project replay
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.ownerUserId,
     })
@@ -576,6 +645,7 @@ test("project recurring consent sign and revoke enqueue reconcile_project replay
     tenantId: context.tenantId,
     userId: context.photographerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-project-replay-${randomUUID()}`,
@@ -636,7 +706,13 @@ test("project recurring consent sign and revoke enqueue reconcile_project replay
 
 test("project participant scope state helper falls back from signed snapshot when projections are missing", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const anonClient = createAnonClient();
@@ -646,6 +722,7 @@ test("project participant scope state helper falls back from signed snapshot whe
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.ownerUserId,
     })
@@ -658,6 +735,7 @@ test("project participant scope state helper falls back from signed snapshot whe
     tenantId: context.tenantId,
     userId: context.photographerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-scope-helper-${randomUUID()}`,
@@ -713,7 +791,13 @@ test("project participant scope state helper falls back from signed snapshot whe
 
 test("project recurring consent scope repair backfills missing recurring projections and reruns idempotently", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const anonClient = createAnonClient();
@@ -723,6 +807,7 @@ test("project recurring consent scope repair backfills missing recurring project
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.ownerUserId,
     })
@@ -735,6 +820,7 @@ test("project recurring consent scope repair backfills missing recurring project
     tenantId: context.tenantId,
     userId: context.photographerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-recurring-repair-${randomUUID()}`,
@@ -790,7 +876,13 @@ test("project recurring consent scope repair backfills missing recurring project
 
 test("superseded recurring consents no longer count as active for request creation or uniqueness", async () => {
   const context = await createTenantContext(adminClient);
-  const projectId = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const project = await createProject(
+    context.tenantId,
+    context.ownerUserId,
+    context.photographerUserId,
+    context.ownerClient,
+  );
+  const projectId = project.projectId;
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
 
@@ -799,6 +891,7 @@ test("superseded recurring consents no longer count as active for request creati
     .insert({
       tenant_id: context.tenantId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       recurring_profile_id: profileId,
       created_by: context.ownerUserId,
     })
@@ -812,6 +905,7 @@ test("superseded recurring consents no longer count as active for request creati
     tenant_id: context.tenantId,
     profile_id: profileId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -830,6 +924,7 @@ test("superseded recurring consents no longer count as active for request creati
       profile_id: profileId,
       request_id: firstRequestId,
       project_id: projectId,
+      workspace_id: project.photographerWorkspaceId,
       consent_kind: "project",
       consent_template_id: templateId,
       profile_name_snapshot: "Jordan Miles",
@@ -858,6 +953,7 @@ test("superseded recurring consents no longer count as active for request creati
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-active-block-${randomUUID()}`,
@@ -882,6 +978,7 @@ test("superseded recurring consents no longer count as active for request creati
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId: project.photographerWorkspaceId,
     participantId: participantRow.id,
     consentTemplateId: templateId,
     idempotencyKey: `feature055-superseded-allow-${randomUUID()}`,
@@ -895,6 +992,7 @@ test("superseded recurring consents no longer count as active for request creati
     tenant_id: context.tenantId,
     profile_id: profileId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",
@@ -911,6 +1009,7 @@ test("superseded recurring consents no longer count as active for request creati
     profile_id: profileId,
     request_id: secondRequestId,
     project_id: projectId,
+    workspace_id: project.photographerWorkspaceId,
     consent_kind: "project",
     consent_template_id: templateId,
     profile_name_snapshot: "Jordan Miles",

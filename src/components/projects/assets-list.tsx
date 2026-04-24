@@ -92,6 +92,7 @@ type ScopeFilterOption = {
 
 type AssetsListProps = {
   projectId: string;
+  workspaceId: string;
 };
 
 type AssetPageCacheEntry = {
@@ -283,16 +284,22 @@ export function PreviewableVideoPoster({
   );
 }
 
-function buildConsentHref(projectId: string, consentId: string) {
-  const params = new URLSearchParams({ openConsentId: consentId });
+function buildConsentHref(projectId: string, workspaceId: string, consentId: string) {
+  const params = new URLSearchParams({
+    workspaceId,
+    openConsentId: consentId,
+  });
   return `/projects/${projectId}?${params.toString()}#consent-${consentId}`;
 }
 
 function buildOverlayHref(
   projectId: string,
+  workspaceId: string,
   overlay: NonNullable<AssetRow["linkedFaceOverlays"]>[number],
 ) {
-  return overlay.consentId ? buildConsentHref(projectId, overlay.consentId) : `/projects/${projectId}`;
+  return overlay.consentId
+    ? buildConsentHref(projectId, workspaceId, overlay.consentId)
+    : `/projects/${projectId}?${new URLSearchParams({ workspaceId }).toString()}`;
 }
 
 function getOverlayLabel(overlay: NonNullable<AssetRow["linkedFaceOverlays"]>[number]) {
@@ -320,12 +327,13 @@ function getOverlayLinkSourceLabel(
 
 function buildAssetPreviewFaceOverlays(
   projectId: string,
+  workspaceId: string,
   asset: AssetRow,
   t: ReturnType<typeof useTranslations>,
 ) {
   return (asset.linkedFaceOverlays ?? []).map((overlay) => ({
     id: `${overlay.assetFaceId}:${overlay.projectFaceAssigneeId}`,
-    href: buildOverlayHref(projectId, overlay),
+    href: buildOverlayHref(projectId, workspaceId, overlay),
     label: getOverlayLabel(overlay),
     faceBoxNormalized: overlay.faceBoxNormalized,
     headshotThumbnailUrl: overlay.headshotThumbnailUrl,
@@ -365,7 +373,7 @@ function buildAssetPreviewMetadata(
   return parts.join(" · ");
 }
 
-export function AssetsList({ projectId }: AssetsListProps) {
+export function AssetsList({ projectId, workspaceId }: AssetsListProps) {
   const locale = useLocale();
   const t = useTranslations("projects.assetsList");
   const tErrors = useTranslations("errors");
@@ -460,6 +468,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
       if (searchQuery.length > 0) {
         params.set("q", searchQuery);
       }
+      params.set("workspaceId", workspaceId);
       selectedConsentIds.forEach((consentId) => params.append("consentId", consentId));
       if (selectedScopeTemplateKey && selectedScopeKey) {
         params.set("scopeTemplateKey", selectedScopeTemplateKey);
@@ -494,6 +503,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
       selectedScopeTemplateKey,
       sort,
       tErrors,
+      workspaceId,
     ],
   );
 
@@ -974,7 +984,7 @@ export function AssetsList({ projectId }: AssetsListProps) {
                     emptyLabel={
                       asset.thumbnailState === "processing" ? t("processingDisplay") : t("unavailableDisplay")
                     }
-                    previewFaceOverlays={buildAssetPreviewFaceOverlays(projectId, asset, t)}
+                    previewFaceOverlays={buildAssetPreviewFaceOverlays(projectId, workspaceId, asset, t)}
                     onOpenPreview={() => {
                       void navigateToAssetIndex(offset + assetIndex);
                     }}
@@ -1079,7 +1089,12 @@ export function AssetsList({ projectId }: AssetsListProps) {
                   previewUrl: selectedAsset.previewUrl ?? selectedAsset.thumbnailUrl ?? null,
                   thumbnailUrl: selectedAsset.thumbnailUrl ?? null,
                   previewState: selectedAsset.previewState,
-                  initialPreviewFaceOverlays: buildAssetPreviewFaceOverlays(projectId, selectedAsset, t),
+                  initialPreviewFaceOverlays: buildAssetPreviewFaceOverlays(
+                    projectId,
+                    workspaceId,
+                    selectedAsset,
+                    t,
+                  ),
                 }
               : {
                   id: selectedAsset.id,

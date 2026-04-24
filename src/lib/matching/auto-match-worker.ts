@@ -1862,6 +1862,7 @@ async function processCompareMaterializedPairJob(
       supabase,
       tenantId: job.tenant_id,
       projectId: job.project_id,
+      workspaceId: job.workspace_id,
       assetId: job.scope_asset_id,
     });
   }
@@ -1971,6 +1972,7 @@ async function processCompareRecurringProfileMaterializedPairJob(
       supabase,
       tenantId: job.tenant_id,
       projectId: job.project_id,
+      workspaceId: job.workspace_id,
       assetId: job.scope_asset_id,
     });
   }

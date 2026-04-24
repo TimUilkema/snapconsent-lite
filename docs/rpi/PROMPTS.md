@@ -27,6 +27,29 @@ A bad prompt in this repo usually:
 
 ---
 
+## Code comments
+
+Add short comments for non-obvious domain logic explaining **why**, not what.
+
+Focus on:
+- tenant/workspace scoping
+- permissions
+- idempotency/retry
+- public-token flows
+- consent current vs history
+- matching/review rules
+
+Avoid obvious or redundant comments.
+
+## Database reset assumption
+
+Assume local development uses a fresh `supabase db reset`.
+
+- Write clean forward migrations
+- Update tests/fixtures to the new schema
+- Do not add compatibility fallbacks for old local data unless explicitly required
+
+
 ## 2. Phase discipline: what each phase is for
 
 ### Research phase

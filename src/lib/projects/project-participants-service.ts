@@ -33,6 +33,7 @@ type ProjectProfileParticipantRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   recurring_profile_id: string;
   created_by: string;
   created_at: string;
@@ -98,6 +99,7 @@ type AddProjectProfileParticipantInput = {
   tenantId: string;
   userId: string;
   projectId: string;
+  workspaceId: string;
   recurringProfileId: string;
 };
 
@@ -106,6 +108,7 @@ type CreateProjectProfileConsentRequestInput = {
   tenantId: string;
   userId: string;
   projectId: string;
+  workspaceId?: string | null;
   participantId: string;
   consentTemplateId?: string | null;
   idempotencyKey: string;
@@ -115,6 +118,7 @@ type GetProjectParticipantsPanelDataInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId: string;
 };
 
 export type ProjectProfileParticipantPayload = {
@@ -388,7 +392,7 @@ async function getProjectProfileParticipantRowById(
 ): Promise<ProjectProfileParticipantRow> {
   const { data, error } = await supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_by, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_by, created_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("id", participantId)
@@ -406,20 +410,31 @@ async function getProjectProfileParticipantRowById(
     );
   }
 
-  return data as ProjectProfileParticipantRow;
+  const participant = data as ProjectProfileParticipantRow;
+  if (!participant.workspace_id) {
+    throw new HttpError(
+      409,
+      "workspace_scope_missing",
+      "Project participant is missing a workspace assignment.",
+    );
+  }
+
+  return participant;
 }
 
 async function getProjectProfileParticipantByProjectAndProfile(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string,
   profileId: string,
 ): Promise<ProjectProfileParticipantRow | null> {
   const { data, error } = await supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_by, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_by, created_at")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
+    .eq("workspace_id", workspaceId)
     .eq("recurring_profile_id", profileId)
     .maybeSingle();
 
@@ -427,20 +442,31 @@ async function getProjectProfileParticipantByProjectAndProfile(
     throw new HttpError(500, "project_profile_participant_lookup_failed", "Unable to load project participant.");
   }
 
-  return (data as ProjectProfileParticipantRow | null) ?? null;
+  const participant = (data as ProjectProfileParticipantRow | null) ?? null;
+  if (participant && !participant.workspace_id) {
+    throw new HttpError(
+      409,
+      "workspace_scope_missing",
+      "Project participant is missing a workspace assignment.",
+    );
+  }
+
+  return participant;
 }
 
 export async function getProjectParticipantsPanelData(
   input: GetProjectParticipantsPanelDataInput,
 ): Promise<ProjectParticipantsPanelData> {
   const projectId = validateUuid(input.projectId, "project_not_found", "Project not found.");
+  const workspaceId = validateUuid(input.workspaceId, "workspace_not_found", "Project workspace not found.");
   await getProjectRowById(input.supabase, input.tenantId, projectId);
 
   const { data: participantData, error: participantError } = await input.supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id, created_by, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_by, created_at")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", projectId)
+    .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
 
   if (participantError) {
@@ -563,6 +589,7 @@ export async function getProjectParticipantsPanelData(
         )
         .eq("tenant_id", input.tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspaceId)
         .eq("consent_kind", "project")
         .eq("status", "pending")
         .in("profile_id", participantProfileIds),
@@ -573,6 +600,7 @@ export async function getProjectParticipantsPanelData(
         )
         .eq("tenant_id", input.tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspaceId)
         .eq("consent_kind", "project")
         .is("revoked_at", null)
         .is("superseded_at", null)
@@ -584,6 +612,7 @@ export async function getProjectParticipantsPanelData(
         )
         .eq("tenant_id", input.tenantId)
         .eq("project_id", projectId)
+        .eq("workspace_id", workspaceId)
         .eq("consent_kind", "project")
         .not("revoked_at", "is", null)
         .in("profile_id", participantProfileIds)
@@ -835,6 +864,7 @@ function mapProjectProfileConsentRequestError(error: { code?: string; message?: 
 
 export async function addProjectProfileParticipant(input: AddProjectProfileParticipantInput) {
   const projectId = validateUuid(input.projectId, "project_not_found", "Project not found.");
+  const workspaceId = validateUuid(input.workspaceId, "workspace_not_found", "Project workspace not found.");
   const recurringProfileId = validateUuid(
     input.recurringProfileId,
     "recurring_profile_not_found",
@@ -859,10 +889,11 @@ export async function addProjectProfileParticipant(input: AddProjectProfileParti
     .insert({
       tenant_id: project.tenant_id,
       project_id: project.id,
+      workspace_id: workspaceId,
       recurring_profile_id: profile.id,
       created_by: input.userId,
     })
-    .select("id, tenant_id, project_id, recurring_profile_id, created_by, created_at")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id, created_by, created_at")
     .single();
 
   let status = 201;
@@ -883,6 +914,7 @@ export async function addProjectProfileParticipant(input: AddProjectProfileParti
       input.supabase,
       input.tenantId,
       project.id,
+      workspaceId,
       profile.id,
     );
     if (!participant) {
@@ -936,8 +968,21 @@ export async function createProjectProfileConsentRequest(input: CreateProjectPro
     "project_profile_participant_not_found",
     "Project participant not found.",
   );
+  const requestedWorkspaceId =
+    typeof input.workspaceId === "string" && input.workspaceId.trim().length > 0
+      ? validateUuid(input.workspaceId, "workspace_not_found", "Project workspace not found.")
+      : null;
   const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
-  const operation = `create_project_profile_consent_request:${participantId}`;
+
+  const [project, participant] = await Promise.all([
+    getProjectRowById(input.supabase, input.tenantId, projectId),
+    getProjectProfileParticipantRowById(input.supabase, input.tenantId, projectId, participantId),
+  ]);
+
+  const workspaceId =
+    requestedWorkspaceId ??
+    validateUuid(participant.workspace_id, "workspace_not_found", "Project workspace not found.");
+  const operation = `create_project_profile_consent_request:${participantId}:${workspaceId}`;
 
   const existingPayload = await readIdempotencyPayload<ProjectProfileConsentRequestPayload>(
     input.supabase,
@@ -953,16 +998,18 @@ export async function createProjectProfileConsentRequest(input: CreateProjectPro
     };
   }
 
-  const [project, participant] = await Promise.all([
-    getProjectRowById(input.supabase, input.tenantId, projectId),
-    getProjectProfileParticipantRowById(input.supabase, input.tenantId, projectId, participantId),
-  ]);
-
   const profile = await getRecurringProfileRowById(
     input.supabase,
     input.tenantId,
     participant.recurring_profile_id,
   );
+  if (participant.workspace_id !== workspaceId) {
+    throw new HttpError(
+      404,
+      "project_profile_participant_not_found",
+      "Project participant not found.",
+    );
+  }
   if (profile.status !== "active") {
     throw new HttpError(
       409,

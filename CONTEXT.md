@@ -62,6 +62,7 @@ The project standard stack:
 - **Next.js (App Router)**
 - **TypeScript**
 - **TailwindCSS**
+- **CompreFace**
 - **Supabase**
     - Postgres
     - Auth

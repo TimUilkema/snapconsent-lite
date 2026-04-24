@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { assertProjectWorkflowMutable } from "@/lib/projects/project-workflow-service";
 import {
   createStarterFormLayoutDefinition,
   FormLayoutError,
@@ -16,8 +17,7 @@ import {
   StructuredFieldsDefinition,
   StructuredFieldsError,
 } from "@/lib/templates/structured-fields";
-
-type MembershipRole = "owner" | "admin" | "photographer";
+import { getTenantMembershipRole } from "@/lib/tenant/permissions";
 
 type TemplateRow = {
   id: string;
@@ -340,31 +340,12 @@ function mapTemplateMutationRpcError(error: { code?: string; message?: string } 
   throw new HttpError(500, "template_mutation_failed", "Template mutation failed.");
 }
 
-async function getMembershipRole(
-  supabase: SupabaseClient,
-  tenantId: string,
-  userId: string,
-): Promise<MembershipRole | null> {
-  const { data, error } = await supabase
-    .from("memberships")
-    .select("role")
-    .eq("tenant_id", tenantId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (error) {
-    throw new HttpError(500, "membership_lookup_failed", "Unable to validate workspace access.");
-  }
-
-  return (data?.role as MembershipRole | undefined) ?? null;
-}
-
 export async function resolveTemplateManagementAccess(
   supabase: SupabaseClient,
   tenantId: string,
   userId: string,
 ) {
-  const role = await getMembershipRole(supabase, tenantId, userId);
+  const role = await getTenantMembershipRole(supabase, tenantId, userId);
 
   if (!role) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
@@ -807,20 +788,7 @@ export async function setProjectDefaultTemplate(input: ProjectDefaultTemplateInp
     throw new HttpError(403, "project_default_forbidden", "Only workspace owners and admins can change the project default template.");
   }
 
-  const { data: project, error: projectError } = await input.supabase
-    .from("projects")
-    .select("id")
-    .eq("id", input.projectId)
-    .eq("tenant_id", input.tenantId)
-    .maybeSingle();
-
-  if (projectError) {
-    throw new HttpError(500, "project_lookup_failed", "Unable to load project.");
-  }
-
-  if (!project) {
-    throw new HttpError(404, "project_not_found", "Project not found.");
-  }
+  await assertProjectWorkflowMutable(input.supabase, input.tenantId, input.projectId);
 
   if (input.templateId) {
     const template = await getVisiblePublishedTemplateById(input.supabase, input.tenantId, input.templateId);

@@ -9,6 +9,7 @@ import { PhotoLinkReviewDialog } from "@/components/projects/photo-link-review-d
 type ConsentAssetMatchingPanelProps = {
   projectId: string;
   consentId: string;
+  workspaceId: string;
 };
 
 type MatchableMode = "default" | "likely";
@@ -130,7 +131,11 @@ function buildReviewAsset(asset: {
   };
 }
 
-export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAssetMatchingPanelProps) {
+export function ConsentAssetMatchingPanel({
+  projectId,
+  consentId,
+  workspaceId,
+}: ConsentAssetMatchingPanelProps) {
   const router = useRouter();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -176,6 +181,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
       if (mode === "likely") {
         params.set("mode", "likely");
       }
+      params.set("workspaceId", workspaceId);
 
       const response = await fetch(
         `/api/projects/${projectId}/consents/${consentId}/assets/matchable?${params.toString()}`,
@@ -209,9 +215,14 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
   async function loadLinkedAssets() {
     setIsLoadingLinked(true);
     try {
-      const response = await fetch(`/api/projects/${projectId}/consents/${consentId}/assets/links`, {
-        method: "GET",
-      });
+      const response = await fetch(
+        `/api/projects/${projectId}/consents/${consentId}/assets/links?${new URLSearchParams({
+          workspaceId,
+        }).toString()}`,
+        {
+          method: "GET",
+        },
+      );
       const payload = (await response.json().catch(() => null)) as ListAssetsResponse<LinkedAsset> | null;
 
       if (!response.ok || !payload) {
@@ -231,10 +242,15 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
 
   async function loadCurrentReviewSession() {
     try {
-      const response = await fetch(`/api/projects/${projectId}/consents/${consentId}/review-sessions/current`, {
-        method: "GET",
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `/api/projects/${projectId}/consents/${consentId}/review-sessions/current?${new URLSearchParams({
+          workspaceId,
+        }).toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      );
 
       if (response.status === 404) {
         setCurrentReviewSession(null);
@@ -297,6 +313,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          workspaceId,
           assetIds: selectedAssetIds,
         }),
       });
@@ -697,6 +714,7 @@ export function ConsentAssetMatchingPanel({ projectId, consentId }: ConsentAsset
             <PhotoLinkReviewDialog
               projectId={projectId}
               consentId={consentId}
+              workspaceId={workspaceId}
               asset={activeReviewAsset}
               sessionId={activeReviewSessionId}
               onClose={() => {

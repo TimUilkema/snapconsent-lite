@@ -16,6 +16,7 @@ type ConsentRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string | null;
   subject_id: string;
   invite_id: string | null;
   revoked_at: string | null;
@@ -215,7 +216,7 @@ async function loadConsentRow(
 ): Promise<ConsentRow> {
   const { data, error } = await supabase
     .from("consents")
-    .select("id, tenant_id, project_id, subject_id, invite_id, revoked_at, structured_fields_snapshot")
+    .select("id, tenant_id, project_id, workspace_id, subject_id, invite_id, revoked_at, structured_fields_snapshot")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .eq("id", consentId)
@@ -318,6 +319,7 @@ async function listPendingUpgradeRequestsForFamily(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string,
   subjectId: string,
   templateKey: string,
 ): Promise<UpgradeRequestRow[]> {
@@ -328,6 +330,7 @@ async function listPendingUpgradeRequestsForFamily(
     )
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
+    .eq("workspace_id", workspaceId)
     .eq("subject_id", subjectId)
     .eq("status", "pending")
     .eq("target_template_key", templateKey)
@@ -406,6 +409,10 @@ export async function createProjectConsentUpgradeRequest(
   }
 
   const priorConsent = await loadConsentRow(input.supabase, input.tenantId, projectId, consentId);
+  const workspaceId = priorConsent.workspace_id?.trim() ?? "";
+  if (!workspaceId) {
+    throw new HttpError(409, "workspace_scope_missing", "Consent is missing a workspace assignment.");
+  }
   if (priorConsent.revoked_at) {
     throw new HttpError(409, "consent_revoked", "Revoked consents cannot receive new assignments.");
   }
@@ -452,6 +459,7 @@ export async function createProjectConsentUpgradeRequest(
     input.supabase,
     input.tenantId,
     projectId,
+    workspaceId,
     priorConsent.subject_id,
     targetTemplate.templateKey,
   );
@@ -493,6 +501,7 @@ export async function createProjectConsentUpgradeRequest(
       .from("project_consent_upgrade_requests")
       .update({ status: nextStatus })
       .eq("tenant_id", input.tenantId)
+      .eq("workspace_id", workspaceId)
       .eq("id", pendingRequest.id)
       .eq("status", "pending");
 
@@ -510,6 +519,7 @@ export async function createProjectConsentUpgradeRequest(
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId,
+    workspaceId,
     userId: input.userId,
     idempotencyKey: requestId,
     consentTemplateId: targetTemplate.id,
@@ -521,6 +531,7 @@ export async function createProjectConsentUpgradeRequest(
       id: requestId,
       tenant_id: input.tenantId,
       project_id: projectId,
+      workspace_id: workspaceId,
       subject_id: priorConsent.subject_id,
       prior_consent_id: priorConsent.id,
       target_template_id: targetTemplate.id,
@@ -540,6 +551,7 @@ export async function createProjectConsentUpgradeRequest(
         input.supabase,
         input.tenantId,
         projectId,
+        workspaceId,
         priorConsent.subject_id,
         targetTemplate.templateKey,
       );

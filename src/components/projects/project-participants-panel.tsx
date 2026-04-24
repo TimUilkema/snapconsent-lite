@@ -21,10 +21,13 @@ type ProjectParticipantsRouter = Pick<ReturnType<typeof useRouter>, "refresh">;
 
 type ProjectParticipantsPanelProps = {
   projectId: string;
+  workspaceId: string;
   data: ProjectParticipantsPanelData;
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
   defaultTemplateWarning?: string | null;
+  allowCaptureActions?: boolean;
+  allowCaptureMutations?: boolean;
   profileHeadshotUrls?: Record<
     string,
     {
@@ -80,10 +83,12 @@ function ConsentStateBadge({
 
 function AddProjectProfileParticipantForm({
   projectId,
+  workspaceId,
   availableProfiles,
   router,
 }: {
   projectId: string;
+  workspaceId: string;
   availableProfiles: ProjectParticipantsPanelData["availableProfiles"];
   router: ProjectParticipantsRouter;
 }) {
@@ -120,6 +125,7 @@ function AddProjectProfileParticipantForm({
         },
         body: JSON.stringify({
           recurringProfileId: selectedProfileId,
+          workspaceId,
         }),
       });
 
@@ -179,15 +185,19 @@ function AddProjectProfileParticipantForm({
 
 function ProjectProfileParticipantActions({
   projectId,
+  workspaceId,
   participant,
   templates,
   defaultTemplateId,
+  allowCreateRequest,
   router,
 }: {
   projectId: string;
+  workspaceId: string;
   participant: ProjectParticipantsPanelData["knownProfiles"][number];
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
+  allowCreateRequest: boolean;
   router: ProjectParticipantsRouter;
 }) {
   const locale = useLocale();
@@ -245,6 +255,7 @@ function ProjectProfileParticipantActions({
           },
           body: JSON.stringify({
             consentTemplateId: selectedTemplateId || null,
+            workspaceId,
           }),
         },
       );
@@ -305,7 +316,7 @@ function ProjectProfileParticipantActions({
     );
   }
 
-  if (!participant.actions.canCreateRequest) {
+  if (!allowCreateRequest || !participant.actions.canCreateRequest) {
     return null;
   }
 
@@ -370,10 +381,13 @@ function renderProjectConsentActivity(
 
 export function ProjectParticipantsPanelView({
   projectId,
+  workspaceId,
   data,
   templates,
   defaultTemplateId,
   defaultTemplateWarning,
+  allowCaptureActions = true,
+  allowCaptureMutations = allowCaptureActions,
   profileHeadshotUrls,
   router,
 }: ProjectParticipantsPanelViewProps) {
@@ -390,11 +404,14 @@ export function ProjectParticipantsPanelView({
         </p>
       ) : null}
 
-      <AddProjectProfileParticipantForm
-        projectId={projectId}
-        availableProfiles={data.availableProfiles}
-        router={router}
-      />
+      {allowCaptureMutations ? (
+        <AddProjectProfileParticipantForm
+          projectId={projectId}
+          workspaceId={workspaceId}
+          availableProfiles={data.availableProfiles}
+          router={router}
+        />
+      ) : null}
 
       {data.knownProfiles.length === 0 ? (
         <p className="text-sm text-zinc-600">{t("knownProfilesEmpty")}</p>
@@ -470,13 +487,17 @@ export function ProjectParticipantsPanelView({
                     </p>
                   ) : null}
 
-                  <ProjectProfileParticipantActions
-                    projectId={projectId}
-                    participant={participant}
-                    templates={templates}
-                    defaultTemplateId={defaultTemplateId}
-                    router={router}
-                  />
+                  {allowCaptureActions ? (
+                    <ProjectProfileParticipantActions
+                      projectId={projectId}
+                      workspaceId={workspaceId}
+                      participant={participant}
+                      templates={templates}
+                      defaultTemplateId={defaultTemplateId}
+                      allowCreateRequest={allowCaptureMutations}
+                      router={router}
+                    />
+                  ) : null}
                 </div>
               </li>
             );

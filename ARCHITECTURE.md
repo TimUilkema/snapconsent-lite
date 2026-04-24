@@ -1,7 +1,6 @@
 # ARCHITECTURE.md
 
 ## Purpose
-This repository is a simplified “SnapConsent Lite” app built primarily to practice AI-assisted development workflows (Codex) on a realistic web stack.
 
 The architecture prioritizes:
 - repeatability (fresh clone works)
@@ -19,6 +18,7 @@ The architecture prioritizes:
     - Row Level Security (RLS)
 - Local dev:
     - Supabase CLI + Docker
+    - CompreFace + Docker
     - Migrations in `supabase/migrations`
 
 ## High-Level Components
@@ -142,6 +142,7 @@ As the app grows:
 - `AGENTS.md` contains instructions for Codex.
 - `CONTEXT.md` describes the product at a high level.
 - `ARCHITECTURE.md` explains how the system is structured and why.
+- `SUMMARY.md` tries to be an up to date summary of the entire webapplication and features 
 - RPI workflow docs live in `docs/rpi/<feature-id>/`.
 
 ## Change Management

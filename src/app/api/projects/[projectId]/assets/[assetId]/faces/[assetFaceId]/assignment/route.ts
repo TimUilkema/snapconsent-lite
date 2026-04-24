@@ -4,6 +4,12 @@ import {
   manualLinkPhotoToRecurringProjectParticipant,
   manualUnlinkPhotoFaceAssignment,
 } from "@/lib/matching/consent-photo-matching";
+import { loadProjectProfileParticipantById } from "@/lib/matching/project-face-assignees";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewMutationAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -37,14 +43,34 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, assetId, assetFaceId } = await context.params;
+  const assetRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "assets",
+    rowId: assetId,
+    notFoundCode: "asset_not_found",
+    notFoundMessage: "Asset not found.",
+  });
+  await requireWorkspaceReviewMutationAccessForRow({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectId,
+    table: "assets",
+    rowId: assetId,
+    notFoundCode: "asset_not_found",
+    notFoundMessage: "Asset not found.",
+  });
+
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     assetId,
     assetFaceId,
+    workspaceId: assetRow.workspace_id,
     userId: user.id,
   };
 }
@@ -61,7 +87,7 @@ function parseBody(body: AssignmentBody | null) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, assetFaceId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, assetFaceId, workspaceId, userId } = await requireAuthAndScope(context);
     const body = (await request.json().catch(() => null)) as AssignmentBody | null;
     const parsed = parseBody(body);
 
@@ -70,11 +96,28 @@ export async function POST(request: Request, context: RouteContext) {
         throw new HttpError(400, "invalid_body", "Consent ID is required.");
       }
 
+      const consentRow = await loadWorkspaceScopedRow({
+        supabase,
+        tenantId,
+        projectId,
+        table: "consents",
+        rowId: parsed.consentId,
+        notFoundCode: "consent_not_found",
+        notFoundMessage: "Consent not found.",
+      });
+      assertWorkspaceScopedRowMatchesWorkspace(
+        consentRow,
+        workspaceId,
+        "consent_not_found",
+        "Consent not found.",
+      );
+
       const result = await manualLinkPhotoToConsent({
         supabase,
         tenantId,
         projectId,
         consentId: parsed.consentId,
+        workspaceId,
         actorUserId: userId,
         assetId,
         assetFaceId,
@@ -111,10 +154,22 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(400, "invalid_body", "Project participant ID is required.");
     }
 
+    const participant = await loadProjectProfileParticipantById({
+      supabase,
+      tenantId,
+      projectId,
+      workspaceId,
+      participantId: parsed.projectProfileParticipantId,
+    });
+    if (!participant) {
+      throw new HttpError(404, "project_profile_participant_not_found", "Project participant not found.");
+    }
+
     const result = await manualLinkPhotoToRecurringProjectParticipant({
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       assetFaceId,
       actorUserId: userId,
@@ -152,11 +207,12 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, assetFaceId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, assetFaceId, workspaceId, userId } = await requireAuthAndScope(context);
     const result = await manualUnlinkPhotoFaceAssignment({
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       assetFaceId,
       actorUserId: userId,

@@ -8,6 +8,7 @@ export type ProjectFaceAssigneeRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   assignee_kind: ProjectFaceAssigneeKind;
   consent_id: string | null;
   recurring_profile_consent_id: string | null;
@@ -20,6 +21,7 @@ type ProjectProfileParticipantRow = {
   id: string;
   tenant_id: string;
   project_id: string;
+  workspace_id: string;
   recurring_profile_id: string;
 };
 
@@ -28,6 +30,7 @@ type RecurringProfileConsentRow = {
   tenant_id: string;
   profile_id: string;
   project_id: string | null;
+  workspace_id: string | null;
   consent_kind: "baseline" | "project";
   face_match_opt_in: boolean;
   revoked_at: string | null;
@@ -41,6 +44,7 @@ type RecurringProfileConsentRequestRow = {
   tenant_id: string;
   profile_id: string;
   project_id: string | null;
+  workspace_id: string | null;
   consent_kind: "baseline" | "project";
   status: "pending" | "signed" | "expired" | "superseded" | "cancelled";
   expires_at: string;
@@ -121,18 +125,25 @@ async function loadProjectProfileParticipants(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   participantIds: string[],
 ) {
   if (participantIds.length === 0) {
     return [] as ProjectProfileParticipantRow[];
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("project_profile_participants")
-    .select("id, tenant_id, project_id, recurring_profile_id")
+    .select("id, tenant_id, project_id, workspace_id, recurring_profile_id")
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
     .in("id", participantIds);
+
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(
@@ -143,7 +154,10 @@ async function loadProjectProfileParticipants(
   }
 
   return ((data ?? []) as ProjectProfileParticipantRow[]).filter(
-    (row) => row.tenant_id === tenantId && row.project_id === projectId,
+    (row) =>
+      row.tenant_id === tenantId &&
+      row.project_id === projectId &&
+      (!workspaceId || row.workspace_id === workspaceId),
   );
 }
 
@@ -151,9 +165,16 @@ async function loadSingleProjectProfileParticipant(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   participantId: string,
 ) {
-  const rows = await loadProjectProfileParticipants(supabase, tenantId, projectId, [participantId]);
+  const rows = await loadProjectProfileParticipants(
+    supabase,
+    tenantId,
+    projectId,
+    workspaceId,
+    [participantId],
+  );
   return rows[0] ?? null;
 }
 
@@ -161,12 +182,14 @@ export async function loadProjectProfileParticipantById(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   participantId: string;
 }) {
   return loadSingleProjectProfileParticipant(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.participantId,
   );
 }
@@ -175,6 +198,7 @@ export async function loadProjectRecurringConsentStateByParticipantIds(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   participantIds: string[];
 }) {
   const uniqueParticipantIds = Array.from(new Set(input.participantIds));
@@ -182,6 +206,7 @@ export async function loadProjectRecurringConsentStateByParticipantIds(input: {
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     uniqueParticipantIds,
   );
 
@@ -196,36 +221,54 @@ export async function loadProjectRecurringConsentStateByParticipantIds(input: {
     activeResponse,
     revokedResponse,
   ] = await Promise.all([
-    input.supabase
-      .from("recurring_profile_consent_requests")
-      .select("id, tenant_id, profile_id, project_id, consent_kind, status, expires_at, created_at, updated_at")
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("consent_kind", "project")
-      .eq("status", "pending")
-      .in("profile_id", profileIds),
-    input.supabase
-      .from("recurring_profile_consents")
-      .select(
-        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
-      )
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("consent_kind", "project")
-      .is("revoked_at", null)
-      .is("superseded_at", null)
-      .in("profile_id", profileIds),
-    input.supabase
-      .from("recurring_profile_consents")
-      .select(
-        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
-      )
-      .eq("tenant_id", input.tenantId)
-      .eq("project_id", input.projectId)
-      .eq("consent_kind", "project")
-      .not("revoked_at", "is", null)
-      .in("profile_id", profileIds)
-      .order("revoked_at", { ascending: false }),
+    (() => {
+      let query = input.supabase
+        .from("recurring_profile_consent_requests")
+        .select("id, tenant_id, profile_id, project_id, workspace_id, consent_kind, status, expires_at, created_at, updated_at")
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("consent_kind", "project")
+        .eq("status", "pending")
+        .in("profile_id", profileIds);
+      if (input.workspaceId) {
+        query = query.eq("workspace_id", input.workspaceId);
+      }
+      return query;
+    })(),
+    (() => {
+      let query = input.supabase
+        .from("recurring_profile_consents")
+        .select(
+          "id, tenant_id, profile_id, project_id, workspace_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
+        )
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("consent_kind", "project")
+        .is("revoked_at", null)
+        .is("superseded_at", null)
+        .in("profile_id", profileIds);
+      if (input.workspaceId) {
+        query = query.eq("workspace_id", input.workspaceId);
+      }
+      return query;
+    })(),
+    (() => {
+      let query = input.supabase
+        .from("recurring_profile_consents")
+        .select(
+          "id, tenant_id, profile_id, project_id, workspace_id, consent_kind, face_match_opt_in, revoked_at, superseded_at, signed_at, created_at",
+        )
+        .eq("tenant_id", input.tenantId)
+        .eq("project_id", input.projectId)
+        .eq("consent_kind", "project")
+        .not("revoked_at", "is", null)
+        .in("profile_id", profileIds)
+        .order("revoked_at", { ascending: false });
+      if (input.workspaceId) {
+        query = query.eq("workspace_id", input.workspaceId);
+      }
+      return query;
+    })(),
   ]);
 
   if (pendingResponse.error || activeResponse.error || revokedResponse.error) {
@@ -306,6 +349,7 @@ export async function loadProjectFaceAssigneeRowsByIds(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assigneeIds: string[];
 }) {
   const uniqueAssigneeIds = Array.from(new Set(input.assigneeIds));
@@ -314,14 +358,20 @@ export async function loadProjectFaceAssigneeRowsByIds(input: {
     return assigneeMap;
   }
 
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("project_face_assignees")
     .select(
-      "id, tenant_id, project_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
+      "id, tenant_id, project_id, workspace_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
     )
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .in("id", uniqueAssigneeIds);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "project_face_assignee_lookup_failed", "Unable to load project face assignees.");
@@ -338,6 +388,7 @@ export async function loadProjectConsentFaceAssigneeIdsByConsentIds(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   consentIds: string[];
 }) {
   const uniqueConsentIds = Array.from(new Set(input.consentIds));
@@ -346,13 +397,19 @@ export async function loadProjectConsentFaceAssigneeIdsByConsentIds(input: {
     return assigneeIdByConsentId;
   }
 
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("project_face_assignees")
     .select("id, consent_id")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("assignee_kind", "project_consent")
     .in("consent_id", uniqueConsentIds);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "project_face_assignee_lookup_failed", "Unable to load consent assignee ids.");
@@ -371,6 +428,7 @@ export async function loadProjectRecurringConsentAssigneeIdsByRecurringConsentId
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   recurringConsentIds: string[];
 }) {
   const uniqueRecurringConsentIds = Array.from(new Set(input.recurringConsentIds));
@@ -379,13 +437,19 @@ export async function loadProjectRecurringConsentAssigneeIdsByRecurringConsentId
     return assigneeIdByRecurringConsentId;
   }
 
-  const { data, error } = await input.supabase
+  let query = input.supabase
     .from("project_face_assignees")
     .select("id, recurring_profile_consent_id")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("assignee_kind", "project_recurring_consent")
     .in("recurring_profile_consent_id", uniqueRecurringConsentIds);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new HttpError(500, "project_face_assignee_lookup_failed", "Unable to load recurring assignee ids.");
@@ -404,6 +468,7 @@ export async function loadProjectFaceAssigneeDisplayMap(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assigneeIds: string[];
 }) {
   const assigneeRowsById = await loadProjectFaceAssigneeRowsByIds(input);
@@ -422,12 +487,16 @@ export async function loadProjectFaceAssigneeDisplayMap(input: {
 
   let consentSummaryMap = new Map<string, ConsentSummaryRow>();
   if (consentIds.length > 0) {
-    const { data, error } = await input.supabase
+    let consentQuery = input.supabase
       .from("consents")
       .select("id, signed_at, revoked_at, consent_version, face_match_opt_in, subjects(email, full_name)")
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
       .in("id", consentIds);
+    if (input.workspaceId) {
+      consentQuery = consentQuery.eq("workspace_id", input.workspaceId);
+    }
+    const { data, error } = await consentQuery;
 
     if (error) {
       throw new HttpError(500, "project_face_assignee_lookup_failed", "Unable to load consent assignee details.");
@@ -442,14 +511,18 @@ export async function loadProjectFaceAssigneeDisplayMap(input: {
     consent_version: string;
   }>();
   if (recurringConsentIds.length > 0) {
-    const { data, error } = await input.supabase
+    let recurringConsentQuery = input.supabase
       .from("recurring_profile_consents")
       .select(
-        "id, tenant_id, profile_id, project_id, consent_kind, face_match_opt_in, revoked_at, signed_at, created_at, profile_name_snapshot, profile_email_snapshot, consent_version",
+        "id, tenant_id, profile_id, project_id, workspace_id, consent_kind, face_match_opt_in, revoked_at, signed_at, created_at, profile_name_snapshot, profile_email_snapshot, consent_version",
       )
       .eq("tenant_id", input.tenantId)
       .eq("project_id", input.projectId)
       .in("id", recurringConsentIds);
+    if (input.workspaceId) {
+      recurringConsentQuery = recurringConsentQuery.eq("workspace_id", input.workspaceId);
+    }
+    const { data, error } = await recurringConsentQuery;
 
     if (error) {
       throw new HttpError(
@@ -519,6 +592,7 @@ async function loadProjectFaceAssigneeByConflictKey(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   kind: ProjectFaceAssigneeKind;
   consentId?: string | null;
   recurringProfileConsentId?: string | null;
@@ -526,11 +600,15 @@ async function loadProjectFaceAssigneeByConflictKey(input: {
   let query = input.supabase
     .from("project_face_assignees")
     .select(
-      "id, tenant_id, project_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
+      "id, tenant_id, project_id, workspace_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
     )
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("assignee_kind", input.kind);
+
+  if (input.workspaceId) {
+    query = query.eq("workspace_id", input.workspaceId);
+  }
 
   if (input.kind === "project_consent") {
     query = query.eq("consent_id", input.consentId ?? "");
@@ -550,23 +628,26 @@ export async function ensureProjectConsentFaceAssignee(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   consentId: string;
 }) {
+  const payload: Record<string, unknown> = {
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    assignee_kind: "project_consent",
+    consent_id: input.consentId,
+  };
+  if (input.workspaceId) {
+    payload.workspace_id = input.workspaceId;
+  }
+
   const { data, error } = await input.supabase
     .from("project_face_assignees")
-    .upsert(
-      {
-        tenant_id: input.tenantId,
-        project_id: input.projectId,
-        assignee_kind: "project_consent",
-        consent_id: input.consentId,
-      },
-      {
-        onConflict: "tenant_id,project_id,consent_id",
-      },
-    )
+    .upsert(payload, {
+      onConflict: "tenant_id,project_id,workspace_id,consent_id",
+    })
     .select(
-      "id, tenant_id, project_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
+      "id, tenant_id, project_id, workspace_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
     )
     .single();
 
@@ -581,12 +662,14 @@ export async function ensureProjectRecurringConsentFaceAssignee(input: {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   projectProfileParticipantId: string;
 }) {
   const participant = await loadSingleProjectProfileParticipant(
     input.supabase,
     input.tenantId,
     input.projectId,
+    input.workspaceId,
     input.projectProfileParticipantId,
   );
   if (!participant) {
@@ -597,6 +680,7 @@ export async function ensureProjectRecurringConsentFaceAssignee(input: {
     supabase: input.supabase,
     tenantId: input.tenantId,
     projectId: input.projectId,
+    workspaceId: input.workspaceId,
     participantIds: [participant.id],
   });
   const consentState = consentStateByParticipantId.get(participant.id) ?? null;
@@ -608,23 +692,25 @@ export async function ensureProjectRecurringConsentFaceAssignee(input: {
     );
   }
 
+  const payload: Record<string, unknown> = {
+    tenant_id: input.tenantId,
+    project_id: input.projectId,
+    assignee_kind: "project_recurring_consent",
+    recurring_profile_consent_id: consentState.activeConsent.id,
+    project_profile_participant_id: participant.id,
+    recurring_profile_id: participant.recurring_profile_id,
+  };
+  if (input.workspaceId) {
+    payload.workspace_id = input.workspaceId;
+  }
+
   const { data, error } = await input.supabase
     .from("project_face_assignees")
-    .upsert(
-      {
-        tenant_id: input.tenantId,
-        project_id: input.projectId,
-        assignee_kind: "project_recurring_consent",
-        recurring_profile_consent_id: consentState.activeConsent.id,
-        project_profile_participant_id: participant.id,
-        recurring_profile_id: participant.recurring_profile_id,
-      },
-      {
-        onConflict: "tenant_id,project_id,recurring_profile_consent_id",
-      },
-    )
+    .upsert(payload, {
+      onConflict: "tenant_id,project_id,workspace_id,recurring_profile_consent_id",
+    })
     .select(
-      "id, tenant_id, project_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
+      "id, tenant_id, project_id, workspace_id, assignee_kind, consent_id, recurring_profile_consent_id, project_profile_participant_id, recurring_profile_id, created_at",
     )
     .single();
 
@@ -633,6 +719,7 @@ export async function ensureProjectRecurringConsentFaceAssignee(input: {
       supabase: input.supabase,
       tenantId: input.tenantId,
       projectId: input.projectId,
+      workspaceId: input.workspaceId,
       kind: "project_recurring_consent",
       recurringProfileConsentId: consentState.activeConsent.id,
     });

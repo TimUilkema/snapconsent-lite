@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { assertCanCreateProjectsAction } from "@/lib/tenant/permissions";
 import { ensureTenantId } from "@/lib/tenant/resolve-tenant";
 
 type CreateProjectInput = {
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
     }
 
     const tenantId = await ensureTenantId(supabase);
+    await assertCanCreateProjectsAction(supabase, tenantId, user.id);
     const { data, error } = await supabase
       .from("projects")
       .insert({

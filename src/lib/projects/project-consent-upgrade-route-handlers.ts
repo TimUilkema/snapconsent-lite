@@ -26,6 +26,13 @@ type ProjectConsentUpgradeRouteContext = {
 type CreateProjectConsentUpgradeRequestDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  requireWorkspaceReviewMutationAccessForRow: (input: {
+    client: AuthenticatedRouteClient,
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    consentId: string;
+  }) => Promise<unknown>;
   createProjectConsentUpgradeRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
@@ -88,6 +95,13 @@ export async function handleCreateProjectConsentUpgradeRequestPost(
 
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     const { projectId, consentId } = await context.params;
+    await dependencies.requireWorkspaceReviewMutationAccessForRow({
+      client: supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      consentId,
+    });
     const result = await dependencies.createProjectConsentUpgradeRequest({
       supabase,
       tenantId,

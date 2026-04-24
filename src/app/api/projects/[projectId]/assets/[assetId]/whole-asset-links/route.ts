@@ -8,6 +8,12 @@ import {
   manualUnlinkWholeAssetFromRecurringProjectParticipant,
 } from "@/lib/matching/consent-photo-matching";
 import { loadProjectProfileParticipantById } from "@/lib/matching/project-face-assignees";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewAccessForRow,
+  requireWorkspaceReviewMutationAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -25,7 +31,7 @@ type WholeAssetLinkBody = {
   projectProfileParticipantId?: string;
 };
 
-async function requireAuthAndScope(context: RouteContext) {
+async function requireAuthAndScope(context: RouteContext, mutation = false) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -39,13 +45,45 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, assetId } = await context.params;
+  const assetRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "assets",
+    rowId: assetId,
+    notFoundCode: "asset_not_found",
+    notFoundMessage: "Asset not found.",
+  });
+  if (mutation) {
+    await requireWorkspaceReviewMutationAccessForRow({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "assets",
+      rowId: assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+  } else {
+    await requireWorkspaceReviewAccessForRow({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId,
+      table: "assets",
+      rowId: assetId,
+      notFoundCode: "asset_not_found",
+      notFoundMessage: "Asset not found.",
+    });
+  }
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     assetId,
+    workspaceId: assetRow.workspace_id,
     userId: user.id,
   };
 }
@@ -61,13 +99,14 @@ function parseBody(body: WholeAssetLinkBody | null) {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, workspaceId } = await requireAuthAndScope(context);
 
     return Response.json(
       await getAssetPreviewWholeAssetLinks({
         supabase,
         tenantId,
         projectId,
+        workspaceId,
         assetId,
       }),
       {
@@ -84,7 +123,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, workspaceId, userId } = await requireAuthAndScope(context, true);
     const body = (await request.json().catch(() => null)) as WholeAssetLinkBody | null;
     const parsed = parseBody(body);
 
@@ -98,12 +137,29 @@ export async function POST(request: Request, context: RouteContext) {
         tenantId,
         projectId,
         consentId: parsed.consentId,
+        workspaceId,
       }, { requireNotRevoked: true });
+      const consentRow = await loadWorkspaceScopedRow({
+        supabase,
+        tenantId,
+        projectId,
+        table: "consents",
+        rowId: parsed.consentId,
+        notFoundCode: "consent_not_found",
+        notFoundMessage: "Consent not found.",
+      });
+      assertWorkspaceScopedRowMatchesWorkspace(
+        consentRow,
+        workspaceId,
+        "consent_not_found",
+        "Consent not found.",
+      );
 
       const result = await manualLinkWholeAssetToConsent({
         supabase,
         tenantId,
         projectId,
+        workspaceId,
         assetId,
         actorUserId: userId,
         consentId: parsed.consentId,
@@ -142,6 +198,7 @@ export async function POST(request: Request, context: RouteContext) {
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       actorUserId: userId,
       projectProfileParticipantId: parsed.projectProfileParticipantId,
@@ -177,7 +234,7 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, assetId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, assetId, workspaceId, userId } = await requireAuthAndScope(context, true);
     const body = (await request.json().catch(() => null)) as WholeAssetLinkBody | null;
     const parsed = parseBody(body);
 
@@ -191,12 +248,14 @@ export async function DELETE(request: Request, context: RouteContext) {
         tenantId,
         projectId,
         consentId: parsed.consentId,
+        workspaceId,
       });
 
       const result = await manualUnlinkWholeAssetFromConsent({
         supabase,
         tenantId,
         projectId,
+        workspaceId,
         assetId,
         actorUserId: userId,
         consentId: parsed.consentId,
@@ -221,6 +280,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       participantId: parsed.projectProfileParticipantId,
     });
     if (!participant) {
@@ -231,6 +291,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       supabase,
       tenantId,
       projectId,
+      workspaceId,
       assetId,
       actorUserId: userId,
       projectProfileParticipantId: parsed.projectProfileParticipantId,

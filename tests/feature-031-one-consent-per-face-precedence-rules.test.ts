@@ -30,10 +30,12 @@ import { runProjectMatchingRepair } from "../src/lib/matching/auto-match-repair"
 import { ensureAssetFaceMaterialization } from "../src/lib/matching/face-materialization";
 import { ensureMaterializedFaceCompare } from "../src/lib/matching/materialized-face-compare";
 import { getProjectMatchingProgress } from "../src/lib/matching/project-matching-progress";
+import { getDefaultProjectWorkspaceId } from "./helpers/supabase-test-client";
 
 type ProjectContext = {
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   userId: string;
   consentTemplateId: string;
 };
@@ -253,6 +255,7 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
     .select("id")
     .single();
   assertNoError(projectError, "insert project");
+  const workspaceId = await getDefaultProjectWorkspaceId(supabase, tenant.id, project.id);
 
   const { data: template, error: templateError } = await supabase
     .from("consent_templates")
@@ -272,6 +275,7 @@ async function createProjectContext(supabase: SupabaseClient): Promise<ProjectCo
   return {
     tenantId: tenant.id,
     projectId: project.id,
+    workspaceId,
     userId,
     consentTemplateId: template.id,
   };
@@ -284,6 +288,7 @@ async function createInviteToken(supabase: SupabaseClient, context: ProjectConte
   const { error } = await supabase.from("subject_invites").insert({
     tenant_id: context.tenantId,
     project_id: context.projectId,
+    workspace_id: context.workspaceId,
     created_by: context.userId,
     token_hash: tokenHash,
     status: "active",
@@ -308,6 +313,7 @@ async function createAsset(
     .insert({
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       created_by: context.userId,
       storage_bucket: "project-assets",
       storage_path: `tenant/${context.tenantId}/project/${context.projectId}/asset/${randomUUID()}/test.jpg`,
@@ -403,6 +409,7 @@ async function seedCompareRow(input: {
     {
       tenant_id: input.context.tenantId,
       project_id: input.context.projectId,
+      workspace_id: input.context.workspaceId,
       asset_id: input.assetId,
       consent_id: input.consentId,
       headshot_materialization_id: input.headshotMaterializationId,
@@ -769,7 +776,7 @@ test("manual link state materializes directly on demand and stays compatible wit
     0,
   );
 
-  const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId);
+  const progress = await getProjectMatchingProgress(admin, context.tenantId, context.projectId, context.workspaceId);
   assert.equal(typeof progress.isMatchingInProgress, "boolean");
 });
 
@@ -1641,6 +1648,7 @@ test("headshot replacement helpers clear auto links and suppressions for that co
       project_face_assignee_id: suppressedAssigneeId,
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       reason: "manual_unlink",
       created_by: context.userId,
     },
@@ -1654,6 +1662,7 @@ test("headshot replacement helpers clear auto links and suppressions for that co
       consent_id: consent.consentId,
       tenant_id: context.tenantId,
       project_id: context.projectId,
+      workspace_id: context.workspaceId,
       reason: "manual_unlink",
       created_by: context.userId,
     },

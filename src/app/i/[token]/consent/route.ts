@@ -7,6 +7,7 @@ import { resolvePublicInviteContext, resolvePublicInviteUpgradeContext } from "@
 import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
+import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
 import { redirectRelative } from "@/lib/http/redirect-relative";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -96,6 +97,14 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     const supabase = await createClient();
+    const adminSupabase = createAdminClient();
+    const inviteContext = await resolvePublicInviteContext(adminSupabase, token);
+    await assertWorkspacePublicSubmissionAllowed(
+      adminSupabase,
+      inviteContext.tenantId,
+      inviteContext.projectId,
+      inviteContext.workspaceId,
+    );
     const consent = await submitConsent({
       supabase,
       token,
@@ -116,10 +125,16 @@ export async function POST(request: Request, context: RouteContext) {
       })
     ) {
       try {
-        const boundary = await getPhotoFanoutBoundary(supabase, consent.tenantId, consent.projectId);
+        const boundary = await getPhotoFanoutBoundary(
+          supabase,
+          consent.tenantId,
+          consent.projectId,
+          inviteContext.workspaceId,
+        );
         await enqueueConsentHeadshotReadyJob({
           tenantId: consent.tenantId,
           projectId: consent.projectId,
+          workspaceId: inviteContext.workspaceId,
           consentId: consent.consentId,
           headshotAssetId,
           payload: {
@@ -161,6 +176,10 @@ export async function POST(request: Request, context: RouteContext) {
       }
 
       if (error.status === 409) {
+        if (error.code === "workspace_not_accepting_submissions" || error.code === "project_finalized") {
+          return redirectWithStatus(request, token, { error: "unavailable" });
+        }
+
         return redirectWithStatus(request, token, { duplicate: "1" });
       }
 

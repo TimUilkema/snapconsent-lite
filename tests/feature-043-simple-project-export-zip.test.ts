@@ -23,6 +23,7 @@ import {
   adminClient,
   assertNoPostgrestError,
   createAnonClient,
+  getDefaultProjectWorkspaceId,
   createAuthUserWithRetry,
   signInClient,
 } from "./helpers/supabase-test-client";
@@ -30,10 +31,13 @@ import {
 type IntegrationContext = {
   tenantId: string;
   projectId: string;
+  workspaceId: string;
   ownerUserId: string;
   photographerUserId: string;
+  reviewerUserId: string;
   consentTemplateId: string;
   photographerClient: Awaited<ReturnType<typeof signInClient>>;
+  reviewerClient: Awaited<ReturnType<typeof signInClient>>;
   outsiderClient: Awaited<ReturnType<typeof signInClient>>;
 };
 
@@ -277,8 +281,10 @@ function createBaseRecords(): LoadedProjectExportRecords {
 async function createIntegrationContext(): Promise<IntegrationContext> {
   const owner = await createAuthUserWithRetry(adminClient, "feature043-owner");
   const photographer = await createAuthUserWithRetry(adminClient, "feature043-photographer");
+  const reviewer = await createAuthUserWithRetry(adminClient, "feature043-reviewer");
   const outsider = await createAuthUserWithRetry(adminClient, "feature043-outsider");
   const photographerClient = await signInClient(photographer.email, photographer.password);
+  const reviewerClient = await signInClient(reviewer.email, reviewer.password);
   const outsiderClient = await signInClient(outsider.email, outsider.password);
 
   const { data: tenant, error: tenantError } = await adminClient
@@ -301,6 +307,11 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
       tenant_id: tenant.id,
       user_id: photographer.userId,
       role: "photographer",
+    },
+    {
+      tenant_id: tenant.id,
+      user_id: reviewer.userId,
+      role: "reviewer",
     },
   ]);
   assertNoPostgrestError(membershipError, "insert feature 043 memberships");
@@ -335,6 +346,7 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
     .single();
   assertNoPostgrestError(projectError, "insert feature 043 project");
   assert.ok(project);
+  const workspaceId = await getDefaultProjectWorkspaceId(adminClient, tenant.id, project.id);
 
   const { data: consentTemplate, error: consentTemplateError } = await adminClient
     .from("consent_templates")
@@ -357,10 +369,13 @@ async function createIntegrationContext(): Promise<IntegrationContext> {
   return {
     tenantId: tenant.id,
     projectId: project.id,
+    workspaceId,
     ownerUserId: owner.userId,
     photographerUserId: photographer.userId,
+    reviewerUserId: reviewer.userId,
     consentTemplateId: consentTemplate.id,
     photographerClient,
+    reviewerClient,
     outsiderClient,
   };
 }
@@ -373,6 +388,7 @@ async function createInvite(input: {
     .insert({
       tenant_id: input.context.tenantId,
       project_id: input.context.projectId,
+      workspace_id: input.context.workspaceId,
       created_by: input.context.ownerUserId,
       token_hash: randomUUID().replaceAll("-", "").padEnd(64, "0").slice(0, 64),
       status: "active",
@@ -403,6 +419,7 @@ async function createPhotoAsset(input: {
     id: assetId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
+    workspace_id: input.context.workspaceId,
     created_by: input.context.ownerUserId,
     storage_bucket: "project-assets",
     storage_path: storagePath,
@@ -457,6 +474,7 @@ async function createSubjectAndConsent(input: {
     .insert({
       tenant_id: input.context.tenantId,
       project_id: input.context.projectId,
+      workspace_id: input.context.workspaceId,
       email: normalizedEmail,
       full_name: input.fullName ?? "Unknown Subject",
     })
@@ -470,6 +488,7 @@ async function createSubjectAndConsent(input: {
     id: consentId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
+    workspace_id: input.context.workspaceId,
     subject_id: subject.id,
     invite_id: inviteId,
     consent_text: input.consentText,
@@ -512,6 +531,7 @@ async function createMaterialization(input: {
     id: materializationId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
+    workspace_id: input.context.workspaceId,
     asset_id: input.assetId,
     asset_type: "photo",
     source_content_hash: null,
@@ -594,6 +614,7 @@ async function createFaceLink(input: {
     consent_id: input.consentId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
+    workspace_id: input.context.workspaceId,
     link_source: input.linkSource ?? "manual",
     match_confidence: input.matchConfidence ?? null,
     matched_at: input.matchConfidence ? new Date().toISOString() : null,
@@ -614,6 +635,7 @@ async function createFallbackLink(input: {
     consent_id: input.consentId,
     tenant_id: input.context.tenantId,
     project_id: input.context.projectId,
+    workspace_id: input.context.workspaceId,
     created_by: input.context.ownerUserId,
   });
   assertNoPostgrestError(error, "insert feature 043 fallback link");
@@ -630,6 +652,7 @@ async function createLegacyPhotoLink(input: {
       consent_id: input.consentId,
       tenant_id: input.context.tenantId,
       project_id: input.context.projectId,
+      workspace_id: input.context.workspaceId,
       link_source: "manual",
       match_confidence: null,
       matched_at: null,
@@ -998,7 +1021,27 @@ test("feature 043 export response hides projects outside the caller tenant scope
   );
 });
 
-test("feature 043 photographer members can download a ZIP with original assets, sidecars, consents, and canonical current links only", async () => {
+test("feature 043 photographers cannot export project workspaces", async () => {
+  const context = await createIntegrationContext();
+
+  await assert.rejects(
+    createProjectExportResponse({
+      authSupabase: context.photographerClient,
+      adminSupabase: adminClient,
+      projectId: context.projectId,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.ok(
+        (error.status === 403 && error.code === "project_export_forbidden") ||
+        (error.status === 404 && error.code === "project_not_found"),
+      );
+      return true;
+    },
+  );
+});
+
+test("feature 043 reviewer members can download a workspace-scoped ZIP with original assets, sidecars, consents, and canonical current links only", async () => {
   const context = await createIntegrationContext();
   const assetOne = await createPhotoAsset({
     context,
@@ -1105,7 +1148,7 @@ test("feature 043 photographer members can download a ZIP with original assets, 
   });
 
   const response = await createProjectExportResponse({
-    authSupabase: context.photographerClient,
+    authSupabase: context.reviewerClient,
     adminSupabase: adminClient,
     projectId: context.projectId,
   });
@@ -1218,7 +1261,7 @@ test("feature 043 export response enforces synchronous guardrails before ZIP str
 
   await assert.rejects(
     createProjectExportResponse({
-      authSupabase: context.photographerClient,
+      authSupabase: context.reviewerClient,
       adminSupabase: adminClient,
       projectId: context.projectId,
     }),
@@ -1240,7 +1283,7 @@ test("feature 043 export response aborts the streamed ZIP when an original stora
   });
 
   const response = await createProjectExportResponse({
-    authSupabase: context.photographerClient,
+    authSupabase: context.reviewerClient,
     adminSupabase: adminClient,
     projectId: context.projectId,
   });

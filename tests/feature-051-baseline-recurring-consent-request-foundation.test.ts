@@ -132,6 +132,14 @@ async function signBaselineConsentForProfile(
   profileId: string,
   templateId: string,
 ) {
+  const { data: profile, error: profileError } = await context.ownerClient
+    .from("recurring_profiles")
+    .select("full_name, email")
+    .eq("tenant_id", context.tenantId)
+    .eq("id", profileId)
+    .single();
+  assertNoPostgrestError(profileError, "select recurring profile for baseline sign");
+
   const created = await createBaselineConsentRequest({
     supabase: context.ownerClient,
     tenantId: context.tenantId,
@@ -145,8 +153,8 @@ async function signBaselineConsentForProfile(
   return submitRecurringProfileConsent({
     supabase: anonClient,
     token,
-    fullName: "Jordan Miles",
-    email: "jordan@example.com",
+    fullName: profile.full_name,
+    email: profile.email,
     structuredFieldValues: {
       scope: ["photos"],
       duration: "one_year",

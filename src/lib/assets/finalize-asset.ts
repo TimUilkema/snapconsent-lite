@@ -9,6 +9,7 @@ type FinalizeAssetInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   assetId: string;
   consentIds: string[];
   expectedAssetType?: "photo" | "headshot" | "video" | null;
@@ -31,6 +32,7 @@ async function validateConsents(
   supabase: SupabaseClient,
   tenantId: string,
   projectId: string,
+  workspaceId: string | null | undefined,
   consentIds: string[],
 ) {
   if (consentIds.length === 0) {
@@ -39,12 +41,18 @@ async function validateConsents(
 
   const data = await runChunkedRead(consentIds, async (consentIdChunk) => {
     // safe-in-filter: finalize consent validation is request-bounded and chunked by shared helper.
-    const { data: rows, error } = await supabase
+    let query = supabase
       .from("consents")
       .select("id")
       .eq("tenant_id", tenantId)
       .eq("project_id", projectId)
       .in("id", consentIdChunk);
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data: rows, error } = await query;
 
     if (error) {
       throw new HttpError(500, "consent_lookup_failed", "Unable to validate consent links.");
@@ -61,14 +69,20 @@ async function validateConsents(
 }
 
 export async function finalizeAsset(input: FinalizeAssetInput): Promise<FinalizedAsset> {
+  const workspaceId = input.workspaceId?.trim() || null;
   input.consentIds = normalizeConsentIds(input.consentIds);
-  const { data: asset, error: assetError } = await input.supabase
+  let assetQuery = input.supabase
     .from("assets")
     .select("id, asset_type")
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
-    .eq("id", input.assetId)
-    .maybeSingle();
+    .eq("id", input.assetId);
+
+  if (workspaceId) {
+    assetQuery = assetQuery.eq("workspace_id", workspaceId);
+  }
+
+  const { data: asset, error: assetError } = await assetQuery.maybeSingle();
 
   if (assetError) {
     throw new HttpError(500, "asset_lookup_failed", "Unable to load asset.");
@@ -82,15 +96,27 @@ export async function finalizeAsset(input: FinalizeAssetInput): Promise<Finalize
     throw new HttpError(400, "invalid_asset_type", "Asset type is not allowed.");
   }
 
-  await validateConsents(input.supabase, input.tenantId, input.projectId, input.consentIds);
+  await validateConsents(
+    input.supabase,
+    input.tenantId,
+    input.projectId,
+    workspaceId,
+    input.consentIds,
+  );
 
   const now = new Date().toISOString();
-  const { error: updateError } = await input.supabase
+  let updateQuery = input.supabase
     .from("assets")
     .update({ status: "uploaded", uploaded_at: now })
     .eq("tenant_id", input.tenantId)
     .eq("project_id", input.projectId)
     .eq("id", input.assetId);
+
+  if (workspaceId) {
+    updateQuery = updateQuery.eq("workspace_id", workspaceId);
+  }
+
+  const { error: updateError } = await updateQuery;
 
   if (updateError) {
     throw new HttpError(500, "asset_finalize_failed", "Unable to finalize asset.");
@@ -102,6 +128,7 @@ export async function finalizeAsset(input: FinalizeAssetInput): Promise<Finalize
       consent_id: consentId,
       tenant_id: input.tenantId,
       project_id: input.projectId,
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
       link_source: "manual",
       match_confidence: null,
       matched_at: null,

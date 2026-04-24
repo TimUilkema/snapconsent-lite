@@ -369,6 +369,7 @@ $$;
 create or replace function app.requeue_face_match_job(
   p_tenant_id uuid,
   p_project_id uuid,
+  p_workspace_id uuid,
   p_job_type text,
   p_dedupe_key text,
   p_scope_asset_id uuid default null,
@@ -398,10 +399,15 @@ declare
   v_run_after timestamptz := coalesce(p_run_after, v_now);
   v_dedupe_key text := nullif(trim(p_dedupe_key), '');
   v_requeue_reason text := nullif(left(trim(coalesce(p_requeue_reason, '')), 500), '');
+  v_workspace_id uuid := coalesce(p_workspace_id, app.default_project_workspace_id(p_tenant_id, p_project_id));
   v_existing public.face_match_jobs;
 begin
   if p_tenant_id is null or p_project_id is null then
     raise exception 'face_match_job_missing_scope' using errcode = '23514';
+  end if;
+
+  if v_workspace_id is null then
+    raise exception 'project_workspace_required' using errcode = '23514';
   end if;
 
   if v_dedupe_key is null then
@@ -413,6 +419,7 @@ begin
   from public.face_match_jobs j
   where j.tenant_id = p_tenant_id
     and j.project_id = p_project_id
+    and j.workspace_id = v_workspace_id
     and j.dedupe_key = v_dedupe_key
   for update;
 
@@ -421,6 +428,7 @@ begin
     insert into public.face_match_jobs as j (
       tenant_id,
       project_id,
+      workspace_id,
       scope_asset_id,
       scope_consent_id,
       job_type,
@@ -436,6 +444,7 @@ begin
     values (
       p_tenant_id,
       p_project_id,
+      v_workspace_id,
       p_scope_asset_id,
       p_scope_consent_id,
       p_job_type,
@@ -495,6 +504,7 @@ begin
   return query
   update public.face_match_jobs j
   set
+    workspace_id = v_workspace_id,
     scope_asset_id = p_scope_asset_id,
     scope_consent_id = p_scope_consent_id,
     job_type = p_job_type,
@@ -630,6 +640,7 @@ $$;
 create or replace function public.requeue_face_match_job(
   p_tenant_id uuid,
   p_project_id uuid,
+  p_workspace_id uuid,
   p_job_type text,
   p_dedupe_key text,
   p_scope_asset_id uuid default null,
@@ -658,6 +669,7 @@ as $$
   from app.requeue_face_match_job(
     p_tenant_id,
     p_project_id,
+    p_workspace_id,
     p_job_type,
     p_dedupe_key,
     p_scope_asset_id,
@@ -672,17 +684,17 @@ $$;
 revoke all on function app.claim_face_match_jobs(text, integer, integer) from public;
 revoke all on function app.complete_face_match_job(uuid, uuid) from public;
 revoke all on function app.fail_face_match_job(uuid, uuid, text, text, boolean, integer) from public;
-revoke all on function app.requeue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) from public;
+revoke all on function app.requeue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) from public;
 
 revoke all on function public.claim_face_match_jobs(text, integer, integer) from public;
 revoke all on function public.complete_face_match_job(uuid, uuid) from public;
 revoke all on function public.fail_face_match_job(uuid, uuid, text, text, boolean, integer) from public;
-revoke all on function public.requeue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) from public;
+revoke all on function public.requeue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) from public;
 
 grant execute on function public.claim_face_match_jobs(text, integer, integer) to service_role;
 grant execute on function public.complete_face_match_job(uuid, uuid) to service_role;
 grant execute on function public.fail_face_match_job(uuid, uuid, text, text, boolean, integer) to service_role;
-grant execute on function public.requeue_face_match_job(uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) to service_role;
+grant execute on function public.requeue_face_match_job(uuid, uuid, uuid, text, text, uuid, uuid, jsonb, integer, timestamptz, text) to service_role;
 
 create or replace function app.get_project_matching_progress(
   p_tenant_id uuid,

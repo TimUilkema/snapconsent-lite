@@ -13,6 +13,7 @@ type PrepareProjectAssetBatchInput = {
   supabase: SupabaseClient;
   tenantId: string;
   projectId: string;
+  workspaceId?: string | null;
   userId: string;
   assetType: "photo" | "video";
   duplicatePolicy: "upload_anyway" | "overwrite" | "ignore";
@@ -101,6 +102,7 @@ export async function prepareProjectAssetBatch(
         supabase: input.supabase,
         tenantId: input.tenantId,
         projectId: input.projectId,
+        workspaceId: input.workspaceId ?? null,
         userId: input.userId,
         idempotencyKey: item.idempotencyKey,
         originalFilename: item.originalFilename,

@@ -1,5 +1,10 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { applyFaceReviewSessionItemAction } from "@/lib/matching/face-review-sessions";
+import {
+  assertWorkspaceScopedRowMatchesWorkspace,
+  loadWorkspaceScopedRow,
+  requireWorkspaceReviewMutationAccessForRow,
+} from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -33,13 +38,63 @@ async function requireAuthAndScope(context: RouteContext) {
   if (!tenantId) {
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
-
   const { projectId, consentId, sessionId, itemId } = await context.params;
+  const consentRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  await requireWorkspaceReviewMutationAccessForRow({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectId,
+    table: "consents",
+    rowId: consentId,
+    notFoundCode: "consent_not_found",
+    notFoundMessage: "Consent not found.",
+  });
+  const sessionRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "face_review_sessions",
+    rowId: sessionId,
+    notFoundCode: "review_session_not_found",
+    notFoundMessage: "Review session not found.",
+  });
+  const itemRow = await loadWorkspaceScopedRow({
+    supabase,
+    tenantId,
+    projectId,
+    table: "face_review_session_items",
+    rowId: itemId,
+    notFoundCode: "review_session_not_found",
+    notFoundMessage: "Review session item not found.",
+  });
+  assertWorkspaceScopedRowMatchesWorkspace(
+    sessionRow,
+    consentRow.workspace_id,
+    "review_session_not_found",
+    "Review session not found.",
+  );
+  assertWorkspaceScopedRowMatchesWorkspace(
+    itemRow,
+    consentRow.workspace_id,
+    "review_session_not_found",
+    "Review session item not found.",
+  );
+
   return {
     supabase: createAdminClient(),
     tenantId,
     projectId,
     consentId,
+    workspaceId: consentRow.workspace_id,
     sessionId,
     itemId,
     userId: user.id,
@@ -48,7 +103,7 @@ async function requireAuthAndScope(context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { supabase, tenantId, projectId, consentId, sessionId, itemId, userId } = await requireAuthAndScope(context);
+    const { supabase, tenantId, projectId, consentId, workspaceId, sessionId, itemId, userId } = await requireAuthAndScope(context);
     const body = (await request.json().catch(() => null)) as ActionBody | null;
     const action = body?.action === "suppress_face" ? "suppress_face" : body?.action === "link_face" ? "link_face" : null;
     if (!action) {
@@ -60,6 +115,7 @@ export async function POST(request: Request, context: RouteContext) {
       tenantId,
       projectId,
       consentId,
+      workspaceId,
       actorUserId: userId,
       sessionId,
       itemId,
