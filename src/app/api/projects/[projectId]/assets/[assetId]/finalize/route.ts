@@ -62,6 +62,7 @@ export async function POST(request: Request, context: RouteContext) {
       userId: user.id,
       notFoundCode: "asset_not_found",
       notFoundMessage: "Asset not found.",
+      capabilityKey: "capture.upload_assets",
     });
 
     const finalizedAsset = await finalizeAsset({

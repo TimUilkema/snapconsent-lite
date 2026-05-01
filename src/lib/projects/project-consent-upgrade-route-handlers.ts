@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { buildCorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
 
 type AuthenticatedRouteClient = {
   auth: {
@@ -26,6 +27,16 @@ type ProjectConsentUpgradeRouteContext = {
 type CreateProjectConsentUpgradeRequestDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  loadProjectWorkflowRowForAccess: (
+    client: AuthenticatedRouteClient,
+    tenantId: string,
+    projectId: string,
+  ) => Promise<{
+    finalized_at: string | null;
+    correction_state: "none" | "open";
+    correction_opened_at: string | null;
+    correction_source_release_id: string | null;
+  }>;
   requireWorkspaceReviewMutationAccessForRow: (input: {
     client: AuthenticatedRouteClient,
     tenantId: string;
@@ -33,6 +44,20 @@ type CreateProjectConsentUpgradeRequestDependencies = {
     projectId: string;
     consentId: string;
   }) => Promise<unknown>;
+  requireWorkspaceCorrectionConsentIntakeAccessForRow: (input: {
+    client: AuthenticatedRouteClient,
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    consentId: string;
+  }) => Promise<{
+    project: {
+      finalized_at: string | null;
+      correction_state: "none" | "open";
+      correction_opened_at: string | null;
+      correction_source_release_id: string | null;
+    };
+  }>;
   createProjectConsentUpgradeRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
@@ -41,6 +66,7 @@ type CreateProjectConsentUpgradeRequestDependencies = {
     consentId: string;
     targetTemplateId: string;
     idempotencyKey: string;
+    correctionProvenance?: ReturnType<typeof buildCorrectionRequestProvenance> | null;
   }) => Promise<{
     status: number;
     payload: unknown;
@@ -95,13 +121,28 @@ export async function handleCreateProjectConsentUpgradeRequestPost(
 
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     const { projectId, consentId } = await context.params;
-    await dependencies.requireWorkspaceReviewMutationAccessForRow({
-      client: supabase,
-      tenantId,
-      userId: user.id,
-      projectId,
-      consentId,
-    });
+    const project = await dependencies.loadProjectWorkflowRowForAccess(supabase, tenantId, projectId);
+    const isCorrectionIntakeMode = project.finalized_at !== null && project.correction_state === "open";
+    const correctionAccess = isCorrectionIntakeMode
+      ? await dependencies.requireWorkspaceCorrectionConsentIntakeAccessForRow({
+          client: supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          consentId,
+        })
+      : null;
+
+    if (!isCorrectionIntakeMode) {
+      await dependencies.requireWorkspaceReviewMutationAccessForRow({
+        client: supabase,
+        tenantId,
+        userId: user.id,
+        projectId,
+        consentId,
+      });
+    }
+
     const result = await dependencies.createProjectConsentUpgradeRequest({
       supabase,
       tenantId,
@@ -110,6 +151,7 @@ export async function handleCreateProjectConsentUpgradeRequestPost(
       consentId,
       targetTemplateId: body.targetTemplateId,
       idempotencyKey,
+      correctionProvenance: correctionAccess ? buildCorrectionRequestProvenance(correctionAccess.project) : null,
     });
 
     return Response.json(result.payload, { status: result.status });

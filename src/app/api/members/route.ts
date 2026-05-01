@@ -1,11 +1,31 @@
 import { jsonError } from "@/lib/http/errors";
-import { getTenantMemberManagementData } from "@/lib/tenant/member-management-service";
+import {
+  getOrganizationUserDirectoryData,
+  getTenantMemberManagementData,
+} from "@/lib/tenant/member-management-service";
 import { requireAuthenticatedTenantContext } from "@/lib/tenant/member-management-route-utils";
+import { resolveOrganizationUserAccess } from "@/lib/tenant/organization-user-access";
 
 export async function GET() {
   try {
     const { supabase, tenantId, user } = await requireAuthenticatedTenantContext();
-    const data = await getTenantMemberManagementData({
+    const access = await resolveOrganizationUserAccess({
+      supabase,
+      tenantId,
+      userId: user.id,
+    });
+
+    if (access.isFixedOwnerAdmin) {
+      const data = await getTenantMemberManagementData({
+        supabase,
+        tenantId,
+        userId: user.id,
+      });
+
+      return Response.json(data, { status: 200 });
+    }
+
+    const data = await getOrganizationUserDirectoryData({
       supabase,
       tenantId,
       userId: user.id,

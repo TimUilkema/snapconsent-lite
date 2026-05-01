@@ -1,6 +1,6 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { prepareFaceReviewSession } from "@/lib/matching/face-review-sessions";
-import { loadWorkspaceScopedRow, requireWorkspaceReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
+import { loadWorkspaceScopedRow, requireWorkspaceCorrectionReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -40,7 +40,7 @@ async function requireAuthAndScope(context: RouteContext) {
     notFoundCode: "consent_not_found",
     notFoundMessage: "Consent not found.",
   });
-  await requireWorkspaceReviewMutationAccessForRow({
+  await requireWorkspaceCorrectionReviewMutationAccessForRow({
     supabase,
     tenantId,
     userId: user.id,

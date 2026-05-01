@@ -1,7 +1,10 @@
 import { finalizeAsset } from "@/lib/assets/finalize-asset";
-import { jsonError } from "@/lib/http/errors";
+import { HttpError, jsonError } from "@/lib/http/errors";
 import { resolvePublicInviteContext } from "@/lib/invites/public-invite-context";
-import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
+import {
+  assertWorkspaceCorrectionPublicSubmissionAllowed,
+  assertWorkspacePublicSubmissionAllowed,
+} from "@/lib/projects/project-workflow-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 type RouteContext = {
@@ -16,12 +19,30 @@ export async function POST(_request: Request, context: RouteContext) {
     const { token, assetId } = await context.params;
     const admin = createAdminClient();
     const invite = await resolvePublicInviteContext(admin, token);
-    await assertWorkspacePublicSubmissionAllowed(
-      admin,
-      invite.tenantId,
-      invite.projectId,
-      invite.workspaceId,
-    );
+    try {
+      await assertWorkspacePublicSubmissionAllowed(
+        admin,
+        invite.tenantId,
+        invite.projectId,
+        invite.workspaceId,
+      );
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.code !== "project_finalized") {
+        throw error;
+      }
+
+      await assertWorkspaceCorrectionPublicSubmissionAllowed(
+        admin,
+        invite.tenantId,
+        invite.projectId,
+        invite.workspaceId,
+        {
+          requestSource: invite.requestSource,
+          correctionOpenedAtSnapshot: invite.correctionOpenedAtSnapshot,
+          correctionSourceReleaseIdSnapshot: invite.correctionSourceReleaseIdSnapshot,
+        },
+      );
+    }
 
     await finalizeAsset({
       supabase: admin,

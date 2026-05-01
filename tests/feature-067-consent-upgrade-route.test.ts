@@ -30,6 +30,15 @@ function createUnauthenticatedClient() {
   };
 }
 
+function createActiveProjectWorkflowRow() {
+  return {
+    finalized_at: null,
+    correction_state: "none" as const,
+    correction_opened_at: null,
+    correction_source_release_id: null,
+  };
+}
+
 test("project consent upgrade request route rejects unauthenticated requests", async () => {
   const response = await handleCreateProjectConsentUpgradeRequestPost(
     new Request("http://localhost/api/projects/project-1/consents/consent-1/upgrade-request", {
@@ -51,7 +60,11 @@ test("project consent upgrade request route rejects unauthenticated requests", a
     {
       createClient: async () => createUnauthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async () => undefined,
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
+      },
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -84,7 +97,11 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async () => undefined,
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
+      },
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -115,7 +132,11 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient() as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async () => undefined,
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
+      },
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
       },
@@ -144,12 +165,16 @@ test("project consent upgrade request route validates request body and forwards 
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async ({ client, tenantId, userId, projectId, consentId }) => {
         assert.equal(tenantId, "tenant-1");
         assert.equal(userId, "user-1");
         assert.equal(projectId, "project-1");
         assert.equal(consentId, "consent-1");
         assert.ok(client);
+      },
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
       },
       createProjectConsentUpgradeRequest: async (input) => {
         assert.equal(input.tenantId, "tenant-1");
@@ -158,6 +183,7 @@ test("project consent upgrade request route validates request body and forwards 
         assert.equal(input.consentId, "consent-1");
         assert.equal(input.targetTemplateId, "template-2");
         assert.equal(input.idempotencyKey, "feature067-upgrade-request");
+        assert.equal(input.correctionProvenance, null);
 
         return {
           status: 201,
@@ -207,7 +233,11 @@ test("project consent upgrade request route returns service-shaped errors", asyn
     {
       createClient: async () => createAuthenticatedClient("user-1") as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async () => undefined,
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
+      },
       createProjectConsentUpgradeRequest: async () => {
         throw new HttpError(
           409,
@@ -246,12 +276,16 @@ test("project consent upgrade route rejects users without review permission", as
     {
       createClient: async () => createAuthenticatedClient("user-photographer") as never,
       resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => createActiveProjectWorkflowRow(),
       requireWorkspaceReviewMutationAccessForRow: async () => {
         throw new HttpError(
           403,
           "project_review_forbidden",
           "Only workspace owners, admins, and reviewers can perform review actions.",
         );
+      },
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async () => {
+        throw new Error("should not be called");
       },
       createProjectConsentUpgradeRequest: async () => {
         throw new Error("should not be called");
@@ -264,4 +298,71 @@ test("project consent upgrade route rejects users without review permission", as
     error: "project_review_forbidden",
     message: "Only workspace owners, admins, and reviewers can perform review actions.",
   });
+});
+
+test("project consent upgrade request route uses correction intake access when finalized correction is open", async () => {
+  const response = await handleCreateProjectConsentUpgradeRequestPost(
+    new Request("http://localhost/api/projects/project-1/consents/consent-1/upgrade-request", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "feature076-upgrade-correction",
+      },
+      body: JSON.stringify({
+        targetTemplateId: "template-2",
+      }),
+    }),
+    {
+      params: Promise.resolve({
+        projectId: "project-1",
+        consentId: "consent-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-reviewer") as never,
+      resolveTenantId: async () => "tenant-1",
+      loadProjectWorkflowRowForAccess: async () => ({
+        finalized_at: "2026-04-24T10:00:00.000Z",
+        correction_state: "open",
+        correction_opened_at: "2026-04-24T11:00:00.000Z",
+        correction_source_release_id: "release-1",
+      }),
+      requireWorkspaceReviewMutationAccessForRow: async () => {
+        throw new Error("should not be called");
+      },
+      requireWorkspaceCorrectionConsentIntakeAccessForRow: async ({ tenantId, userId, projectId, consentId }) => {
+        assert.equal(tenantId, "tenant-1");
+        assert.equal(userId, "user-reviewer");
+        assert.equal(projectId, "project-1");
+        assert.equal(consentId, "consent-1");
+        return {
+          project: {
+            finalized_at: "2026-04-24T10:00:00.000Z",
+            correction_state: "open",
+            correction_opened_at: "2026-04-24T11:00:00.000Z",
+            correction_source_release_id: "release-1",
+          },
+        };
+      },
+      createProjectConsentUpgradeRequest: async (input) => {
+        assert.deepEqual(input.correctionProvenance, {
+          requestSource: "correction",
+          correctionOpenedAtSnapshot: "2026-04-24T11:00:00.000Z",
+          correctionSourceReleaseIdSnapshot: "release-1",
+        });
+
+        return {
+          status: 201,
+          payload: {
+            request: {
+              id: "upgrade-1",
+              projectId: "project-1",
+            },
+          },
+        };
+      },
+    },
+  );
+
+  assert.equal(response.status, 201);
 });

@@ -1,6 +1,10 @@
 import { handleCreateProjectProfileConsentRequestPost } from "@/lib/projects/project-participants-route-handlers";
 import { createProjectProfileConsentRequest } from "@/lib/projects/project-participants-service";
-import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
+import {
+  loadProjectWorkflowRowForAccess,
+  requireWorkspaceCaptureMutationAccessForRequest,
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest,
+} from "@/lib/projects/project-workspace-request";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -15,7 +19,9 @@ export async function POST(request: Request, context: RouteContext) {
   return handleCreateProjectProfileConsentRequestPost(request, context, {
     createClient,
     resolveTenantId,
+    loadProjectWorkflowRowForAccess,
     requireWorkspaceCaptureMutationAccessForRequest,
+    requireWorkspaceCorrectionConsentIntakeAccessForRequest,
     createProjectProfileConsentRequest,
   });
 }

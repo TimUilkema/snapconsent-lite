@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import { getTenantMembershipRole, type MembershipRole } from "@/lib/tenant/permissions";
+import { roleHasCapability } from "@/lib/tenant/role-capabilities";
+import { userHasAnyTenantCustomRoleCapabilities } from "@/lib/tenant/tenant-custom-role-capabilities";
 
 export type ProfilesAccess = {
   role: MembershipRole;
@@ -19,9 +21,22 @@ export async function resolveProfilesAccess(
     throw new HttpError(403, "no_tenant_membership", "Workspace membership is required.");
   }
 
+  const fixedRoleCanView = roleHasCapability(role, "profiles.view");
+  const fixedRoleCanManage = roleHasCapability(role, "profiles.manage");
+  const customRoleCapabilities: Set<string> = fixedRoleCanView && fixedRoleCanManage
+    ? new Set()
+    : await userHasAnyTenantCustomRoleCapabilities({
+        supabase,
+        tenantId,
+        userId,
+        capabilityKeys: ["profiles.view", "profiles.manage"],
+      });
+  const customRoleCanManage = customRoleCapabilities.has("profiles.manage");
+  const canManageProfiles = fixedRoleCanManage || customRoleCanManage;
+
   return {
     role,
-    canViewProfiles: true,
-    canManageProfiles: role === "owner" || role === "admin",
+    canViewProfiles: fixedRoleCanView || canManageProfiles || customRoleCapabilities.has("profiles.view"),
+    canManageProfiles,
   };
 }

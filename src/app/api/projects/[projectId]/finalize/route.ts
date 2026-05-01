@@ -1,11 +1,12 @@
+import {
+  buildReleaseSnapshotRepairWarning,
+  ensureProjectReleaseSnapshot,
+} from "@/lib/project-releases/project-release-service";
 import { handleProjectFinalizePost } from "@/lib/projects/project-workflow-route-handlers";
 import { finalizeProject } from "@/lib/projects/project-workflow-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import {
-  assertCanReviewProjectAction,
-  resolveAccessibleProjectWorkspaces,
-} from "@/lib/tenant/permissions";
+import { assertEffectiveProjectCapability } from "@/lib/tenant/effective-permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type RouteContext = {
@@ -19,8 +20,9 @@ export async function POST(request: Request, context: RouteContext) {
     createClient,
     createAdminClient,
     resolveTenantId,
-    resolveAccessibleProjectWorkspaces,
-    assertCanReviewProjectAction,
+    assertEffectiveProjectCapability,
     finalizeProject,
+    ensureProjectReleaseSnapshot,
+    buildReleaseSnapshotRepairWarning,
   });
 }

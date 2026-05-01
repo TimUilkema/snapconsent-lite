@@ -4,8 +4,13 @@ import { getLocale, getTranslations } from "next-intl/server";
 
 import { CreateProjectForm } from "@/components/projects/create-project-form";
 import { formatDateTime } from "@/lib/i18n/format";
+import {
+  listProjectAdministrationProjects,
+  type ProjectAdministrationAccess,
+} from "@/lib/projects/project-administration-service";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantPermissions } from "@/lib/tenant/permissions";
+import { resolveEffectiveReviewerAccessForTenant } from "@/lib/tenant/reviewer-access-service";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type ProjectRow = {
@@ -31,6 +36,11 @@ export default async function ProjectsPage() {
   const permissions = tenantId
     ? await resolveTenantPermissions(supabase, tenantId, user.id)
     : null;
+  const projectAdministration = tenantId
+    ? await listProjectAdministrationProjects({ supabase, tenantId, userId: user.id })
+    : null;
+  const projectAdministrationAccess: ProjectAdministrationAccess | null =
+    projectAdministration?.access ?? null;
 
   let projects: ProjectRow[] = [];
   if (tenantId) {
@@ -57,6 +67,24 @@ export default async function ProjectsPage() {
 
         projects = (data as ProjectRow[] | null) ?? [];
       }
+    } else if (permissions?.role === "reviewer" && !permissions.hasTenantWideReviewAccess) {
+      const reviewerAccess = await resolveEffectiveReviewerAccessForTenant({
+        supabase,
+        tenantId,
+        userId: user.id,
+      });
+      const visibleProjectIds = reviewerAccess.projectIds;
+
+      if (visibleProjectIds.length > 0) {
+        const { data } = await supabase
+          .from("projects")
+          .select("id, name, status, created_at")
+          .eq("tenant_id", tenantId)
+          .in("id", visibleProjectIds)
+          .order("created_at", { ascending: false });
+
+        projects = (data as ProjectRow[] | null) ?? [];
+      }
     } else {
       const { data } = await supabase
         .from("projects")
@@ -65,6 +93,17 @@ export default async function ProjectsPage() {
         .order("created_at", { ascending: false });
 
       projects = (data as ProjectRow[] | null) ?? [];
+    }
+
+    if (projectAdministration?.projects.length) {
+      const projectById = new Map(projects.map((project) => [project.id, project]));
+      projectAdministration.projects.forEach((project) => {
+        projectById.set(project.id, project);
+      });
+      projects = Array.from(projectById.values()).sort(
+        (left, right) =>
+          new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      );
     }
   }
 
@@ -87,12 +126,12 @@ export default async function ProjectsPage() {
 
       <div
         className={
-          permissions?.canCreateProjects
+          projectAdministrationAccess?.canCreateProjects
             ? "grid gap-6 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]"
             : "grid gap-6"
         }
       >
-        {permissions?.canCreateProjects ? (
+        {projectAdministrationAccess?.canCreateProjects ? (
           <div>
             <CreateProjectForm />
           </div>

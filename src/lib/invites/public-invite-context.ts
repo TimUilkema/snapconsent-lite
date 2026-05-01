@@ -16,6 +16,9 @@ export type PublicInviteContext = {
   usedCount: number;
   maxUses: number;
   consentTemplateId: string | null;
+  requestSource: "normal" | "correction";
+  correctionOpenedAtSnapshot: string | null;
+  correctionSourceReleaseIdSnapshot: string | null;
 };
 
 type SubjectRelation = {
@@ -76,7 +79,9 @@ export async function resolvePublicInviteContext(
   const tokenHash = hashPublicToken(token);
   const inviteQuery = supabase
     .from("subject_invites")
-    .select("id, tenant_id, project_id, workspace_id, created_by, status, expires_at, used_count, max_uses, consent_template_id")
+    .select(
+      "id, tenant_id, project_id, workspace_id, created_by, status, expires_at, used_count, max_uses, consent_template_id, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot",
+    )
     .eq("token_hash", tokenHash)
     .maybeSingle();
 
@@ -115,6 +120,9 @@ export async function resolvePublicInviteContext(
     usedCount: data.used_count,
     maxUses: data.max_uses,
     consentTemplateId: data.consent_template_id,
+    requestSource: data.request_source === "correction" ? "correction" : "normal",
+    correctionOpenedAtSnapshot: data.correction_opened_at_snapshot,
+    correctionSourceReleaseIdSnapshot: data.correction_source_release_id_snapshot,
   };
 }
 

@@ -28,13 +28,14 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(400, "invalid_body", "A valid invite role is required.");
     }
 
+    const role = requestedRole ? (requestedRole as ManageableMembershipRole) : null;
     const result = await resendTenantMemberInvite({
       supabase,
       tenantId,
       userId: user.id,
       inviterEmail: user.email ?? "",
       inviteId,
-      role: requestedRole ? requestedRole : null,
+      role,
     });
 
     return Response.json(result, { status: 200 });

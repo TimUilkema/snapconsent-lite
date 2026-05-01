@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import { createInviteWithIdempotency } from "@/lib/idempotency/invite-idempotency";
+import type { CorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
 import { getVisiblePublishedTemplateById } from "@/lib/templates/template-service";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
 import { buildInvitePath } from "@/lib/url/paths";
@@ -46,6 +47,9 @@ type UpgradeRequestInviteRow = {
   expires_at: string | null;
   used_count: number;
   max_uses: number;
+  request_source: "normal" | "correction";
+  correction_opened_at_snapshot: string | null;
+  correction_source_release_id_snapshot: string | null;
 };
 
 type UpgradeRequestTemplateRow = {
@@ -73,6 +77,7 @@ type CreateProjectConsentUpgradeRequestInput = {
   consentId: string;
   targetTemplateId: string;
   idempotencyKey: string;
+  correctionProvenance?: CorrectionRequestProvenance | null;
 };
 
 export type ProjectConsentUpgradeRequestPayload = {
@@ -150,12 +155,24 @@ function classifyInactiveUpgradeStatus(invite: UpgradeRequestInviteRow | null) {
   return "expired" as const;
 }
 
-function deriveUpgradeInvitePath(tenantId: string, projectId: string, upgradeRequestId: string) {
+function deriveUpgradeInvitePath(
+  tenantId: string,
+  projectId: string,
+  upgradeRequestId: string,
+  invite: UpgradeRequestInviteRow | null,
+) {
+  const correctionOperationSuffix =
+    invite?.request_source === "correction"
+    && invite.correction_opened_at_snapshot
+    && invite.correction_source_release_id_snapshot
+      ? `:correction:${invite.correction_source_release_id_snapshot}:${invite.correction_opened_at_snapshot}`
+      : "";
+
   return buildInvitePath(
     deriveInviteToken({
       tenantId,
       projectId,
-      idempotencyKey: upgradeRequestId,
+      idempotencyKey: `${upgradeRequestId}${correctionOperationSuffix}`,
     }),
   );
 }
@@ -326,7 +343,7 @@ async function listPendingUpgradeRequestsForFamily(
   const { data, error } = await supabase
     .from("project_consent_upgrade_requests")
     .select(
-      "id, prior_consent_id, target_template_id, target_template_key, invite_id, status, invite:subject_invites(id, status, expires_at, used_count, max_uses), target_template:consent_templates(id, name, version)",
+      "id, prior_consent_id, target_template_id, target_template_key, invite_id, status, invite:subject_invites(id, status, expires_at, used_count, max_uses, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot), target_template:consent_templates(id, name, version)",
     )
     .eq("tenant_id", tenantId)
     .eq("project_id", projectId)
@@ -376,7 +393,7 @@ function toUpgradePayload(input: {
       targetTemplateVersion: targetTemplate.version,
       status: "pending" as const,
       inviteId: invite.id,
-      invitePath: deriveUpgradeInvitePath(input.tenantId, input.projectId, input.row.id),
+      invitePath: deriveUpgradeInvitePath(input.tenantId, input.projectId, input.row.id, invite),
       expiresAt: invite.expires_at ?? null,
     },
   } satisfies ProjectConsentUpgradeRequestPayload;
@@ -392,7 +409,11 @@ export async function createProjectConsentUpgradeRequest(
   const consentId = validateUuid(input.consentId, "consent_not_found", "Consent not found.");
   const targetTemplateId = validateUuid(input.targetTemplateId, "template_not_found", "Template not found.");
   const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
-  const operation = `create_project_consent_upgrade_request:${projectId}:${consentId}:${targetTemplateId}`;
+  const correctionOperationSuffix = input.correctionProvenance
+    ? `:correction:${input.correctionProvenance.correctionSourceReleaseIdSnapshot}:${input.correctionProvenance.correctionOpenedAtSnapshot}`
+    : "";
+  const operation =
+    `create_project_consent_upgrade_request:${projectId}:${consentId}:${targetTemplateId}${correctionOperationSuffix}`;
 
   const existingIdempotencyPayload = await readIdempotencyPayload<ProjectConsentUpgradeRequestPayload>(
     input.supabase,
@@ -523,6 +544,7 @@ export async function createProjectConsentUpgradeRequest(
     userId: input.userId,
     idempotencyKey: requestId,
     consentTemplateId: targetTemplate.id,
+    correctionProvenance: input.correctionProvenance,
   });
 
   const { data, error } = await input.supabase
@@ -541,7 +563,7 @@ export async function createProjectConsentUpgradeRequest(
       created_by_user_id: input.userId,
     })
     .select(
-      "id, prior_consent_id, target_template_id, target_template_key, invite_id, status, invite:subject_invites(id, status, expires_at, used_count, max_uses), target_template:consent_templates(id, name, version)",
+      "id, prior_consent_id, target_template_id, target_template_key, invite_id, status, invite:subject_invites(id, status, expires_at, used_count, max_uses, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot), target_template:consent_templates(id, name, version)",
     )
     .single();
 

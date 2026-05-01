@@ -1,12 +1,32 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import {
+  assertCanCreateProjectsAdministrationAction,
+  assertCanManageProjectWorkspacesAdministrationAction,
+} from "@/lib/projects/project-administration-service";
+import {
+  resolveEffectiveReviewerAccessForProject,
+  resolveEffectiveReviewerAccessForTenant,
+  type ReviewAccessSource,
+} from "@/lib/tenant/reviewer-access-service";
+import { roleHasCapability } from "@/lib/tenant/role-capabilities";
+import type { MembershipRole } from "@/lib/tenant/role-capabilities";
+import { resolveTenantMembership } from "@/lib/tenant/tenant-membership";
 
-export const MEMBERSHIP_ROLES = ["owner", "admin", "reviewer", "photographer"] as const;
-export const MANAGEABLE_MEMBERSHIP_ROLES = ["admin", "reviewer", "photographer"] as const;
-
-export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number];
-export type ManageableMembershipRole = (typeof MANAGEABLE_MEMBERSHIP_ROLES)[number];
+export {
+  MANAGEABLE_MEMBERSHIP_ROLES,
+  MEMBERSHIP_ROLES,
+} from "@/lib/tenant/role-capabilities";
+export type {
+  ManageableMembershipRole,
+  MembershipRole,
+  TenantCapability,
+} from "@/lib/tenant/role-capabilities";
+export {
+  getTenantMembershipRole,
+  resolveTenantMembership,
+} from "@/lib/tenant/tenant-membership";
 
 export type TenantPermissions = {
   role: MembershipRole;
@@ -16,6 +36,8 @@ export type TenantPermissions = {
   canCreateProjects: boolean;
   canCaptureProjects: boolean;
   canReviewProjects: boolean;
+  isReviewerEligible: boolean;
+  hasTenantWideReviewAccess: boolean;
 };
 
 export type ProjectPermissions = TenantPermissions & {
@@ -23,6 +45,8 @@ export type ProjectPermissions = TenantPermissions & {
   canCreateRecurringProjectConsentRequests: boolean;
   canUploadAssets: boolean;
   canInitiateConsentUpgradeRequests: boolean;
+  canReviewSelectedProject: boolean;
+  reviewAccessSource: ReviewAccessSource;
 };
 
 export type ProjectWorkspaceKind = "default" | "photographer";
@@ -56,21 +80,16 @@ export type WorkspacePermissions = ProjectPermissions & {
 };
 
 export function deriveTenantPermissionsFromRole(role: MembershipRole): TenantPermissions {
-  const canManageMembers = role === "owner" || role === "admin";
-  const canManageTemplates = canManageMembers;
-  const canManageProfiles = canManageMembers;
-  const canCreateProjects = role === "owner" || role === "admin";
-  const canCaptureProjects = role === "owner" || role === "admin" || role === "photographer";
-  const canReviewProjects = role === "owner" || role === "admin" || role === "reviewer";
-
   return {
     role,
-    canManageMembers,
-    canManageTemplates,
-    canManageProfiles,
-    canCreateProjects,
-    canCaptureProjects,
-    canReviewProjects,
+    canManageMembers: roleHasCapability(role, "organization_users.manage"),
+    canManageTemplates: roleHasCapability(role, "templates.manage"),
+    canManageProfiles: roleHasCapability(role, "profiles.manage"),
+    canCreateProjects: roleHasCapability(role, "projects.create"),
+    canCaptureProjects: roleHasCapability(role, "capture.workspace"),
+    canReviewProjects: roleHasCapability(role, "review.workspace"),
+    isReviewerEligible: role === "reviewer",
+    hasTenantWideReviewAccess: false,
   };
 }
 
@@ -79,44 +98,19 @@ export function deriveProjectPermissionsFromRole(role: MembershipRole): ProjectP
 
   return {
     ...tenantPermissions,
-    canCreateOneOffInvites: tenantPermissions.canCaptureProjects,
-    canCreateRecurringProjectConsentRequests: tenantPermissions.canCaptureProjects,
-    canUploadAssets: tenantPermissions.canCaptureProjects,
-    canInitiateConsentUpgradeRequests: tenantPermissions.canReviewProjects,
-  };
-}
-
-export async function getTenantMembershipRole(
-  supabase: SupabaseClient,
-  tenantId: string,
-  userId: string,
-): Promise<MembershipRole | null> {
-  const { data, error } = await supabase
-    .from("memberships")
-    .select("role")
-    .eq("tenant_id", tenantId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (error) {
-    throw new HttpError(500, "membership_lookup_failed", "Unable to validate workspace access.");
-  }
-
-  return (data?.role as MembershipRole | undefined) ?? null;
-}
-
-export async function resolveTenantMembership(
-  supabase: SupabaseClient,
-  tenantId: string,
-  userId: string,
-) {
-  const role = await getTenantMembershipRole(supabase, tenantId, userId);
-  if (!role) {
-    throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
-  }
-
-  return {
-    role,
+    canCreateOneOffInvites: roleHasCapability(role, "capture.create_one_off_invites"),
+    canCreateRecurringProjectConsentRequests: roleHasCapability(
+      role,
+      "capture.create_recurring_project_consent_requests",
+    ),
+    canUploadAssets: roleHasCapability(role, "capture.upload_assets"),
+    canInitiateConsentUpgradeRequests: roleHasCapability(
+      role,
+      "review.initiate_consent_upgrade_requests",
+    ),
+    canReviewSelectedProject: tenantPermissions.canReviewProjects,
+    reviewAccessSource:
+      tenantPermissions.canReviewProjects && role !== "reviewer" ? "owner_admin" : "none",
   };
 }
 
@@ -126,16 +120,107 @@ export async function resolveTenantPermissions(
   userId: string,
 ): Promise<TenantPermissions> {
   const membership = await resolveTenantMembership(supabase, tenantId, userId);
-  return deriveTenantPermissionsFromRole(membership.role);
+  const permissions = deriveTenantPermissionsFromRole(membership.role);
+
+  if (membership.role === "owner" || membership.role === "admin") {
+    return {
+      ...permissions,
+      canReviewProjects: true,
+      isReviewerEligible: false,
+      hasTenantWideReviewAccess: false,
+    };
+  }
+
+  if (membership.role !== "reviewer") {
+    return {
+      ...permissions,
+      canReviewProjects: false,
+      isReviewerEligible: false,
+      hasTenantWideReviewAccess: false,
+    };
+  }
+
+  const reviewerAccess = await resolveEffectiveReviewerAccessForTenant({
+    supabase,
+    tenantId,
+    userId,
+  });
+
+  return {
+    ...permissions,
+    canReviewProjects: reviewerAccess.hasTenantWideReviewAccess,
+    isReviewerEligible: true,
+    hasTenantWideReviewAccess: reviewerAccess.hasTenantWideReviewAccess,
+  };
 }
 
 export async function resolveProjectPermissions(
   supabase: SupabaseClient,
   tenantId: string,
   userId: string,
+  projectId?: string,
 ): Promise<ProjectPermissions> {
   const membership = await resolveTenantMembership(supabase, tenantId, userId);
-  return deriveProjectPermissionsFromRole(membership.role);
+  const permissions = deriveProjectPermissionsFromRole(membership.role);
+
+  if (membership.role === "owner" || membership.role === "admin") {
+    return {
+      ...permissions,
+      canReviewProjects: true,
+      isReviewerEligible: false,
+      hasTenantWideReviewAccess: false,
+      canInitiateConsentUpgradeRequests: true,
+      canReviewSelectedProject: true,
+      reviewAccessSource: "owner_admin",
+    };
+  }
+
+  if (membership.role !== "reviewer") {
+    return {
+      ...permissions,
+      canReviewProjects: false,
+      isReviewerEligible: false,
+      hasTenantWideReviewAccess: false,
+      canInitiateConsentUpgradeRequests: false,
+      canReviewSelectedProject: false,
+      reviewAccessSource: "none",
+    };
+  }
+
+  if (!projectId) {
+    const reviewerAccess = await resolveEffectiveReviewerAccessForTenant({
+      supabase,
+      tenantId,
+      userId,
+    });
+
+    return {
+      ...permissions,
+      canReviewProjects: reviewerAccess.hasTenantWideReviewAccess,
+      isReviewerEligible: true,
+      hasTenantWideReviewAccess: reviewerAccess.hasTenantWideReviewAccess,
+      canInitiateConsentUpgradeRequests: reviewerAccess.hasTenantWideReviewAccess,
+      canReviewSelectedProject: reviewerAccess.hasTenantWideReviewAccess,
+      reviewAccessSource: reviewerAccess.hasTenantWideReviewAccess ? "tenant_assignment" : "none",
+    };
+  }
+
+  const reviewerAccess = await resolveEffectiveReviewerAccessForProject({
+    supabase,
+    tenantId,
+    userId,
+    projectId,
+  });
+
+  return {
+    ...permissions,
+    canReviewProjects: reviewerAccess.canReviewProject,
+    isReviewerEligible: true,
+    hasTenantWideReviewAccess: reviewerAccess.hasTenantWideReviewAccess,
+    canInitiateConsentUpgradeRequests: reviewerAccess.canReviewProject,
+    canReviewSelectedProject: reviewerAccess.canReviewProject,
+    reviewAccessSource: reviewerAccess.reviewAccessSource,
+  };
 }
 
 async function listProjectWorkspaces(
@@ -181,6 +266,19 @@ export async function resolveAccessibleProjectWorkspaces(
     };
   }
 
+  if (membership.role === "reviewer") {
+    const reviewerAccess = await resolveEffectiveReviewerAccessForProject({
+      supabase,
+      tenantId,
+      userId,
+      projectId,
+    });
+
+    if (!reviewerAccess.canReviewProject) {
+      throw new HttpError(404, "project_not_found", "Project not found.");
+    }
+  }
+
   return {
     role: membership.role,
     workspaces,
@@ -206,13 +304,26 @@ export async function resolveWorkspacePermissions(
     throw new HttpError(404, "workspace_not_found", "Project workspace not found.");
   }
 
-  const projectPermissions = deriveProjectPermissionsFromRole(membership.role);
+  if (membership.role === "reviewer") {
+    const reviewerAccess = await resolveEffectiveReviewerAccessForProject({
+      supabase,
+      tenantId,
+      userId,
+      projectId,
+    });
+
+    if (!reviewerAccess.canReviewProject) {
+      throw new HttpError(404, "workspace_not_found", "Project workspace not found.");
+    }
+  }
+
+  const projectPermissions = await resolveProjectPermissions(supabase, tenantId, userId, projectId);
 
   return {
     ...projectPermissions,
     projectId,
     workspace,
-    canManageWorkspaces: membership.role === "owner" || membership.role === "admin",
+    canManageWorkspaces: roleHasCapability(membership.role, "project_workspaces.manage"),
   };
 }
 
@@ -221,16 +332,7 @@ export async function assertCanCreateProjectsAction(
   tenantId: string,
   userId: string,
 ) {
-  const permissions = await resolveTenantPermissions(supabase, tenantId, userId);
-  if (!permissions.canCreateProjects) {
-    throw new HttpError(
-      403,
-      "project_create_forbidden",
-      "Only workspace owners and admins can create projects.",
-    );
-  }
-
-  return permissions;
+  return assertCanCreateProjectsAdministrationAction(supabase, tenantId, userId);
 }
 
 export async function assertCanManageProjectWorkspacesAction(
@@ -239,28 +341,12 @@ export async function assertCanManageProjectWorkspacesAction(
   userId: string,
   projectId: string,
 ) {
-  const workspacePermissions = await resolveAccessibleProjectWorkspaces(
+  return assertCanManageProjectWorkspacesAdministrationAction(
     supabase,
     tenantId,
     userId,
     projectId,
   );
-  const projectPermissions = deriveProjectPermissionsFromRole(workspacePermissions.role);
-  const canManageWorkspaces =
-    workspacePermissions.role === "owner" || workspacePermissions.role === "admin";
-
-  if (!canManageWorkspaces) {
-    throw new HttpError(
-      403,
-      "project_workspace_manage_forbidden",
-      "Only workspace owners and admins can manage project staffing.",
-    );
-  }
-
-  return {
-    ...projectPermissions,
-    canManageWorkspaces,
-  };
 }
 
 export async function assertCanCaptureProjectAction(
@@ -284,13 +370,14 @@ export async function assertCanReviewProjectAction(
   supabase: SupabaseClient,
   tenantId: string,
   userId: string,
+  projectId: string,
 ) {
-  const permissions = await resolveProjectPermissions(supabase, tenantId, userId);
-  if (!permissions.canReviewProjects) {
+  const permissions = await resolveProjectPermissions(supabase, tenantId, userId, projectId);
+  if (!permissions.canReviewSelectedProject) {
     throw new HttpError(
       403,
       "project_review_forbidden",
-      "Only workspace owners, admins, and reviewers can perform review actions.",
+      "Only workspace owners, admins, and assigned reviewers can perform review actions.",
     );
   }
 
@@ -338,11 +425,11 @@ export async function assertCanReviewWorkspaceAction(
     workspaceId,
   );
 
-  if (!permissions.canReviewProjects) {
+  if (!permissions.canReviewSelectedProject) {
     throw new HttpError(
       403,
       "workspace_review_forbidden",
-      "Only workspace owners, admins, and reviewers can perform review actions.",
+      "Only workspace owners, admins, and assigned reviewers can perform review actions.",
     );
   }
 

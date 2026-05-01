@@ -1,6 +1,6 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { hideAssetFace, restoreHiddenAssetFace } from "@/lib/matching/photo-face-linking";
-import { loadWorkspaceScopedRow, requireWorkspaceReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
+import { loadWorkspaceScopedRow, requireWorkspaceCorrectionReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -37,7 +37,7 @@ async function requireAuthAndScope(context: RouteContext) {
     notFoundCode: "asset_not_found",
     notFoundMessage: "Asset not found.",
   });
-  await requireWorkspaceReviewMutationAccessForRow({
+  await requireWorkspaceCorrectionReviewMutationAccessForRow({
     supabase,
     tenantId,
     userId: user.id,

@@ -30,11 +30,10 @@ import {
 import { filterCurrentOneOffPeopleOptions } from "@/lib/projects/current-one-off-consent";
 import {
   requireWorkspaceCaptureMutationAccessForRequest,
-  resolveSelectedWorkspaceForRequest,
+  requireWorkspaceOperationalReadAccessForRequest,
 } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { resolveWorkspacePermissions } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
 
@@ -250,23 +249,13 @@ export async function GET(request: Request, context: RouteContext) {
   try {
     const { supabase, tenantId, projectId, userId, authSupabase } = await requireAuthAndScope(context);
     const url = new URL(request.url);
-    const workspace = await resolveSelectedWorkspaceForRequest({
+    const { workspace } = await requireWorkspaceOperationalReadAccessForRequest({
       supabase: authSupabase,
       tenantId,
       userId,
       projectId,
       requestedWorkspaceId: url.searchParams.get("workspaceId"),
     });
-    const workspacePermissions = await resolveWorkspacePermissions(
-      authSupabase,
-      tenantId,
-      userId,
-      projectId,
-      workspace.id,
-    );
-    if (!workspacePermissions.canCaptureProjects && !workspacePermissions.canReviewProjects) {
-      throw new HttpError(403, "workspace_read_forbidden", "Project workspace access is forbidden.");
-    }
     const limit = parseLimit(url.searchParams);
     const offset = parseOffset(url.searchParams);
     const sort = parseSort(url.searchParams);
@@ -833,6 +822,7 @@ export async function POST(request: Request, context: RouteContext) {
       userId,
       projectId,
       requestedWorkspaceId: body.workspaceId,
+      capabilityKey: "capture.upload_assets",
     });
 
     const consentIds = Array.isArray(body.consentIds)

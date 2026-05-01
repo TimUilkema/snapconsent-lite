@@ -11,8 +11,8 @@ import { loadProjectProfileParticipantById } from "@/lib/matching/project-face-a
 import {
   assertWorkspaceScopedRowMatchesWorkspace,
   loadWorkspaceScopedRow,
+  requireWorkspaceCorrectionReviewMutationAccessForRow,
   requireWorkspaceReviewAccessForRow,
-  requireWorkspaceReviewMutationAccessForRow,
 } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -56,7 +56,7 @@ async function requireAuthAndScope(context: RouteContext, mutation = false) {
     notFoundMessage: "Asset not found.",
   });
   if (mutation) {
-    await requireWorkspaceReviewMutationAccessForRow({
+    await requireWorkspaceCorrectionReviewMutationAccessForRow({
       supabase,
       tenantId,
       userId: user.id,

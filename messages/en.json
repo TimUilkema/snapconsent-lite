@@ -20,7 +20,8 @@
     "ariaPrimary": "Primary navigation",
     "dashboard": "Dashboard",
     "projects": "Projects",
-    "members": "Members",
+    "mediaLibrary": "Media Library",
+    "members": "Organization users",
     "profiles": "People",
     "templates": "Templates"
   },
@@ -101,15 +102,85 @@
     "backToHome": "Back to home"
   },
   "members": {
-    "title": "Members",
-    "subtitle": "Invite people, adjust workspace roles, and revoke pending organization invites.",
+    "title": "Organization users",
+    "subtitle": "Invite people, adjust organization roles, and manage pending organization invites.",
     "readOnly": "Only workspace owners and admins can manage organization members.",
     "backToProjects": "Back to projects",
+    "delegated": {
+      "readOnly": "You can view organization users, but owner/admin-only controls are hidden.",
+      "inviteHelper": "You can invite reviewers and photographers. Role changes and removals are limited to allowed reviewer and photographer rows.",
+      "mutationHelper": "You can update or remove allowed reviewer and photographer rows. Owner, admin, and your own row stay read-only.",
+      "inviteSubtitle": "Delegated invites can only be sent for reviewers and photographers.",
+      "membersSubtitle": "Role changes and removals are available only where allowed. Custom roles and reviewer access remain owner/admin-managed.",
+      "pendingInvitesSubtitle": "Pending admin invites are visible here but remain read-only.",
+      "ownInvitesSubtitle": "You can manage only the pending reviewer and photographer invites you created.",
+      "readOnlyAction": "Read-only",
+      "empty": "No organization users or pending invites are visible for your current access.",
+      "inviteForbidden": "You can only invite reviewers and photographers.",
+      "inviteMutationForbidden": "You can only resend or revoke pending reviewer and photographer invites you created.",
+      "resendForbidden": "Unable to resend this invite with your current access.",
+      "revokeForbidden": "Unable to revoke this invite with your current access.",
+      "roleChanged": "Member role updated.",
+      "removed": "Member removed.",
+      "roleChangeForbidden": "You cannot change organization user roles with your current access.",
+      "removeForbidden": "You cannot remove organization users with your current access.",
+      "targetForbidden": "This organization user is protected from that action.",
+      "selfTargetForbidden": "You cannot change or remove your own organization row.",
+      "invalidRole": "Select reviewer or photographer for delegated role changes.",
+      "roleChangeFallback": "Unable to update this member role.",
+      "removeFallback": "Unable to remove this member."
+    },
     "roles": {
       "owner": "Owner",
       "admin": "Admin",
       "reviewer": "Reviewer",
       "photographer": "Photographer"
+    },
+    "roleDescriptions": {
+      "owner": "Full organization access with protected ownership.",
+      "admin": "Full organization access except owner protection.",
+      "reviewer": "Eligible for review access. Projects require tenant-wide or project-specific grants.",
+      "photographer": "Capture and upload access in assigned project workspaces."
+    },
+    "roleReference": {
+      "title": "Role reference",
+      "subtitle": "Fixed roles map to these current capabilities.",
+      "capabilitiesColumn": "Capabilities",
+      "ownerProtected": "Owners are read-only, non-inviteable, and non-removable in this slice."
+    },
+    "capabilityGroups": {
+      "organizationUsers": "Organization users",
+      "templatesProfiles": "Templates and profiles",
+      "projectsWorkspaces": "Projects and workspaces",
+      "capture": "Capture",
+      "review": "Review",
+      "workflowCorrection": "Workflow and correction",
+      "mediaLibrary": "Media Library"
+    },
+    "capabilities": {
+      "organizationUsersManage": "manage organization users",
+      "organizationUsersInvite": "invite users",
+      "organizationUsersChangeRoles": "change non-owner roles",
+      "organizationUsersRemove": "remove non-owner users",
+      "templatesManage": "manage templates",
+      "profilesView": "view profiles",
+      "profilesManage": "manage profiles",
+      "projectsCreate": "create projects",
+      "projectWorkspacesManage": "manage project workspaces",
+      "captureWorkspace": "capture workspace content",
+      "captureCreateOneOffInvites": "create one-off consent invites",
+      "captureCreateRecurringProjectConsentRequests": "create project consent requests",
+      "captureUploadAssets": "upload assets",
+      "reviewWorkspace": "review workspaces",
+      "reviewInitiateConsentUpgradeRequests": "initiate consent upgrade requests",
+      "workflowFinalizeProject": "finalize projects",
+      "workflowStartProjectCorrection": "start project correction",
+      "workflowReopenWorkspaceForCorrection": "reopen workspaces for correction",
+      "correctionReview": "review corrections",
+      "correctionConsentIntake": "perform correction consent intake",
+      "correctionMediaIntake": "add correction media",
+      "mediaLibraryAccess": "access Media Library",
+      "mediaLibraryManageFolders": "manage Media Library folders"
     },
     "invite": {
       "title": "Invite member",
@@ -117,6 +188,7 @@
       "emailLabel": "Email",
       "emailPlaceholder": "name@example.com",
       "roleLabel": "Role",
+      "selectedRoleHelp": "{role}: {description}",
       "submit": "Send invite",
       "submitting": "Sending...",
       "success": "Invite saved and queued for delivery.",
@@ -124,19 +196,160 @@
     },
     "membersTable": {
       "title": "Current members",
-      "subtitle": "Owners are visible here but stay read-only in this first slice.",
+      "subtitle": "Owners are visible here but stay protected from role changes and removal.",
+      "removalExplanation": "Removing a user only removes access to this organization. The auth account is not deleted, and the user may still belong to other organizations.",
       "columns": {
         "email": "Email",
         "role": "Role",
+        "reviewerAccess": "Reviewer access",
         "joined": "Joined",
         "actions": "Actions"
       },
       "saveRole": "Save role",
       "remove": "Remove",
-      "removeConfirm": "Remove {email} from this workspace?",
+      "removeConfirm": "Remove {email} from this organization? Their auth account will not be deleted.",
       "roleUpdated": "Member role updated.",
       "removed": "Member removed.",
-      "ownerNote": "Owner"
+      "ownerNote": "Owner",
+      "ownerProtectedExplanation": "Owner protected"
+    },
+    "reviewerAccess": {
+      "tenantWideActive": "All projects",
+      "noTenantWide": "Project grants only",
+      "projectCount": "{count, plural, one {# project grant} other {# project grants}}",
+      "grantTenantWide": "Grant all projects",
+      "revokeTenantWide": "Revoke all projects",
+      "tenantWideGranted": "Tenant-wide reviewer access granted.",
+      "tenantWideRevoked": "Tenant-wide reviewer access revoked.",
+      "notReviewer": "Not eligible"
+    },
+    "effectiveAccess": {
+      "show": "Access",
+      "hide": "Hide access",
+      "loading": "Loading effective access...",
+      "empty": "No effective access details are loaded.",
+      "fixedRole": "Fixed role",
+      "customRoles": "Custom roles",
+      "reviewerAccess": "Reviewer access",
+      "photographerAssignments": "Photographer workspaces",
+      "effectiveCapabilities": "Effective capabilities",
+      "ignoredCapabilities": "Ignored capabilities",
+      "noCapabilities": "No capabilities apply at this scope.",
+      "none": "None",
+      "yes": "yes",
+      "no": "no",
+      "count": "{count, plural, one {# item} other {# items}}",
+      "reviewerSummary": "Tenant-wide: {tenantWide}; projects: {projectCount}",
+      "sourcesLabel": "Sources: {sources}",
+      "ignoredCapability": "{role}: {capability} ignored because {reason}.",
+      "scope": {
+        "tenant": "Organization",
+        "project": "Project: {project}",
+        "workspace": "{project} / {workspace}"
+      },
+      "sources": {
+        "fixedRole": "Fixed role: {role}",
+        "customRole": "Custom role: {role}",
+        "reviewerTenant": "Reviewer access: all projects",
+        "reviewerProject": "Reviewer access: {project}",
+        "photographerWorkspace": "Photographer assignment: {project} / {workspace}",
+        "unknown": "Unknown source"
+      },
+      "warnings": {
+        "fixed_owner_admin_broad_access": "Owner/admin fixed roles are broad and remain special for tenant safety and role administration.",
+        "tenant_wide_reviewer_access_summarized": "Tenant-wide reviewer access is summarized instead of enumerating every project.",
+        "ignored_capabilities_present": "Some custom-role capabilities are ignored at their assigned scope."
+      },
+      "ignoredReasons": {
+        "assignment_scope_not_effective": "the assignment scope does not grant it here",
+        "requested_scope_not_supported": "the capability is not supported at this scope",
+        "wrong_project": "the assignment targets another project",
+        "wrong_workspace": "the assignment targets another workspace"
+      },
+      "errors": {
+        "fallback": "Unable to load effective access."
+      }
+    },
+    "customRoles": {
+      "title": "Custom roles",
+      "subtitle": "Define tenant-local permission sets from the current capability catalog.",
+      "definitionOnlyNote": "Custom roles define reusable permission bundles. Owners and admins manage role definitions and assignments.",
+      "empty": "No active custom roles.",
+      "columns": {
+        "name": "Name",
+        "description": "Description",
+        "capabilities": "Capabilities",
+        "actions": "Actions"
+      },
+      "edit": "Edit",
+      "archive": "Archive",
+      "archiveConfirm": "Archive {name}? It will no longer appear as an active custom role.",
+      "archived": "Archived",
+      "created": "Custom role created.",
+      "updated": "Custom role updated.",
+      "archiveChanged": "Custom role archived.",
+      "archiveUnchanged": "Custom role was already archived."
+    },
+    "customRoleAssignments": {
+      "column": "Custom roles",
+      "title": "Custom role assignments",
+      "assignRole": "Assign role",
+      "assignedRoles": "Assigned roles",
+      "noAssignedRoles": "No custom roles",
+      "noAssignableRoles": "No roles available",
+      "createRoleFirst": "Create an active custom role before assigning one.",
+      "selectPlaceholder": "Select a custom role",
+      "scopeLabel": "Scope",
+      "scope": {
+        "tenant": "Organization",
+        "project": "Project",
+        "workspace": "Workspace"
+      },
+      "targetLabel": "Target",
+      "projectLabel": "Project",
+      "workspaceLabel": "Workspace",
+      "projectPlaceholder": "Select a project",
+      "workspacePlaceholder": "Select a workspace",
+      "allOrganizationTarget": "All organization",
+      "unknownTarget": "Unknown target",
+      "scopeWarning": "Some role capabilities do not apply at this scope.",
+      "effectiveCapabilities": "Applies here: {capabilities}",
+      "ignoredCapabilities": "Ignored here: {capabilities}",
+      "zeroEffectiveCapabilities": "This role has no capabilities that apply at the selected scope.",
+      "scopeProjectRequired": "Select a project before assigning this role.",
+      "scopeWorkspaceRequired": "Select a workspace before assigning this role.",
+      "remove": "Remove",
+      "removeConfirm": "Remove {role} from {email}?",
+      "assigned": "Custom role assigned.",
+      "revoked": "Custom role removed.",
+      "note": "Custom roles grant access only in areas where custom-role enforcement has shipped. Role assignment remains owner/admin-only.",
+      "archivedAssignedRole": "{role} is archived and no longer assignable.",
+      "errors": {
+        "fallback": "Unable to update custom role assignments.",
+        "roleArchived": "Archived custom roles cannot be assigned.",
+        "systemRoleForbidden": "System roles cannot be assigned here.",
+        "memberNotFound": "Member not found.",
+        "roleNotFound": "Custom role not found.",
+        "invalidScope": "Select a valid assignment scope.",
+        "projectNotFound": "Project not found.",
+        "workspaceNotFound": "Workspace not found.",
+        "zeroEffectiveCapabilities": "This role has no capabilities that apply at that scope.",
+        "conflict": "Unable to update custom role assignment. Try again."
+      }
+    },
+    "customRoleForm": {
+      "createTitle": "Create custom role",
+      "editTitle": "Edit custom role",
+      "nameLabel": "Role name",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "Optional",
+      "capabilitiesLabel": "Capabilities",
+      "create": "Create role",
+      "update": "Update role",
+      "cancel": "Cancel",
+      "emptyCapabilityError": "Select at least one capability.",
+      "duplicateNameError": "A custom role with this name already exists.",
+      "error": "Unable to update custom role."
     },
     "pendingInvites": {
       "title": "Pending invites",
@@ -461,6 +674,7 @@
       "continueUpload": "Continue upload",
       "cancel": "Cancel",
       "headshotsManagedNote": "Profile headshots still use their existing person-specific upload flow. This uploader is for project photos and videos.",
+      "correctionNotice": "New uploads affect the next release version only. Previous releases remain unchanged.",
       "checkingDuplicates": "Checking duplicates...",
       "hashUnavailableWarning": "Some files could not be hashed in this browser. Duplicate detection may be less strict for those files.",
       "prepareError": "Unable to prepare this upload queue.",
@@ -494,12 +708,24 @@
       "defaultTemplateWarning": "This project default template is no longer available for new invites. Choose a new published template.",
       "breadcrumbProjects": "Projects",
       "projectSectionsAria": "Project sections",
-      "exportProject": "Export project",
       "workspaceSectionLabel": "Workspaces",
-      "workspaceSelected": "Selected workspace: {name}",
-      "workspaceNoneAssigned": "No workspaces are assigned to this project yet.",
-      "workspaceNoData": "Select or assign a workspace to continue.",
-      "sectionParticipants": "Participants",
+        "workspaceSelected": "Selected workspace: {name}",
+        "workspaceNoneAssigned": "No workspaces are assigned to this project yet.",
+        "workspaceNoData": "Select or assign a workspace to continue.",
+        "reviewerAccess": {
+          "title": "Project reviewers",
+          "subtitle": "Grant reviewer members access to this project and all of its workspaces.",
+          "reviewerLabel": "Reviewer",
+          "noneAvailable": "No reviewer members available",
+          "grant": "Grant project access",
+          "revoke": "Revoke",
+          "empty": "No project-specific reviewers.",
+          "tenantWideNote": "Tenant-wide reviewers already have access: {emails}",
+          "granted": "Project reviewer access granted.",
+          "revoked": "Project reviewer access revoked.",
+          "error": "Unable to update project reviewer access."
+        },
+        "sectionParticipants": "Participants",
       "sectionAssets": "Assets",
       "subtitle": "Manage known profiles, one-off consent intake, subject details, and project photo matching in one place.",
       "statsStatus": "Status",
@@ -563,14 +789,22 @@
         "workspaceHandedOffAt": "Handed off {date}",
         "workspaceValidatedAt": "Validated {date}",
         "workspaceNeedsChangesAt": "Needs changes since {date}",
+        "workspaceCorrectionReopenedAt": "Correction reopened {date}",
         "projectProgress": "{validated} of {total} workspaces validated",
+        "projectCorrectionProgress": "{validated} of {total} workspaces validated for correction",
         "projectActiveHelper": "Finalize the project after every workspace is validated and blockers are clear.",
         "projectReadyHelper": "All visible workspaces are validated and ready for finalization.",
         "projectFinalizedAt": "Finalized {date}",
+        "projectCorrectionOpenedAt": "Correction opened {date}",
+        "projectCorrectionOpenHelper": "Corrections stay review-only and will publish a new release version when finalized.",
+        "projectCorrectionReadyHelper": "Correction workspaces are validated again and ready to publish a new release version.",
         "captureLockedHandedOff": "Authenticated capture changes are locked after handoff. Existing public links can still be completed until validation.",
         "captureLockedValidated": "Authenticated capture changes are locked while this workspace is validated.",
         "reviewLockedValidated": "Review changes are locked while this workspace is validated. Reopen it to make corrections.",
+        "reviewLockedCorrectionValidated": "This workspace is validated again. Reopen it for correction before making more review changes.",
         "projectFinalizedReadOnly": "This project is finalized. Capture, review, staffing, and template changes are read-only.",
+        "projectCorrectionCaptureLocked": "Correction is open. Capture uploads, staffing, and template changes stay locked. Reopened workspaces can still send correction consent requests from the review surface.",
+        "projectCorrectionConsentIntakeHelper": "This reopened correction workspace can send one-off correction invites, consent upgrades, and recurring project consent requests. Capture uploads stay locked.",
         "projectArchivedReadOnly": "This project is archived, so workflow changes are unavailable.",
         "staffingLockedFinalized": "Workspace staffing is locked after project finalization.",
         "blockersTitle": "Validation blockers",
@@ -583,6 +817,8 @@
         "projectStates": {
           "active": "Active",
           "ready_to_finalize": "Ready to finalize",
+          "correction_open": "Correction open",
+          "correction_ready_to_finalize": "Correction ready to finalize",
           "finalized": "Finalized"
         },
         "actions": {
@@ -594,8 +830,14 @@
           "needsChangesPending": "Saving...",
           "reopen": "Reopen workspace",
           "reopenPending": "Reopening...",
+          "reopenForCorrection": "Reopen for correction",
+          "reopenForCorrectionPending": "Reopening for correction...",
+          "startCorrection": "Start correction",
+          "startCorrectionPending": "Starting correction...",
           "finalize": "Finalize project",
-          "finalizePending": "Finalizing..."
+          "finalizePending": "Finalizing...",
+          "finalizeCorrection": "Publish corrected release",
+          "finalizeCorrectionPending": "Publishing corrected release..."
         },
         "blockers": {
           "matchingInProgress": "Matching is still in progress.",
@@ -838,6 +1080,202 @@
       "already": "Recurring consent was already revoked.",
       "invalid": "This recurring revoke link is invalid.",
       "expired": "This recurring revoke link has expired."
+    }
+  },
+  "mediaLibrary": {
+    "shared": {
+      "badges": {
+        "blocked": "Blocked",
+        "restricted": "Restricted",
+        "manual": "Manual"
+      },
+      "downloadConfirm": {
+        "blockedOnly": "Blocked faces are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?",
+        "restrictedOnly": "Revoked owners or non-granted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?",
+        "blockedRestricted": "Blocked faces and restricted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?"
+      }
+    },
+    "list": {
+      "title": "Media Library",
+      "subtitle": "Latest published project photos and videos appear here as read-only release snapshots. Older release assets stay available by direct link.",
+      "empty": "No released media is available yet.",
+      "previewUnavailable": "Preview unavailable",
+      "releaseVersionValue": "Release v{version}",
+      "linkedPeopleCount": "{count, plural, one {# linked person} other {# linked people}}",
+      "sidebar": {
+        "allAssets": "All assets",
+        "foldersTitle": "Folders",
+        "emptyFolders": "No folders yet.",
+        "createFolder": "Create folder",
+        "renameFolder": "Rename",
+        "archiveFolder": "Archive",
+        "archiveConfirm": "Archive folder \"{name}\"?",
+        "currentFolder": "Current folder"
+      },
+      "selection": {
+        "count": "{count, plural, one {# asset selected} other {# assets selected}}",
+        "clear": "Clear",
+        "addToFolder": "Add to folder",
+        "moveToFolder": "Move to folder",
+        "removeFromFolder": "Remove from folder",
+        "noFolder": "Choose folder"
+      },
+      "folderForm": {
+        "nameLabel": "New folder",
+        "namePlaceholder": "Folder name",
+        "createSubmit": "Create",
+        "renameSubmit": "Save",
+        "cancel": "Cancel"
+      },
+      "folderMessages": {
+        "created": "Folder created.",
+        "renamed": "Folder renamed.",
+        "archived": "Folder archived.",
+        "assigned": "Assets added to folder.",
+        "moved": "Assets moved.",
+        "removed": "Assets removed from folder."
+      },
+      "folderErrors": {
+        "nameRequired": "Folder name is required.",
+        "nameConflict": "An active folder already uses that name.",
+        "folderArchived": "Archived folders cannot be changed.",
+        "generic": "Unable to update the Media Library folder."
+      },
+      "assetTypes": {
+        "photo": "Photo",
+        "video": "Video"
+      },
+      "labels": {
+        "workspace": "Workspace",
+        "releaseVersion": "Release version",
+        "linkedPeople": "Linked people",
+        "releaseCreated": "Release created"
+      },
+      "actions": {
+        "open": "Open",
+        "download": "Download original"
+      }
+    },
+    "detail": {
+      "backToList": "Back to Media Library",
+      "previewUnavailable": "Preview unavailable for this released asset.",
+      "download": "Download original",
+      "releaseVersionValue": "Release v{version}",
+      "linkedPeopleCount": "{count, plural, one {# linked person} other {# linked people}}",
+      "unknownOwner": "Unknown owner",
+      "noEmail": "No email recorded",
+      "scopeGranted": "Granted",
+      "scopeNotGranted": "Not granted",
+      "assetTypes": {
+        "photo": "Photo",
+        "video": "Video"
+      },
+      "safetyBanner": {
+        "blocked": {
+          "title": "Blocked faces are present in this release snapshot.",
+          "body": "This asset was released as-is. Download stays available for authorized Media Library users, but review the blocked face context first."
+        },
+        "blockedRestricted": {
+          "title": "Blocked faces and restricted permissions need review.",
+          "body": "This asset was validly released, but blocked faces and restricted owner permissions are both present in the immutable release snapshot."
+        },
+        "restricted": {
+          "title": "Released owner permissions need caution.",
+          "body": "One or more linked owners are revoked or have non-granted usage permissions in this immutable release snapshot."
+        },
+        "stats": {
+          "blockedFaces": "{count, plural, one {# blocked face} other {# blocked faces}}",
+          "revokedOwners": "{count, plural, one {# revoked linked owner} other {# revoked linked owners}}",
+          "restrictedScopes": "{count, plural, one {# non-granted usage permission} other {# non-granted usage permissions}}"
+        }
+      },
+      "ownerStatuses": {
+        "active": "Active",
+        "revoked": "Revoked"
+      },
+      "ownerKinds": {
+        "project_consent": "One-off consent",
+        "project_recurring_consent": "Recurring project consent"
+      },
+      "scopeStatuses": {
+        "granted": "Granted",
+        "not_granted": "Not granted",
+        "revoked": "Revoked",
+        "not_collected": "Not collected"
+      },
+      "labels": {
+        "assetType": "Asset type",
+        "project": "Project",
+        "workspace": "Workspace",
+        "releaseVersion": "Release version",
+        "releaseCreated": "Release created",
+        "linkedPeople": "Linked people"
+      },
+      "sections": {
+        "links": "Release summary",
+        "reviewContext": "Release review context",
+        "linkedOwners": "Linked owners",
+        "scopes": "Scope snapshot",
+        "previewReview": "Released asset preview",
+        "snapshotNotes": "Snapshot notes",
+        "usagePermissions": "Usage permissions",
+        "effectiveScopes": "Effective scopes",
+        "signedScopes": "Signed scopes"
+      },
+      "counts": {
+        "exactFaceLinks": "{count, plural, one {# exact-face link} other {# exact-face links}}",
+        "wholeAssetLinks": "{count, plural, one {# whole-asset link} other {# whole-asset links}}",
+        "fallbackLinks": "{count, plural, one {# fallback link} other {# fallback links}}",
+        "suppressedFaces": "{count, plural, one {# suppressed face} other {# suppressed faces}}",
+        "hiddenFaces": "{count, plural, one {# hidden face} other {# hidden faces}}",
+        "blockedFaces": "{count, plural, one {# blocked face} other {# blocked faces}}",
+        "manualFaces": "{count, plural, one {# manual face} other {# manual faces}}"
+      },
+      "usagePermissions": {
+        "restricted": "Restricted",
+        "selected": "Selected",
+        "selectionHelp": "Select a linked owner to focus their face overlay and review the released usage permissions captured in this snapshot.",
+        "videoHelp": "Video assets stay read-only in the Media Library. Use the released owner summaries below to review usage permissions and any whole-asset or fallback context."
+      },
+      "ownerStrip": {
+        "singleFace": "Face {face}",
+        "multipleFaces": "{count, plural, one {# face} other {# faces}}"
+      },
+      "context": {
+        "faceLink": "Face {face} / {source}",
+        "wholeAssetLink": "Whole-asset link",
+        "fallbackLink": "Fallback link",
+        "linkSourceManual": "Manual link",
+        "linkSourceAuto": "Auto link"
+      },
+      "overlay": {
+        "detectedFaceLabel": "Face {face}",
+        "blockedFaceLabel": "Blocked face {face}",
+        "stateBlocked": "Blocked",
+        "stateDetected": "Detected",
+        "stateManual": "Manual face",
+        "linkSourceManual": "Manual link",
+        "linkSourceAuto": "Auto link",
+        "permissionsRestricted": "Restricted permissions"
+      },
+      "previewNotes": {
+        "hiddenFacesOmitted": "{count, plural, one {# hidden face is omitted from the overlay.} other {# hidden faces are omitted from the overlay.}}",
+        "geometryUnavailable": "{count, plural, one {# considered face has no usable release-snapshot geometry for overlay display.} other {# considered faces have no usable release-snapshot geometry for overlay display.}}"
+      },
+      "snapshotNotes": {
+        "hiddenFacesOmitted": "{count, plural, one {# hidden face is omitted from the released preview overlay.} other {# hidden faces are omitted from the released preview overlay.}}",
+        "geometryUnavailable": "{count, plural, one {# visible face could not be highlighted because its release-snapshot geometry is incomplete.} other {# visible faces could not be highlighted because their release-snapshot geometry is incomplete.}}",
+        "wholeAssetLinks": "{count, plural, one {# linked owner is included through a whole-asset link.} other {# linked owners are included through whole-asset links.}}",
+        "fallbackLinks": "{count, plural, one {# linked owner is included through fallback release context.} other {# linked owners are included through fallback release context.}}"
+      },
+      "previewReviewHelp": "This preview uses immutable release snapshot geometry only. Select a linked owner to focus the released face overlay and the corresponding usage permissions.",
+      "empty": {
+        "linkedOwners": "No linked owners were captured in this release snapshot.",
+        "scopes": "No scope metadata was captured in this release snapshot.",
+        "usagePermissions": "No released usage permissions were captured in this release snapshot.",
+        "effectiveScopes": "No effective scopes recorded.",
+        "signedScopes": "No signed scopes recorded."
+      }
     }
   },
   "templates": {

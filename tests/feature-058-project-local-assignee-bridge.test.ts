@@ -22,7 +22,6 @@ import {
   manualUnlinkPhotoFaceAssignment,
 } from "../src/lib/matching/consent-photo-matching";
 import { ensureRecurringProfileMaterializedFaceCompare } from "../src/lib/matching/recurring-materialized-face-compare";
-import { buildPreparedProjectExport, loadProjectExportRecords } from "../src/lib/project-export/project-export";
 import { createBaselineConsentRequest } from "../src/lib/profiles/profile-consent-service";
 import { createProjectProfileConsentRequest, addProjectProfileParticipant } from "../src/lib/projects/project-participants-service";
 import {
@@ -37,6 +36,7 @@ import {
   assertNoPostgrestError,
   createAnonClient,
   createAuthUserWithRetry,
+  getDefaultProjectWorkspaceId,
   signInClient,
 } from "./helpers/supabase-test-client";
 import {
@@ -120,8 +120,10 @@ async function createProject(tenantId: string, userId: string, client: SupabaseC
 
   assertNoPostgrestError(error, "insert project");
   assert.ok(data);
+  const workspaceId = await getDefaultProjectWorkspaceId(adminClient, tenantId, data.id as string);
   return {
     projectId: data.id as string,
+    workspaceId,
     projectName: name,
   };
 }
@@ -505,10 +507,10 @@ async function loadFaceSuppressions(input: {
   return (data ?? []) as Array<{ asset_face_id: string }>;
 }
 
-test("feature 058 bridges project-scoped recurring evidence into visible candidates, canonical assignment, and export metadata", async () => {
+test("feature 058 bridges project-scoped recurring evidence into visible candidates and canonical assignment", async () => {
   const context = await createTenantContext();
   const anonClient = createAnonClient();
-  const { projectId, projectName } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const { projectId, workspaceId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const photoAssetId = await createUploadedPhotoAsset({
@@ -555,6 +557,7 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId,
     recurringProfileId: profileId,
   });
   const participantId = participant.payload.participant.id;
@@ -637,6 +640,7 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId,
     recurringProfileId: unscoredProfileId,
   });
   const unscoredParticipantId = unscoredParticipant.payload.participant.id;
@@ -748,39 +752,6 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
   assert.equal(linkedFace.currentLink.recurring?.projectConsentState, "signed");
   assert.equal(typeof linkedFace.currentLink.recurring?.headshotThumbnailUrl, "string");
 
-  const exportRecords = await loadProjectExportRecords({
-    supabase: adminClient,
-    tenantId: context.tenantId,
-    projectId,
-  });
-  const preparedExport = buildPreparedProjectExport({
-    projectId,
-    projectName,
-    records: exportRecords,
-  });
-  const exportedAsset = preparedExport.assets.find((asset) => asset.assetId === photoAssetId);
-  assert.ok(exportedAsset);
-  assert.equal(exportedAsset.metadata.detectedFaces[0]?.linkedIdentityKind, "project_recurring_consent");
-  assert.equal(exportedAsset.metadata.detectedFaces[0]?.linkedConsentId, null);
-  assert.equal(typeof exportedAsset.metadata.detectedFaces[0]?.linkedProjectFaceAssigneeId, "string");
-  assert.equal(exportedAsset.metadata.linkedConsents.length, 0);
-  assert.ok(
-    exportedAsset.metadata.linkedAssignees.some(
-      (assignee) =>
-        assignee.identityKind === "project_recurring_consent"
-        && assignee.projectProfileParticipantId === participantId
-        && assignee.assetFaceId === photoMaterialization.faceId,
-    ),
-  );
-  assert.ok(
-    exportedAsset.metadata.linkedOwnerScopeStates.some(
-      (scopeState) =>
-        scopeState.identityKind === "project_recurring_consent"
-        && scopeState.projectProfileParticipantId === participantId
-        && scopeState.effectiveScopes.some((effectiveScope) => effectiveScope.scopeKey === "photos" && effectiveScope.status === "granted"),
-    ),
-  );
-
   const revokeContext = await getPublicRecurringRevokeToken(anonClient, signedProjectConsent.revokeToken ?? "");
   assert.ok(revokeContext);
   assert.equal(revokeContext?.status, "available");
@@ -836,10 +807,10 @@ test("feature 058 bridges project-scoped recurring evidence into visible candida
   assert.equal(suppressions.length, 1);
 });
 
-test("feature 061 recurring whole-asset links export as whole_asset and are superseded by later exact-face links", async () => {
+test("feature 061 recurring whole-asset links are superseded by later exact-face links", async () => {
   const context = await createTenantContext();
   const anonClient = createAnonClient();
-  const { projectId, projectName } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const { projectId, workspaceId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const photoAssetId = await createUploadedPhotoAsset({
@@ -886,6 +857,7 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId,
     recurringProfileId: profileId,
   });
   const participantId = participant.payload.participant.id;
@@ -939,7 +911,12 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
     assetId: photoAssetId,
   });
   assert.equal(linkedPreview.wholeAssetLinkCount, 1);
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.identityKind, "project_recurring_consent");
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.linkMode, "whole_asset");
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.consentId, null);
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.projectProfileParticipantId, participantId);
   assert.equal(linkedPreview.wholeAssetLinks[0]?.recurring?.projectProfileParticipantId, participantId);
+  assert.equal(linkedPreview.wholeAssetLinks[0]?.recurring?.projectConsentState, "signed");
 
   const wholeAssetCandidates = await getAssetPreviewWholeAssetCandidates({
     supabase: adminClient,
@@ -952,34 +929,6 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
   );
   assert.ok(recurringCandidate?.currentWholeAssetLink);
   assert.equal(recurringCandidate?.currentExactFaceLink, null);
-
-  const exportRecords = await loadProjectExportRecords({
-    supabase: adminClient,
-    tenantId: context.tenantId,
-    projectId,
-  });
-  const preparedWholeAssetExport = buildPreparedProjectExport({
-    projectId,
-    projectName,
-    records: exportRecords,
-  });
-  const wholeAssetExport = preparedWholeAssetExport.assets.find((asset) => asset.assetId === photoAssetId);
-  assert.ok(wholeAssetExport);
-  assert.ok(
-    wholeAssetExport.metadata.linkedAssignees.some(
-      (assignee) =>
-        assignee.projectProfileParticipantId === participantId &&
-        assignee.linkMode === "whole_asset" &&
-        assignee.assetFaceId === null,
-    ),
-  );
-  assert.ok(
-    wholeAssetExport.metadata.linkedOwnerScopeStates.some(
-      (scopeState) =>
-        scopeState.projectProfileParticipantId === participantId
-        && scopeState.effectiveScopes.some((effectiveScope) => effectiveScope.scopeKey === "photos" && effectiveScope.status === "granted"),
-    ),
-  );
 
   const unlinkResult = await manualUnlinkWholeAssetFromRecurringProjectParticipant({
     supabase: adminClient,
@@ -1036,38 +985,15 @@ test("feature 061 recurring whole-asset links export as whole_asset and are supe
   assert.equal(exactPreview.wholeAssetLinkCount, 0);
   const exactFace = exactPreview.faces.find((face) => face.assetFaceId === photoMaterialization.faceId) ?? null;
   assert.ok(exactFace?.currentLink);
+  assert.equal(exactFace.currentLink.identityKind, "project_recurring_consent");
+  assert.equal(exactFace.currentLink.consentId, null);
   assert.equal(exactFace.currentLink.projectProfileParticipantId, participantId);
-
-  const exactExportRecords = await loadProjectExportRecords({
-    supabase: adminClient,
-    tenantId: context.tenantId,
-    projectId,
-  });
-  const preparedExactExport = buildPreparedProjectExport({
-    projectId,
-    projectName,
-    records: exactExportRecords,
-  });
-  const exactExport = preparedExactExport.assets.find((asset) => asset.assetId === photoAssetId);
-  assert.ok(exactExport);
-  assert.equal(
-    exactExport.metadata.linkedAssignees.some((assignee) => assignee.linkMode === "whole_asset"),
-    false,
-  );
-  assert.ok(
-    exactExport.metadata.linkedAssignees.some(
-      (assignee) =>
-        assignee.projectProfileParticipantId === participantId &&
-        assignee.linkMode === "face" &&
-        assignee.assetFaceId === photoMaterialization.faceId,
-    ),
-  );
 });
 
 test("feature 067 recurring project assignees participate in asset scope filtering", async () => {
   const context = await createTenantContext();
   const anonClient = createAnonClient();
-  const { projectId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const { projectId, workspaceId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const photoAssetId = await createUploadedPhotoAsset({
@@ -1082,6 +1008,7 @@ test("feature 067 recurring project assignees participate in asset scope filteri
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId,
     recurringProfileId: profileId,
   });
   const participantId = participant.payload.participant.id;
@@ -1141,7 +1068,7 @@ test("feature 067 recurring project assignees participate in asset scope filteri
 test("feature 064 whole-asset video links support one-off and recurring assignees, idempotency, and revoked owners", async () => {
   const context = await createTenantContext();
   const anonClient = createAnonClient();
-  const { projectId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
+  const { projectId, workspaceId } = await createProject(context.tenantId, context.ownerUserId, context.ownerClient);
   const templateId = await createPublishedTemplate(context.tenantId, context.ownerUserId, context.ownerClient);
   const profileId = await createProfile(context.tenantId, context.ownerUserId, context.ownerClient);
   const videoAssetId = await createUploadedVideoAsset({
@@ -1191,6 +1118,7 @@ test("feature 064 whole-asset video links support one-off and recurring assignee
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId,
+    workspaceId,
     recurringProfileId: profileId,
   });
   const participantId = participant.payload.participant.id;

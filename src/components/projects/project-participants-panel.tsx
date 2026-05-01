@@ -26,8 +26,8 @@ type ProjectParticipantsPanelProps = {
   templates: ConsentTemplateOption[];
   defaultTemplateId: string | null;
   defaultTemplateWarning?: string | null;
-  allowCaptureActions?: boolean;
-  allowCaptureMutations?: boolean;
+  allowConsentActions?: boolean;
+  allowConsentMutations?: boolean;
   profileHeadshotUrls?: Record<
     string,
     {
@@ -386,8 +386,8 @@ export function ProjectParticipantsPanelView({
   templates,
   defaultTemplateId,
   defaultTemplateWarning,
-  allowCaptureActions = true,
-  allowCaptureMutations = allowCaptureActions,
+  allowConsentActions = true,
+  allowConsentMutations = allowConsentActions,
   profileHeadshotUrls,
   router,
 }: ProjectParticipantsPanelViewProps) {
@@ -404,7 +404,7 @@ export function ProjectParticipantsPanelView({
         </p>
       ) : null}
 
-      {allowCaptureMutations ? (
+      {allowConsentMutations ? (
         <AddProjectProfileParticipantForm
           projectId={projectId}
           workspaceId={workspaceId}
@@ -487,14 +487,14 @@ export function ProjectParticipantsPanelView({
                     </p>
                   ) : null}
 
-                  {allowCaptureActions ? (
+                  {allowConsentActions ? (
                     <ProjectProfileParticipantActions
                       projectId={projectId}
                       workspaceId={workspaceId}
                       participant={participant}
                       templates={templates}
                       defaultTemplateId={defaultTemplateId}
-                      allowCreateRequest={allowCaptureMutations}
+                      allowCreateRequest={allowConsentMutations}
                       router={router}
                     />
                   ) : null}

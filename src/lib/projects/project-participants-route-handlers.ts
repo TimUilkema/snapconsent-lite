@@ -1,4 +1,5 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { buildCorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
 
 type AuthenticatedRouteClient = {
   auth: {
@@ -38,7 +39,25 @@ type ProjectRouteContext = {
 type AddProjectProfileParticipantDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  loadProjectWorkflowRowForAccess: (
+    client: AuthenticatedRouteClient,
+    tenantId: string,
+    projectId: string,
+  ) => Promise<{
+    finalized_at: string | null;
+    correction_state: "none" | "open";
+    correction_opened_at: string | null;
+    correction_source_release_id: string | null;
+  }>;
   requireWorkspaceCaptureMutationAccessForRequest: (input: {
+    supabase: AuthenticatedRouteClient;
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    requestedWorkspaceId?: string | null;
+    capabilityKey?: "capture.create_recurring_project_consent_requests";
+  }) => Promise<unknown>;
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
     userId: string;
@@ -61,13 +80,38 @@ type AddProjectProfileParticipantDependencies = {
 type CreateProjectProfileConsentRequestDependencies = {
   createClient: () => Promise<AuthenticatedRouteClient>;
   resolveTenantId: (client: AuthenticatedRouteClient) => Promise<string | null>;
+  loadProjectWorkflowRowForAccess: (
+    client: AuthenticatedRouteClient,
+    tenantId: string,
+    projectId: string,
+  ) => Promise<{
+    finalized_at: string | null;
+    correction_state: "none" | "open";
+    correction_opened_at: string | null;
+    correction_source_release_id: string | null;
+  }>;
   requireWorkspaceCaptureMutationAccessForRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
     userId: string;
     projectId: string;
     requestedWorkspaceId?: string | null;
+    capabilityKey?: "capture.create_recurring_project_consent_requests";
   }) => Promise<unknown>;
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest: (input: {
+    supabase: AuthenticatedRouteClient;
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    requestedWorkspaceId?: string | null;
+  }) => Promise<{
+    project: {
+      finalized_at: string | null;
+      correction_state: "none" | "open";
+      correction_opened_at: string | null;
+      correction_source_release_id: string | null;
+    };
+  }>;
   createProjectProfileConsentRequest: (input: {
     supabase: AuthenticatedRouteClient;
     tenantId: string;
@@ -77,6 +121,7 @@ type CreateProjectProfileConsentRequestDependencies = {
     participantId: string;
     consentTemplateId?: string | null;
     idempotencyKey: string;
+    correctionProvenance?: ReturnType<typeof buildCorrectionRequestProvenance> | null;
   }) => Promise<{
     status: number;
     payload: unknown;
@@ -122,17 +167,30 @@ export async function handleAddProjectProfileParticipantPost(
     }
 
     const { projectId } = await context.params;
+    const project = await dependencies.loadProjectWorkflowRowForAccess(supabase, tenantId, projectId);
     const workspaceId = String(body.workspaceId ?? "").trim();
     if (!workspaceId) {
       throw new HttpError(400, "workspace_required", "Project workspace is required.");
     }
-    await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
-      supabase,
-      tenantId,
-      userId: user.id,
-      projectId,
-      requestedWorkspaceId: workspaceId,
-    });
+    if (project.finalized_at !== null && project.correction_state === "open") {
+      await dependencies.requireWorkspaceCorrectionConsentIntakeAccessForRequest({
+        supabase,
+        tenantId,
+        userId: user.id,
+        projectId,
+        requestedWorkspaceId: workspaceId,
+        capabilityKey: "capture.create_recurring_project_consent_requests",
+      });
+    } else {
+      await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
+        supabase,
+        tenantId,
+        userId: user.id,
+        projectId,
+        requestedWorkspaceId: workspaceId,
+        capabilityKey: "capture.create_recurring_project_consent_requests",
+      });
+    }
     const result = await dependencies.addProjectProfileParticipant({
       supabase,
       tenantId,
@@ -177,17 +235,32 @@ export async function handleCreateProjectProfileConsentRequestPost(
 
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() ?? "";
     const { projectId, participantId } = await context.params;
+    const project = await dependencies.loadProjectWorkflowRowForAccess(supabase, tenantId, projectId);
     const workspaceId = String(body?.workspaceId ?? "").trim();
     if (!workspaceId) {
       throw new HttpError(400, "workspace_required", "Project workspace is required.");
     }
-    await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
-      supabase,
-      tenantId,
-      userId: user.id,
-      projectId,
-      requestedWorkspaceId: workspaceId,
-    });
+    const correctionAccess = project.finalized_at !== null && project.correction_state === "open"
+      ? await dependencies.requireWorkspaceCorrectionConsentIntakeAccessForRequest({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          requestedWorkspaceId: workspaceId,
+        })
+      : null;
+
+    if (!correctionAccess) {
+      await dependencies.requireWorkspaceCaptureMutationAccessForRequest({
+        supabase,
+        tenantId,
+        userId: user.id,
+        projectId,
+        requestedWorkspaceId: workspaceId,
+        capabilityKey: "capture.create_recurring_project_consent_requests",
+      });
+    }
+
     const result = await dependencies.createProjectProfileConsentRequest({
       supabase,
       tenantId,
@@ -197,6 +270,7 @@ export async function handleCreateProjectProfileConsentRequestPost(
       participantId,
       consentTemplateId: typeof body?.consentTemplateId === "string" ? body.consentTemplateId : null,
       idempotencyKey,
+      correctionProvenance: correctionAccess ? buildCorrectionRequestProvenance(correctionAccess.project) : null,
     });
 
     return Response.json(result.payload, { status: result.status });

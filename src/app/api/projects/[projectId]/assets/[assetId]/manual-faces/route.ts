@@ -1,6 +1,6 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createManualAssetFace } from "@/lib/matching/manual-asset-faces";
-import { loadWorkspaceScopedRow, requireWorkspaceReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
+import { loadWorkspaceScopedRow, requireWorkspaceCorrectionReviewMutationAccessForRow } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
@@ -50,7 +50,7 @@ export async function POST(request: Request, context: RouteContext) {
       notFoundCode: "asset_not_found",
       notFoundMessage: "Asset not found.",
     });
-    await requireWorkspaceReviewMutationAccessForRow({
+    await requireWorkspaceCorrectionReviewMutationAccessForRow({
       supabase,
       tenantId,
       userId: user.id,

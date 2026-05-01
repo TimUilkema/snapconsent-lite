@@ -825,6 +825,10 @@ export async function listRecurringProfilesPageData(
   input: ListRecurringProfilesPageDataInput,
 ): Promise<RecurringProfilesPageData> {
   const access = await resolveProfilesAccess(input.supabase, input.tenantId, input.userId);
+  if (!access.canViewProfiles) {
+    throw new HttpError(403, "recurring_profile_view_forbidden", "You do not have access to recurring profiles.");
+  }
+
   const normalizedQuery = normalizeSearchQuery(input.q);
 
   const [

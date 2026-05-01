@@ -75,6 +75,9 @@ type RecurringConsentRequestScopeRow = {
   workspace_id: string | null;
   consent_kind: "baseline" | "project";
   consent_template_id: string;
+  request_source: "normal" | "correction";
+  correction_opened_at_snapshot: string | null;
+  correction_source_release_id_snapshot: string | null;
 };
 
 export type PublicRecurringConsentRequestScope = {
@@ -85,6 +88,9 @@ export type PublicRecurringConsentRequestScope = {
   workspaceId: string | null;
   consentKind: "baseline" | "project";
   consentTemplateId: string;
+  requestSource: "normal" | "correction";
+  correctionOpenedAtSnapshot: string | null;
+  correctionSourceReleaseIdSnapshot: string | null;
 };
 
 type RecurringProfileRow = {
@@ -128,7 +134,9 @@ async function loadRecurringConsentRequestScope(requestId: string) {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("recurring_profile_consent_requests")
-    .select("id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id")
+    .select(
+      "id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot",
+    )
     .eq("id", requestId)
     .maybeSingle();
 
@@ -143,7 +151,9 @@ async function loadRecurringConsentRequestScopeByToken(token: string) {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("recurring_profile_consent_requests")
-    .select("id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id")
+    .select(
+      "id, tenant_id, profile_id, project_id, workspace_id, consent_kind, consent_template_id, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot",
+    )
     .eq("token_hash", hashPublicToken(token))
     .maybeSingle();
 
@@ -170,6 +180,9 @@ export async function resolvePublicRecurringConsentRequestScope(
     workspaceId: scope.workspace_id,
     consentKind: scope.consent_kind,
     consentTemplateId: scope.consent_template_id,
+    requestSource: scope.request_source === "correction" ? "correction" : "normal",
+    correctionOpenedAtSnapshot: scope.correction_opened_at_snapshot,
+    correctionSourceReleaseIdSnapshot: scope.correction_source_release_id_snapshot,
   };
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import { assertProjectWorkflowMutable } from "@/lib/projects/project-workflow-service";
@@ -18,6 +18,8 @@ import {
   StructuredFieldsError,
 } from "@/lib/templates/structured-fields";
 import { getTenantMembershipRole } from "@/lib/tenant/permissions";
+import { roleHasCapability } from "@/lib/tenant/role-capabilities";
+import { userHasTenantCustomRoleCapability } from "@/lib/tenant/tenant-custom-role-capabilities";
 
 type TemplateRow = {
   id: string;
@@ -130,6 +132,22 @@ type ProjectDefaultTemplateInput = {
 type TemplateVersionRpcRow = TemplateRow & {
   reused_existing_draft: boolean;
 };
+
+function createServiceRoleClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) {
+    throw new Error("Missing Supabase service role configuration.");
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
 
 function mapTemplateSummary(row: TemplateRow): TemplateSummary {
   return {
@@ -351,9 +369,19 @@ export async function resolveTemplateManagementAccess(
     throw new HttpError(403, "no_tenant_membership", "Tenant membership is required.");
   }
 
+  const fixedRoleCanManage = roleHasCapability(role, "templates.manage");
+  const customRoleCanManage = fixedRoleCanManage
+    ? false
+    : await userHasTenantCustomRoleCapability({
+        supabase,
+        tenantId,
+        userId,
+        capabilityKey: "templates.manage",
+      });
+
   return {
     role,
-    canManageTemplates: role === "owner" || role === "admin",
+    canManageTemplates: fixedRoleCanManage || customRoleCanManage,
   };
 }
 
@@ -788,7 +816,8 @@ export async function setProjectDefaultTemplate(input: ProjectDefaultTemplateInp
     throw new HttpError(403, "project_default_forbidden", "Only workspace owners and admins can change the project default template.");
   }
 
-  await assertProjectWorkflowMutable(input.supabase, input.tenantId, input.projectId);
+  const admin = createServiceRoleClient();
+  await assertProjectWorkflowMutable(admin, input.tenantId, input.projectId);
 
   if (input.templateId) {
     const template = await getVisiblePublishedTemplateById(input.supabase, input.tenantId, input.templateId);
@@ -797,7 +826,8 @@ export async function setProjectDefaultTemplate(input: ProjectDefaultTemplateInp
     }
   }
 
-  const { error: updateError } = await input.supabase
+  // Project default-template changes are template-management actions, not broad project-management grants.
+  const { error: updateError } = await admin
     .from("projects")
     .update({
       default_consent_template_id: input.templateId,

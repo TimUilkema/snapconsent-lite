@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { createProjectExportResponse } from "../src/lib/project-export/response";
 import { HttpError } from "../src/lib/http/errors";
 import {
   applyWorkspaceWorkflowTransition,
@@ -15,8 +14,8 @@ import {
   assertNoPostgrestError,
   createAuthUserWithRetry,
   createPhotographerProjectWorkspace,
+  createReviewerRoleAssignment,
   getDefaultProjectWorkspaceId,
-  signInClient,
 } from "./helpers/supabase-test-client";
 
 type WorkflowIntegrationContext = {
@@ -27,14 +26,12 @@ type WorkflowIntegrationContext = {
   ownerUserId: string;
   reviewerUserId: string;
   photographerUserId: string;
-  reviewerClient: Awaited<ReturnType<typeof signInClient>>;
 };
 
 async function createWorkflowContext(): Promise<WorkflowIntegrationContext> {
   const owner = await createAuthUserWithRetry(adminClient, "feature073-owner");
   const reviewer = await createAuthUserWithRetry(adminClient, "feature073-reviewer");
   const photographer = await createAuthUserWithRetry(adminClient, "feature073-photographer");
-  const reviewerClient = await signInClient(reviewer.email, reviewer.password);
 
   const { data: tenant, error: tenantError } = await adminClient
     .from("tenants")
@@ -88,6 +85,11 @@ async function createWorkflowContext(): Promise<WorkflowIntegrationContext> {
     photographerUserId: photographer.userId,
     name: "South hall capture",
   });
+  await createReviewerRoleAssignment({
+    tenantId: tenant.id,
+    userId: reviewer.userId,
+    createdBy: owner.userId,
+  });
 
   return {
     tenantId: tenant.id,
@@ -97,7 +99,6 @@ async function createWorkflowContext(): Promise<WorkflowIntegrationContext> {
     ownerUserId: owner.userId,
     reviewerUserId: reviewer.userId,
     photographerUserId: photographer.userId,
-    reviewerClient,
   };
 }
 
@@ -170,7 +171,7 @@ test("feature 073 workflow service applies transitions, derives readiness, and k
   );
 });
 
-test("feature 073 finalization is stored explicitly, idempotent, and does not block export", async () => {
+test("feature 073 finalization is stored explicitly, idempotent, and closes public submissions", async () => {
   const context = await createWorkflowContext();
 
   for (const workspaceId of [context.defaultWorkspaceId, context.secondWorkspaceId]) {
@@ -211,13 +212,20 @@ test("feature 073 finalization is stored explicitly, idempotent, and does not bl
   assert.equal(finalizeRetry.changed, false);
   assert.equal(finalizeRetry.projectWorkflow.workflowState, "finalized");
 
-  const exportResponse = await createProjectExportResponse({
-    authSupabase: context.reviewerClient,
-    adminSupabase: adminClient,
-    projectId: context.projectId,
-    requestedWorkspaceId: context.defaultWorkspaceId,
-  });
-  assert.equal(exportResponse.headers.get("content-type"), "application/zip");
+  await assert.rejects(
+    assertWorkspacePublicSubmissionAllowed(
+      adminClient,
+      context.tenantId,
+      context.projectId,
+      context.defaultWorkspaceId,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 409);
+      assert.equal(error.code, "project_finalized");
+      return true;
+    },
+  );
 });
 
 test("feature 073 schema pair checks reject partial workflow actor timestamps", async () => {

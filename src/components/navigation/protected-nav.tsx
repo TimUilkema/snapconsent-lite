@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 export const PROTECTED_NAV_ITEMS = [
   { href: "/dashboard", key: "dashboard" },
   { href: "/projects", key: "projects" },
+  { href: "/media-library", key: "mediaLibrary" },
   { href: "/members", key: "members" },
   { href: "/profiles", key: "profiles" },
   { href: "/templates", key: "templates" },
@@ -17,7 +18,13 @@ export type ProtectedNavStrings = {
 } & Record<(typeof PROTECTED_NAV_ITEMS)[number]["key"], string>;
 
 export function isProtectedNavActivePath(pathname: string, href: string) {
-  if (href === "/projects" || href === "/members" || href === "/profiles" || href === "/templates") {
+  if (
+    href === "/projects"
+    || href === "/media-library"
+    || href === "/members"
+    || href === "/profiles"
+    || href === "/templates"
+  ) {
     return pathname === href || pathname.startsWith(`${href}/`);
   }
 
@@ -28,10 +35,38 @@ type ProtectedNavViewProps = {
   pathname: string;
   strings: ProtectedNavStrings;
   showMembers?: boolean;
+  showMediaLibrary?: boolean;
+  showProfiles?: boolean;
+  showTemplates?: boolean;
 };
 
-export function ProtectedNavView({ pathname, strings, showMembers = false }: ProtectedNavViewProps) {
-  const items = PROTECTED_NAV_ITEMS.filter((item) => showMembers || item.href !== "/members");
+export function ProtectedNavView({
+  pathname,
+  strings,
+  showMembers = false,
+  showMediaLibrary = false,
+  showProfiles = false,
+  showTemplates = false,
+}: ProtectedNavViewProps) {
+  const items = PROTECTED_NAV_ITEMS.filter((item) => {
+    if (!showMembers && item.href === "/members") {
+      return false;
+    }
+
+    if (!showMediaLibrary && item.href === "/media-library") {
+      return false;
+    }
+
+    if (!showProfiles && item.href === "/profiles") {
+      return false;
+    }
+
+    if (!showTemplates && item.href === "/templates") {
+      return false;
+    }
+
+    return true;
+  });
 
   return (
     <nav aria-label={strings.ariaPrimary} className="flex flex-wrap items-center gap-2">
@@ -59,9 +94,17 @@ export function ProtectedNavView({ pathname, strings, showMembers = false }: Pro
 
 type ProtectedNavProps = {
   showMembers?: boolean;
+  showMediaLibrary?: boolean;
+  showProfiles?: boolean;
+  showTemplates?: boolean;
 };
 
-export function ProtectedNav({ showMembers = false }: ProtectedNavProps) {
+export function ProtectedNav({
+  showMembers = false,
+  showMediaLibrary = false,
+  showProfiles = false,
+  showTemplates = false,
+}: ProtectedNavProps) {
   const pathname = usePathname();
   const t = useTranslations("nav");
 
@@ -72,11 +115,15 @@ export function ProtectedNav({ showMembers = false }: ProtectedNavProps) {
         ariaPrimary: t("ariaPrimary"),
         dashboard: t("dashboard"),
         projects: t("projects"),
+        mediaLibrary: t("mediaLibrary"),
         members: t("members"),
         profiles: t("profiles"),
         templates: t("templates"),
       }}
       showMembers={showMembers}
+      showMediaLibrary={showMediaLibrary}
+      showProfiles={showProfiles}
+      showTemplates={showTemplates}
     />
   );
 }

@@ -89,6 +89,7 @@ export async function POST(request: Request, context: RouteContext) {
       userId: user.id,
       projectId,
       requestedWorkspaceId: body.workspaceId,
+      capabilityKey: "capture.upload_assets",
     });
     const assetType = normalizeAssetType(body.assetType);
     const files = Array.isArray(body.files) ? body.files : [];

@@ -118,6 +118,9 @@ function mapMutationError(error: unknown, fallbackCode: string) {
       return new HttpError(401, "unauthenticated", "Authentication required.");
     case "tenant_member_management_forbidden":
       return new HttpError(403, "tenant_member_management_forbidden", "Only workspace owners and admins can manage members.");
+    case "organization_user_invite_forbidden":
+    case "tenant_membership_invite_forbidden":
+      return new HttpError(403, normalized.message, "You do not have access to manage this organization invite.");
     case "invalid_invite_email":
       return new HttpError(400, "invalid_invite_email", "Enter a valid email address.");
     case "invalid_membership_role":

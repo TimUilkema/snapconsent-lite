@@ -24,14 +24,18 @@ type WorkspaceWorkflowCard = {
 };
 
 type WorkspaceAction = "handoff" | "validate" | "needs_changes" | "reopen";
-type WorkflowAction = WorkspaceAction | "finalize";
+type WorkflowAction = WorkspaceAction | "finalize" | "start_correction";
 type WorkflowTranslations = ReturnType<typeof useTranslations>;
 
 type ProjectWorkflowControlsProps = {
   projectId: string;
   projectStatus: "active" | "archived";
-  canCaptureProjects: boolean;
-  canReviewProjects: boolean;
+  canHandoffWorkspace: boolean;
+  canReviewWorkspace: boolean;
+  canValidateCorrectionWorkspace: boolean;
+  canFinalizeProject: boolean;
+  canStartProjectCorrection: boolean;
+  canReopenWorkspaceForCorrection: boolean;
   selectedWorkspace: WorkspaceWorkflowCard | null;
   selectedWorkspaceSummary: WorkspaceWorkflowSummary | null;
   projectWorkflow: ProjectWorkflowSummary;
@@ -42,6 +46,7 @@ type ProjectWorkflowControlsViewProps = ProjectWorkflowControlsProps & {
   error: string | null;
   onWorkspaceAction: (action: WorkspaceAction) => void;
   onFinalize: () => void;
+  onStartCorrection: () => void;
 };
 
 function getWorkspaceStateTone(state: WorkspaceWorkflowState) {
@@ -61,7 +66,10 @@ function getWorkspaceStateTone(state: WorkspaceWorkflowState) {
 function getProjectStateTone(state: ProjectWorkflowSummary["workflowState"]) {
   switch (state) {
     case "ready_to_finalize":
+    case "correction_ready_to_finalize":
       return "border-amber-200 bg-amber-50 text-amber-800";
+    case "correction_open":
+      return "border-sky-200 bg-sky-50 text-sky-800";
     case "finalized":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "active":
@@ -94,6 +102,10 @@ function getProjectStateLabel(
   switch (state) {
     case "ready_to_finalize":
       return t("projectStates.ready_to_finalize");
+    case "correction_open":
+      return t("projectStates.correction_open");
+    case "correction_ready_to_finalize":
+      return t("projectStates.correction_ready_to_finalize");
     case "finalized":
       return t("projectStates.finalized");
     case "active":
@@ -148,8 +160,9 @@ function getWorkspaceLockMessage(
     projectStatus: "active" | "archived";
     projectWorkflow: ProjectWorkflowSummary;
     selectedWorkspace: WorkspaceWorkflowCard | null;
-    canCaptureProjects: boolean;
-    canReviewProjects: boolean;
+    canHandoffWorkspace: boolean;
+    canReviewWorkspace: boolean;
+    canValidateCorrectionWorkspace: boolean;
   },
   t: WorkflowTranslations,
 ) {
@@ -157,19 +170,34 @@ function getWorkspaceLockMessage(
     return t("projectArchivedReadOnly");
   }
 
+  if (input.projectWorkflow.correctionState === "open") {
+    if (
+      input.selectedWorkspace?.workflow_state === "validated" &&
+      input.canValidateCorrectionWorkspace
+    ) {
+      return t("reviewLockedCorrectionValidated");
+    }
+
+    if (input.canHandoffWorkspace) {
+      return t("projectCorrectionCaptureLocked");
+    }
+
+    return null;
+  }
+
   if (input.projectWorkflow.workflowState === "finalized") {
     return t("projectFinalizedReadOnly");
   }
 
-  if (input.selectedWorkspace?.workflow_state === "validated" && input.canReviewProjects) {
+  if (input.selectedWorkspace?.workflow_state === "validated" && input.canReviewWorkspace) {
     return t("reviewLockedValidated");
   }
 
-  if (input.selectedWorkspace?.workflow_state === "validated" && input.canCaptureProjects) {
+  if (input.selectedWorkspace?.workflow_state === "validated" && input.canHandoffWorkspace) {
     return t("captureLockedValidated");
   }
 
-  if (input.selectedWorkspace?.workflow_state === "handed_off" && input.canCaptureProjects) {
+  if (input.selectedWorkspace?.workflow_state === "handed_off" && input.canHandoffWorkspace) {
     return t("captureLockedHandedOff");
   }
 
@@ -177,10 +205,13 @@ function getWorkspaceLockMessage(
 }
 
 export function ProjectWorkflowControlsView({
-  projectId: _projectId,
   projectStatus,
-  canCaptureProjects,
-  canReviewProjects,
+  canHandoffWorkspace,
+  canReviewWorkspace,
+  canValidateCorrectionWorkspace,
+  canFinalizeProject,
+  canStartProjectCorrection,
+  canReopenWorkspaceForCorrection,
   selectedWorkspace,
   selectedWorkspaceSummary,
   projectWorkflow,
@@ -188,6 +219,7 @@ export function ProjectWorkflowControlsView({
   error,
   onWorkspaceAction,
   onFinalize,
+  onStartCorrection,
 }: ProjectWorkflowControlsViewProps) {
   const locale = useLocale();
   const t = useTranslations("projects.detail.workflow");
@@ -196,17 +228,26 @@ export function ProjectWorkflowControlsView({
     () => buildWorkspaceBlockers(selectedWorkspaceSummary, t),
     [selectedWorkspaceSummary, t],
   );
+  const correctionOpen = projectWorkflow.correctionState === "open";
   const projectMutationsOpen = projectStatus === "active" && projectWorkflow.workflowState !== "finalized";
   const lockMessage = getWorkspaceLockMessage(
     {
       projectStatus,
       projectWorkflow,
       selectedWorkspace,
-      canCaptureProjects,
-      canReviewProjects,
+      canHandoffWorkspace,
+      canReviewWorkspace,
+      canValidateCorrectionWorkspace,
     },
     t,
   );
+  const canValidateWorkspace = correctionOpen
+    ? canValidateCorrectionWorkspace
+    : canReviewWorkspace;
+  const canNeedsChangesWorkspace = !correctionOpen && canReviewWorkspace;
+  const canReopenWorkspace = correctionOpen
+    ? canReopenWorkspaceForCorrection
+    : canReviewWorkspace;
 
   return (
     <div className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
@@ -228,7 +269,11 @@ export function ProjectWorkflowControlsView({
             )}
             {selectedWorkspace ? (
               <p className="mt-2 text-sm text-zinc-600">
-                {selectedWorkspace.workflow_state === "validated" && selectedWorkspace.validated_at
+                {correctionOpen && selectedWorkspace.workflow_state === "handed_off" && selectedWorkspace.reopened_at
+                  ? t("workspaceCorrectionReopenedAt", {
+                      date: formatDateTime(selectedWorkspace.reopened_at, locale),
+                    })
+                  : selectedWorkspace.workflow_state === "validated" && selectedWorkspace.validated_at
                   ? t("workspaceValidatedAt", {
                       date: formatDateTime(selectedWorkspace.validated_at, locale),
                     })
@@ -259,7 +304,8 @@ export function ProjectWorkflowControlsView({
           {selectedWorkspace ? (
             <div className="flex flex-wrap gap-2">
               {projectMutationsOpen
-              && canCaptureProjects
+              && !correctionOpen
+              && canHandoffWorkspace
               && (selectedWorkspace.workflow_state === "active" || selectedWorkspace.workflow_state === "needs_changes") ? (
                 <button
                   type="button"
@@ -270,7 +316,7 @@ export function ProjectWorkflowControlsView({
                   {busyAction === "handoff" ? t("actions.handoffPending") : t("actions.handoff")}
                 </button>
                 ) : null}
-              {projectMutationsOpen && canReviewProjects && selectedWorkspace.workflow_state === "handed_off" ? (
+              {projectMutationsOpen && canValidateWorkspace && selectedWorkspace.workflow_state === "handed_off" ? (
                 <>
                   <button
                     type="button"
@@ -280,26 +326,34 @@ export function ProjectWorkflowControlsView({
                   >
                     {busyAction === "validate" ? t("actions.validatePending") : t("actions.validate")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onWorkspaceAction("needs_changes")}
-                    disabled={busyAction !== null}
-                    className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60"
-                  >
-                    {busyAction === "needs_changes"
-                      ? t("actions.needsChangesPending")
-                      : t("actions.needsChanges")}
-                  </button>
+                  {canNeedsChangesWorkspace ? (
+                    <button
+                      type="button"
+                      onClick={() => onWorkspaceAction("needs_changes")}
+                      disabled={busyAction !== null}
+                      className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60"
+                    >
+                      {busyAction === "needs_changes"
+                        ? t("actions.needsChangesPending")
+                        : t("actions.needsChanges")}
+                    </button>
+                  ) : null}
                 </>
               ) : null}
-              {projectMutationsOpen && canReviewProjects && selectedWorkspace.workflow_state === "validated" ? (
+              {projectMutationsOpen && canReopenWorkspace && selectedWorkspace.workflow_state === "validated" ? (
                 <button
                   type="button"
                   onClick={() => onWorkspaceAction("reopen")}
                   disabled={busyAction !== null}
                   className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60"
                 >
-                  {busyAction === "reopen" ? t("actions.reopenPending") : t("actions.reopen")}
+                  {busyAction === "reopen"
+                    ? correctionOpen
+                      ? t("actions.reopenForCorrectionPending")
+                      : t("actions.reopenPending")
+                    : correctionOpen
+                      ? t("actions.reopenForCorrection")
+                      : t("actions.reopen")}
                 </button>
               ) : null}
             </div>
@@ -316,12 +370,30 @@ export function ProjectWorkflowControlsView({
             </span>
           </div>
           <p className="mt-2 text-sm text-zinc-600">
-            {t("projectProgress", {
-              validated: projectWorkflow.validatedWorkspaceCount,
-              total: projectWorkflow.totalWorkspaceCount,
-            })}
+            {correctionOpen
+              ? t("projectCorrectionProgress", {
+                  validated: projectWorkflow.validatedWorkspaceCount,
+                  total: projectWorkflow.totalWorkspaceCount,
+                })
+              : t("projectProgress", {
+                  validated: projectWorkflow.validatedWorkspaceCount,
+                  total: projectWorkflow.totalWorkspaceCount,
+                })}
           </p>
-          {projectWorkflow.finalizedAt ? (
+          {correctionOpen && projectWorkflow.correctionOpenedAt ? (
+            <>
+              <p className="mt-2 text-sm text-zinc-600">
+                {t("projectCorrectionOpenedAt", {
+                  date: formatDateTime(projectWorkflow.correctionOpenedAt, locale),
+                })}
+              </p>
+              <p className="mt-2 text-sm text-zinc-600">
+                {projectWorkflow.workflowState === "correction_ready_to_finalize"
+                  ? t("projectCorrectionReadyHelper")
+                  : t("projectCorrectionOpenHelper")}
+              </p>
+            </>
+          ) : projectWorkflow.finalizedAt ? (
             <p className="mt-2 text-sm text-zinc-600">
               {t("projectFinalizedAt", {
                 date: formatDateTime(projectWorkflow.finalizedAt, locale),
@@ -333,14 +405,34 @@ export function ProjectWorkflowControlsView({
             <p className="mt-2 text-sm text-zinc-600">{t("projectActiveHelper")}</p>
           )}
 
-          {projectMutationsOpen && canReviewProjects && projectWorkflow.workflowState === "ready_to_finalize" ? (
+          {projectStatus === "active" && canStartProjectCorrection && projectWorkflow.workflowState === "finalized" ? (
+            <button
+              type="button"
+              onClick={onStartCorrection}
+              disabled={busyAction !== null}
+              className="mt-3 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-60"
+            >
+              {busyAction === "start_correction" ? t("actions.startCorrectionPending") : t("actions.startCorrection")}
+            </button>
+          ) : null}
+
+          {projectMutationsOpen
+          && canFinalizeProject
+          && (projectWorkflow.workflowState === "ready_to_finalize"
+            || projectWorkflow.workflowState === "correction_ready_to_finalize") ? (
             <button
               type="button"
               onClick={onFinalize}
               disabled={busyAction !== null}
               className="mt-3 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
             >
-              {busyAction === "finalize" ? t("actions.finalizePending") : t("actions.finalize")}
+              {busyAction === "finalize"
+                ? correctionOpen
+                  ? t("actions.finalizeCorrectionPending")
+                  : t("actions.finalizePending")
+                : correctionOpen
+                  ? t("actions.finalizeCorrection")
+                  : t("actions.finalize")}
             </button>
           ) : null}
         </div>
@@ -391,14 +483,25 @@ export function ProjectWorkflowControls(props: ProjectWorkflowControlsProps) {
       return;
     }
 
+    const workspaceActionPath =
+      action === "reopen" && props.projectWorkflow.correctionState === "open"
+        ? "correction-reopen"
+        : action === "needs_changes"
+          ? "needs-changes"
+          : action;
+
     void runAction(
       action,
-      `/api/projects/${props.projectId}/workspaces/${props.selectedWorkspace.id}/${action === "needs_changes" ? "needs-changes" : action}`,
+      `/api/projects/${props.projectId}/workspaces/${props.selectedWorkspace.id}/${workspaceActionPath}`,
     );
   }
 
   function handleFinalize() {
     void runAction("finalize", `/api/projects/${props.projectId}/finalize`);
+  }
+
+  function handleStartCorrection() {
+    void runAction("start_correction", `/api/projects/${props.projectId}/correction/start`);
   }
 
   return (
@@ -408,6 +511,7 @@ export function ProjectWorkflowControls(props: ProjectWorkflowControlsProps) {
       error={error}
       onWorkspaceAction={handleWorkspaceAction}
       onFinalize={handleFinalize}
+      onStartCorrection={handleStartCorrection}
     />
   );
 }

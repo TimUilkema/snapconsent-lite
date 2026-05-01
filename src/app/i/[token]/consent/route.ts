@@ -7,7 +7,10 @@ import { resolvePublicInviteContext, resolvePublicInviteUpgradeContext } from "@
 import { getPhotoFanoutBoundary } from "@/lib/matching/auto-match-fanout-continuations";
 import { enqueueConsentHeadshotReadyJob } from "@/lib/matching/auto-match-jobs";
 import { shouldEnqueueConsentHeadshotReadyOnSubmit } from "@/lib/matching/auto-match-trigger-conditions";
-import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
+import {
+  assertWorkspaceCorrectionPublicSubmissionAllowed,
+  assertWorkspacePublicSubmissionAllowed,
+} from "@/lib/projects/project-workflow-service";
 import { redirectRelative } from "@/lib/http/redirect-relative";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -99,12 +102,30 @@ export async function POST(request: Request, context: RouteContext) {
     const supabase = await createClient();
     const adminSupabase = createAdminClient();
     const inviteContext = await resolvePublicInviteContext(adminSupabase, token);
-    await assertWorkspacePublicSubmissionAllowed(
-      adminSupabase,
-      inviteContext.tenantId,
-      inviteContext.projectId,
-      inviteContext.workspaceId,
-    );
+    try {
+      await assertWorkspacePublicSubmissionAllowed(
+        adminSupabase,
+        inviteContext.tenantId,
+        inviteContext.projectId,
+        inviteContext.workspaceId,
+      );
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.code !== "project_finalized") {
+        throw error;
+      }
+
+      await assertWorkspaceCorrectionPublicSubmissionAllowed(
+        adminSupabase,
+        inviteContext.tenantId,
+        inviteContext.projectId,
+        inviteContext.workspaceId,
+        {
+          requestSource: inviteContext.requestSource,
+          correctionOpenedAtSnapshot: inviteContext.correctionOpenedAtSnapshot,
+          correctionSourceReleaseIdSnapshot: inviteContext.correctionSourceReleaseIdSnapshot,
+        },
+      );
+    }
     const consent = await submitConsent({
       supabase,
       token,

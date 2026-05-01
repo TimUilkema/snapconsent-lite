@@ -1,7 +1,10 @@
 import { createAssetWithIdempotency } from "@/lib/assets/create-asset";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { resolvePublicInviteContext } from "@/lib/invites/public-invite-context";
-import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
+import {
+  assertWorkspaceCorrectionPublicSubmissionAllowed,
+  assertWorkspacePublicSubmissionAllowed,
+} from "@/lib/projects/project-workflow-service";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 type RouteContext = {
@@ -47,12 +50,30 @@ export async function POST(request: Request, context: RouteContext) {
 
     const admin = createAdminClient();
     const invite = await resolvePublicInviteContext(admin, token);
-    await assertWorkspacePublicSubmissionAllowed(
-      admin,
-      invite.tenantId,
-      invite.projectId,
-      invite.workspaceId,
-    );
+    try {
+      await assertWorkspacePublicSubmissionAllowed(
+        admin,
+        invite.tenantId,
+        invite.projectId,
+        invite.workspaceId,
+      );
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.code !== "project_finalized") {
+        throw error;
+      }
+
+      await assertWorkspaceCorrectionPublicSubmissionAllowed(
+        admin,
+        invite.tenantId,
+        invite.projectId,
+        invite.workspaceId,
+        {
+          requestSource: invite.requestSource,
+          correctionOpenedAtSnapshot: invite.correctionOpenedAtSnapshot,
+          correctionSourceReleaseIdSnapshot: invite.correctionSourceReleaseIdSnapshot,
+        },
+      );
+    }
     const result = await createAssetWithIdempotency({
       supabase: admin,
       tenantId: invite.tenantId,

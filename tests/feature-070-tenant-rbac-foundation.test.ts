@@ -30,6 +30,10 @@ import {
 type TenantRoleContext = {
   tenantId: string;
   projectId: string;
+  ownerUserId: string;
+  adminUserId: string;
+  reviewerUserId: string;
+  photographerUserId: string;
   ownerClient: SupabaseClient;
   adminUserClient: SupabaseClient;
   reviewerClient: SupabaseClient;
@@ -108,6 +112,10 @@ async function createTenantRoleContext(supabase: SupabaseClient): Promise<Tenant
   return {
     tenantId: tenant.id,
     projectId: project.id,
+    ownerUserId: owner.userId,
+    adminUserId: admin.userId,
+    reviewerUserId: reviewer.userId,
+    photographerUserId: photographer.userId,
     ownerClient,
     adminUserClient,
     reviewerClient,
@@ -208,6 +216,8 @@ test("tenant permission mapping distinguishes manager, capture, and review roles
     canCreateProjects: true,
     canCaptureProjects: true,
     canReviewProjects: true,
+    isReviewerEligible: false,
+    hasTenantWideReviewAccess: false,
   });
 
   assert.deepEqual(deriveTenantPermissionsFromRole("reviewer"), {
@@ -218,6 +228,8 @@ test("tenant permission mapping distinguishes manager, capture, and review roles
     canCreateProjects: false,
     canCaptureProjects: false,
     canReviewProjects: true,
+    isReviewerEligible: true,
+    hasTenantWideReviewAccess: false,
   });
 
   assert.deepEqual(deriveProjectPermissionsFromRole("photographer"), {
@@ -228,14 +240,18 @@ test("tenant permission mapping distinguishes manager, capture, and review roles
     canCreateProjects: false,
     canCaptureProjects: true,
     canReviewProjects: false,
+    isReviewerEligible: false,
+    hasTenantWideReviewAccess: false,
     canCreateOneOffInvites: true,
     canCreateRecurringProjectConsentRequests: true,
     canUploadAssets: true,
     canInitiateConsentUpgradeRequests: false,
+    canReviewSelectedProject: false,
+    reviewAccessSource: "none",
   });
 });
 
-test("reviewer role is accepted in memberships and SQL permission helpers expose the planned boundaries", async () => {
+test("reviewer role is accepted in memberships and SQL permission helpers expose assignment-gated boundaries", async () => {
   const context = await createTenantRoleContext(adminClient);
 
   const { data: ownerCanCreate } = await context.ownerClient.rpc("current_user_can_create_projects", {
@@ -262,7 +278,7 @@ test("reviewer role is accepted in memberships and SQL permission helpers expose
     p_tenant_id: context.tenantId,
     p_project_id: context.projectId,
   });
-  assert.equal(reviewerCanReview, true);
+  assert.equal(reviewerCanReview, false);
 
   const { data: reviewerCanCapture } = await context.reviewerClient.rpc("current_user_can_capture_project", {
     p_tenant_id: context.tenantId,
@@ -279,13 +295,125 @@ test("reviewer role is accepted in memberships and SQL permission helpers expose
     p_tenant_id: context.tenantId,
     p_project_id: context.projectId,
   });
-  assert.equal(photographerCanCapture, true);
+  assert.equal(photographerCanCapture, false);
 
   const { data: photographerCanReview } = await context.photographerClient.rpc("current_user_can_review_project", {
     p_tenant_id: context.tenantId,
     p_project_id: context.projectId,
   });
   assert.equal(photographerCanReview, false);
+});
+
+test("owner and admin authenticated clients can create projects and manage workspaces while reviewer and photographer remain blocked", async () => {
+  const context = await createTenantRoleContext(adminClient);
+
+  const { data: ownerProject, error: ownerProjectError } = await context.ownerClient
+    .from("projects")
+    .insert({
+      tenant_id: context.tenantId,
+      created_by: context.ownerUserId,
+      name: `Feature 070 Owner Project ${randomUUID()}`,
+      description: null,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(ownerProjectError, "owner inserts project through authenticated client");
+  assert.ok(ownerProject?.id);
+
+  const { data: ownerDefaultWorkspace, error: ownerDefaultWorkspaceError } = await adminClient
+    .from("project_workspaces")
+    .select("id, workspace_kind")
+    .eq("tenant_id", context.tenantId)
+    .eq("project_id", ownerProject.id)
+    .eq("workspace_kind", "default")
+    .maybeSingle();
+  assertNoPostgrestError(
+    ownerDefaultWorkspaceError,
+    "default workspace exists after owner project creation",
+  );
+  assert.equal(ownerDefaultWorkspace?.workspace_kind, "default");
+
+  const { data: adminProject, error: adminProjectError } = await context.adminUserClient
+    .from("projects")
+    .insert({
+      tenant_id: context.tenantId,
+      created_by: context.adminUserId,
+      name: `Feature 070 Admin Project ${randomUUID()}`,
+      description: null,
+    })
+    .select("id")
+    .single();
+  assertNoPostgrestError(adminProjectError, "admin inserts project through authenticated client");
+  assert.ok(adminProject?.id);
+
+  const { data: staffedWorkspace, error: staffedWorkspaceError } = await context.ownerClient
+    .from("project_workspaces")
+    .insert({
+      tenant_id: context.tenantId,
+      project_id: context.projectId,
+      workspace_kind: "photographer",
+      photographer_user_id: context.photographerUserId,
+      name: "Feature 070 Photographer Workspace",
+      created_by: context.ownerUserId,
+    })
+    .select("id, workspace_kind, photographer_user_id")
+    .single();
+  assertNoPostgrestError(
+    staffedWorkspaceError,
+    "owner inserts photographer workspace through authenticated client",
+  );
+  assert.equal(staffedWorkspace?.workspace_kind, "photographer");
+  assert.equal(staffedWorkspace?.photographer_user_id, context.photographerUserId);
+
+  const { data: photographerCanCaptureAssigned } = await context.photographerClient.rpc(
+    "current_user_can_capture_project",
+    {
+      p_tenant_id: context.tenantId,
+      p_project_id: context.projectId,
+    },
+  );
+  assert.equal(photographerCanCaptureAssigned, true);
+
+  const { error: reviewerProjectError } = await context.reviewerClient
+    .from("projects")
+    .insert({
+      tenant_id: context.tenantId,
+      created_by: context.reviewerUserId,
+      name: `Feature 070 Reviewer Project ${randomUUID()}`,
+      description: null,
+    })
+    .select("id")
+    .single();
+  assert.ok(reviewerProjectError);
+  assert.equal(reviewerProjectError.code, "42501");
+
+  const { error: photographerProjectError } = await context.photographerClient
+    .from("projects")
+    .insert({
+      tenant_id: context.tenantId,
+      created_by: context.photographerUserId,
+      name: `Feature 070 Photographer Project ${randomUUID()}`,
+      description: null,
+    })
+    .select("id")
+    .single();
+  assert.ok(photographerProjectError);
+  assert.equal(photographerProjectError.code, "42501");
+
+  const { error: reviewerWorkspaceError } = await context.reviewerClient
+    .from("project_workspaces")
+    .insert({
+      tenant_id: context.tenantId,
+      project_id: context.projectId,
+      workspace_kind: "photographer",
+      photographer_user_id: context.reviewerUserId,
+      name: "Feature 070 Reviewer Workspace",
+      created_by: context.reviewerUserId,
+    })
+    .select("id")
+    .single();
+  assert.ok(reviewerWorkspaceError);
+  assert.equal(reviewerWorkspaceError.code, "42501");
 });
 
 test("membership invite create-or-refresh reuses the pending row and acceptance reuses an existing account by email", async () => {

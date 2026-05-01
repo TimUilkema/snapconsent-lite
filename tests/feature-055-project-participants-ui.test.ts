@@ -336,7 +336,7 @@ test("project participants panel renders replacement request controls when an ac
   assert.match(markup, /Create replacement request/);
 });
 
-test("project participants panel keeps pending request share actions visible when capture mutations are locked", async () => {
+test("project participants panel keeps pending request share actions visible when consent mutations are locked", async () => {
   const { ProjectParticipantsPanelView } = await import(
     "../src/components/projects/project-participants-panel"
   );
@@ -360,8 +360,8 @@ test("project participants panel keeps pending request share actions visible whe
         ],
         defaultTemplateId: randomUUID(),
         defaultTemplateWarning: null,
-        allowCaptureActions: true,
-        allowCaptureMutations: false,
+        allowConsentActions: true,
+        allowConsentMutations: false,
         router: { refresh() {} },
       }),
     ),
@@ -371,4 +371,86 @@ test("project participants panel keeps pending request share actions visible whe
   assert.match(markup, /Open link/);
   assert.doesNotMatch(markup, /Add existing profile/);
   assert.doesNotMatch(markup, /Create project request/);
+});
+
+test("project participants panel can expose correction consent actions without capture permissions", async () => {
+  const { ProjectParticipantsPanelView } = await import(
+    "../src/components/projects/project-participants-panel"
+  );
+
+  const data: ProjectParticipantsPanelData = {
+    availableProfiles: [
+      {
+        id: randomUUID(),
+        fullName: "Casey Jordan",
+        email: "casey@example.com",
+        profileTypeLabel: "Volunteer",
+      },
+    ],
+    knownProfiles: [
+      {
+        participantId: randomUUID(),
+        projectId: randomUUID(),
+        createdAt: new Date().toISOString(),
+        profile: {
+          id: randomUUID(),
+          fullName: "Morgan Lee",
+          email: "morgan@example.com",
+          status: "active",
+          archivedAt: null,
+          profileType: null,
+        },
+        baselineConsentState: "signed",
+        matchingReadiness: {
+          state: "ready",
+          authorized: true,
+          currentHeadshotId: randomUUID(),
+          selectionFaceId: randomUUID(),
+          selectionStatus: "auto_selected",
+          materializationStatus: "completed",
+        },
+        projectConsent: {
+          state: "missing",
+          latestActivityAt: null,
+          pendingRequest: null,
+          activeConsent: null,
+          latestRevokedConsent: null,
+        },
+        actions: {
+          canCreateRequest: true,
+          canCopyLink: false,
+          canOpenLink: false,
+        },
+      },
+    ],
+  };
+
+  const markup = renderToStaticMarkup(
+    createElement(
+      NextIntlClientProvider,
+      { locale: "en", messages: enMessages },
+      createElement(ProjectParticipantsPanelView, {
+        projectId: randomUUID(),
+        workspaceId: randomUUID(),
+        data,
+        templates: [
+          {
+            id: randomUUID(),
+            name: "Project Consent",
+            version: "v3",
+            scope: "tenant",
+          },
+        ],
+        defaultTemplateId: null,
+        defaultTemplateWarning: "Correction consent only",
+        allowConsentActions: true,
+        allowConsentMutations: true,
+        router: { refresh() {} },
+      }),
+    ),
+  );
+
+  assert.match(markup, /Correction consent only/);
+  assert.match(markup, /Add existing profile/);
+  assert.match(markup, /Create project request/);
 });

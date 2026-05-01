@@ -336,6 +336,15 @@ Owners/admins only:
 - create project workspaces
 - assign photographers by creating one workspace per photographer
 
+Implementation note:
+The `project_workspaces` insert path must stay compatible with project creation. A new
+project auto-creates its default workspace, so the database-side workspace-manage check
+must key off owner/admin tenant membership directly rather than depending on an existing
+workspace row or a project-visibility lookup that can fail inside the insert/trigger path.
+Related guardrail: avoid self-referential select policies on `projects` and
+`project_workspaces` for owner/admin visibility, because `insert ... returning` depends on
+the new row being visible in the same statement.
+
 Reviewer assignment decision:
 
 - do not add reviewer assignment in 072

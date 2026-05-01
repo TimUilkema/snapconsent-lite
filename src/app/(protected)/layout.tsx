@@ -7,9 +7,15 @@ import { LanguageSwitch } from "@/components/i18n/language-switch";
 import { ActiveTenantSwitcher } from "@/components/navigation/active-tenant-switcher";
 import { ProtectedNav } from "@/components/navigation/protected-nav";
 import { HttpError } from "@/lib/http/errors";
+import { resolveProfilesAccess } from "@/lib/profiles/profile-access";
 import { createClient } from "@/lib/supabase/server";
+import { resolveTemplateManagementAccess } from "@/lib/templates/template-service";
 import { listCurrentUserTenantMemberships } from "@/lib/tenant/active-tenant";
-import { resolveTenantPermissions } from "@/lib/tenant/permissions";
+import { resolveMediaLibraryAccess } from "@/lib/tenant/media-library-custom-role-access";
+import {
+  hasAnyOrganizationUserAccess,
+  resolveOrganizationUserAccess,
+} from "@/lib/tenant/organization-user-access";
 import { PENDING_ORG_INVITE_COOKIE_NAME } from "@/lib/tenant/tenant-cookies";
 import { ensureTenantId } from "@/lib/tenant/resolve-tenant";
 import { buildTenantMembershipInvitePath } from "@/lib/url/paths";
@@ -30,16 +36,35 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
   }
 
   let showMembers = false;
+  let showMediaLibrary = false;
+  let showProfiles = false;
+  let showTemplates = false;
   let workspaceSetupFailed = false;
   let activeTenantId = "";
   let memberships = [] as Awaited<ReturnType<typeof listCurrentUserTenantMemberships>>;
 
   try {
     const tenantId = await ensureTenantId(supabase);
-    const permissions = await resolveTenantPermissions(supabase, tenantId, user.id);
+    const [organizationUserAccess, mediaLibraryAccess, profileAccess, templateAccess] = await Promise.all([
+      resolveOrganizationUserAccess({
+        supabase,
+        tenantId,
+        userId: user.id,
+      }),
+      resolveMediaLibraryAccess({
+        supabase,
+        tenantId,
+        userId: user.id,
+      }),
+      resolveProfilesAccess(supabase, tenantId, user.id),
+      resolveTemplateManagementAccess(supabase, tenantId, user.id),
+    ]);
     memberships = await listCurrentUserTenantMemberships(supabase);
     activeTenantId = tenantId;
-    showMembers = permissions.canManageMembers;
+    showMembers = hasAnyOrganizationUserAccess(organizationUserAccess);
+    showMediaLibrary = mediaLibraryAccess.canAccess;
+    showProfiles = profileAccess.canViewProfiles || profileAccess.canManageProfiles;
+    showTemplates = templateAccess.canManageTemplates;
   } catch (error) {
     if (error instanceof HttpError) {
       if (error.code === "active_tenant_required") {
@@ -85,7 +110,12 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
             </Link>
           </div>
 
-          <ProtectedNav showMembers={showMembers} />
+          <ProtectedNav
+            showMembers={showMembers}
+            showMediaLibrary={showMediaLibrary}
+            showProfiles={showProfiles}
+            showTemplates={showTemplates}
+          />
 
           <div className="flex flex-wrap items-center gap-3 lg:justify-end">
             <ActiveTenantSwitcher

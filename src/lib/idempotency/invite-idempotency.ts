@@ -1,11 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import type { CorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
 import { deriveInviteToken, hashPublicToken } from "@/lib/tokens/public-token";
 import { buildInvitePath } from "@/lib/url/paths";
 
 type InvitePayload = {
   inviteId: string;
+  invitePath: string;
   expiresAt: string | null;
   consentTemplateId: string;
 };
@@ -18,6 +20,7 @@ type CreateInviteInput = {
   userId: string;
   idempotencyKey: string;
   consentTemplateId: string;
+  correctionProvenance?: CorrectionRequestProvenance | null;
 };
 
 function getExpiryDateIso() {
@@ -28,9 +31,12 @@ function getExpiryDateIso() {
 
 export async function createInviteWithIdempotency(input: CreateInviteInput) {
   const workspaceId = input.workspaceId?.trim() || null;
+  const correctionOperationSuffix = input.correctionProvenance
+    ? `:correction:${input.correctionProvenance.correctionSourceReleaseIdSnapshot}:${input.correctionProvenance.correctionOpenedAtSnapshot}`
+    : "";
   const operation = workspaceId
-    ? `create_project_invite:${input.projectId}:${workspaceId}`
-    : `create_project_invite:${input.projectId}`;
+    ? `create_project_invite:${input.projectId}:${workspaceId}${correctionOperationSuffix}`
+    : `create_project_invite:${input.projectId}${correctionOperationSuffix}`;
 
   const { data: existingIdempotency, error: idempotencyReadError } = await input.supabase
     .from("idempotency_keys")
@@ -47,7 +53,7 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
   const inviteToken = deriveInviteToken({
     tenantId: input.tenantId,
     projectId: input.projectId,
-    idempotencyKey: input.idempotencyKey,
+    idempotencyKey: `${input.idempotencyKey}${correctionOperationSuffix}`,
   });
 
   const invitePath = buildInvitePath(inviteToken);
@@ -58,7 +64,7 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
       status: 200,
       payload: {
         inviteId: payload.inviteId,
-        invitePath,
+        invitePath: payload.invitePath || invitePath,
         expiresAt: payload.expiresAt,
         consentTemplateId: payload.consentTemplateId,
       },
@@ -96,6 +102,9 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
     expires_at: expiresAt,
     max_uses: 1,
     consent_template_id: input.consentTemplateId,
+    request_source: input.correctionProvenance?.requestSource ?? "normal",
+    correction_opened_at_snapshot: input.correctionProvenance?.correctionOpenedAtSnapshot ?? null,
+    correction_source_release_id_snapshot: input.correctionProvenance?.correctionSourceReleaseIdSnapshot ?? null,
   };
 
   const { data: invite, error: inviteError } = await input.supabase
@@ -110,6 +119,7 @@ export async function createInviteWithIdempotency(input: CreateInviteInput) {
 
   const idempotencyPayload: InvitePayload = {
     inviteId: invite.id,
+    invitePath,
     expiresAt: invite.expires_at,
     consentTemplateId: input.consentTemplateId,
   };

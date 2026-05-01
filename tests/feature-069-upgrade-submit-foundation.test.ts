@@ -26,6 +26,7 @@ import {
   adminClient,
   assertNoPostgrestError,
   createAuthUserWithRetry,
+  getDefaultProjectWorkspaceId,
   signInClient,
 } from "./helpers/supabase-test-client";
 
@@ -34,6 +35,7 @@ type TenantContext = {
   ownerUserId: string;
   ownerClient: SupabaseClient;
   projectId: string;
+  workspaceId: string;
 };
 
 function buildStructuredDefinition(extraScopeKey?: string): StructuredFieldsDefinition {
@@ -103,12 +105,14 @@ async function createTenantContext(supabase: SupabaseClient): Promise<TenantCont
     .select("id")
     .single();
   assertNoPostgrestError(projectError, "insert project");
+  const workspaceId = await getDefaultProjectWorkspaceId(supabase, tenant.id, project.id);
 
   return {
     tenantId: tenant.id,
     ownerUserId: owner.userId,
     ownerClient,
     projectId: project.id,
+    workspaceId,
   };
 }
 
@@ -495,6 +499,7 @@ test("recurring project upgrades allow replacement requests while the old consen
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
     recurringProfileId: profileId,
   });
 
@@ -503,6 +508,7 @@ test("recurring project upgrades allow replacement requests while the old consen
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
     participantId: participant.payload.participant.id,
     consentTemplateId: v1.id,
     idempotencyKey: `feature069-recurring-initial-${randomUUID()}`,
@@ -529,6 +535,7 @@ test("recurring project upgrades allow replacement requests while the old consen
     tenantId: context.tenantId,
     userId: context.ownerUserId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
     participantId: participant.payload.participant.id,
     consentTemplateId: v2.id,
     idempotencyKey: `feature069-recurring-upgrade-${randomUUID()}`,

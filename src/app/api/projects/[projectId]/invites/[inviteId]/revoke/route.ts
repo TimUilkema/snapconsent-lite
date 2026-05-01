@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { HttpError, jsonError } from "@/lib/http/errors";
+import { assertCorrectionRequestProvenanceMatchesActiveCycle } from "@/lib/projects/project-workflow-service";
 import {
+  loadProjectWorkflowRowForAccess,
   readRequestedWorkspaceIdFromUrl,
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest,
+  requireWorkspaceCorrectionConsentIntakeAccessForRow,
   requireWorkspaceCaptureMutationAccessForRequest,
   requireWorkspaceCaptureMutationAccessForRow,
 } from "@/lib/projects/project-workspace-request";
@@ -31,30 +36,60 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const { projectId, inviteId } = await context.params;
+    const adminSupabase = createAdminClient();
     const requestedWorkspaceId = readRequestedWorkspaceIdFromUrl(request);
+    const projectWorkflow = await loadProjectWorkflowRowForAccess(supabase, tenantId, projectId);
+    const isCorrectionIntakeMode = projectWorkflow.finalized_at !== null && projectWorkflow.correction_state === "open";
     if (requestedWorkspaceId) {
-      await requireWorkspaceCaptureMutationAccessForRequest({
+      if (isCorrectionIntakeMode) {
+        await requireWorkspaceCorrectionConsentIntakeAccessForRequest({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          requestedWorkspaceId,
+        });
+      } else {
+        await requireWorkspaceCaptureMutationAccessForRequest({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          requestedWorkspaceId,
+          capabilityKey: "capture.create_one_off_invites",
+        });
+      }
+    }
+    const correctionRowAccess = isCorrectionIntakeMode
+      ? await requireWorkspaceCorrectionConsentIntakeAccessForRow({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          table: "subject_invites",
+          rowId: inviteId,
+          notFoundCode: "invite_not_found",
+          notFoundMessage: "Invite not found.",
+        })
+      : null;
+
+    if (!correctionRowAccess) {
+      await requireWorkspaceCaptureMutationAccessForRow({
         supabase,
         tenantId,
         userId: user.id,
         projectId,
-        requestedWorkspaceId,
+        table: "subject_invites",
+        rowId: inviteId,
+        notFoundCode: "invite_not_found",
+        notFoundMessage: "Invite not found.",
+        capabilityKey: "capture.create_one_off_invites",
       });
     }
-    await requireWorkspaceCaptureMutationAccessForRow({
-      supabase,
-      tenantId,
-      userId: user.id,
-      projectId,
-      table: "subject_invites",
-      rowId: inviteId,
-      notFoundCode: "invite_not_found",
-      notFoundMessage: "Invite not found.",
-    });
 
-    const { data: invite, error: inviteError } = await supabase
+    const { data: invite, error: inviteError } = await adminSupabase
       .from("subject_invites")
-      .select("id, status, used_count, workspace_id")
+      .select("id, status, used_count, workspace_id, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot")
       .eq("id", inviteId)
       .eq("project_id", projectId)
       .eq("tenant_id", tenantId)
@@ -77,7 +112,18 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(409, "workspace_scope_missing", "Invite is missing a workspace assignment.");
     }
 
-    const { error: updateError } = await supabase
+    if (correctionRowAccess) {
+      assertCorrectionRequestProvenanceMatchesActiveCycle({
+        project: correctionRowAccess.project,
+        provenance: {
+          requestSource: invite.request_source === "correction" ? "correction" : "normal",
+          correctionOpenedAtSnapshot: invite.correction_opened_at_snapshot,
+          correctionSourceReleaseIdSnapshot: invite.correction_source_release_id_snapshot,
+        },
+      });
+    }
+
+    const { error: updateError } = await adminSupabase
       .from("subject_invites")
       .update({ status: "revoked" })
       .eq("id", inviteId)
@@ -88,7 +134,7 @@ export async function POST(request: Request, context: RouteContext) {
       throw new HttpError(500, "invite_revoke_failed", "Unable to remove invite.");
     }
 
-    const { error: upgradeRequestError } = await supabase
+    const { error: upgradeRequestError } = await adminSupabase
       .from("project_consent_upgrade_requests")
       .update({ status: "cancelled" })
       .eq("tenant_id", tenantId)

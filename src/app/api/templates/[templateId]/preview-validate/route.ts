@@ -1,6 +1,9 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createClient } from "@/lib/supabase/server";
-import { getTemplateForManagement } from "@/lib/templates/template-service";
+import {
+  getTemplateForManagement,
+  resolveTemplateManagementAccess,
+} from "@/lib/templates/template-service";
 import { validateTemplatePreview } from "@/lib/templates/template-preview-validation";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -44,6 +47,11 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const { templateId } = await context.params;
+    const access = await resolveTemplateManagementAccess(supabase, tenantId, user.id);
+    if (!access.canManageTemplates) {
+      throw new HttpError(403, "template_management_forbidden", "Only workspace owners and admins can manage templates.");
+    }
+
     await getTemplateForManagement(supabase, tenantId, user.id, templateId);
 
     const result = await validateTemplatePreview({

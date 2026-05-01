@@ -54,6 +54,13 @@ This is intentionally minimal and may evolve.
 - All domain data is tenant-scoped.
 - All access control is enforced server-side + with RLS.
 
+### Permission model
+- Fixed owner/admin roles remain special for tenant bootstrap, safety, and role administration.
+- Normal member operational authorization should use effective scoped capabilities from `src/lib/tenant/effective-permissions.ts` or route-specific wrappers that call it.
+- Effective capabilities combine fixed role, reviewer assignments, photographer workspace assignment, and tenant/project/workspace custom-role assignments.
+- Public token flows, release snapshot authorization, Media Library authorization, and business state-machine checks remain separate boundaries.
+- Owner/admin effective-access explanations are served by `getMemberEffectiveAccessSummary`; delegated organization-user views must not receive that source metadata.
+
 ## Data Access Patterns
 ### Preferred pattern
 - UI calls server endpoints (Route Handlers / Server Actions).

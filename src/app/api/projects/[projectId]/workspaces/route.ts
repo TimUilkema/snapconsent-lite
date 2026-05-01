@@ -1,14 +1,12 @@
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { assertProjectWorkflowMutable } from "@/lib/projects/project-workflow-service";
+import { listProjectAdministrationWorkspaces } from "@/lib/projects/project-administration-service";
 import {
   createPhotographerWorkspace,
   listVisibleProjectWorkspaces,
 } from "@/lib/projects/project-workspaces-service";
 import { createClient } from "@/lib/supabase/server";
-import {
-  assertCanManageProjectWorkspacesAction,
-  resolveAccessibleProjectWorkspaces,
-} from "@/lib/tenant/permissions";
+import { assertCanManageProjectWorkspacesAction } from "@/lib/tenant/permissions";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type RouteContext = {
@@ -39,7 +37,25 @@ export async function GET(_request: Request, context: RouteContext) {
     }
 
     const { projectId } = await context.params;
-    const result = await listVisibleProjectWorkspaces(supabase, tenantId, user.id, projectId);
+    let result: Awaited<ReturnType<typeof listVisibleProjectWorkspaces>>;
+    try {
+      result = await listVisibleProjectWorkspaces(supabase, tenantId, user.id, projectId);
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 404)) {
+        throw error;
+      }
+
+      const workspaces = await listProjectAdministrationWorkspaces({
+        supabase,
+        tenantId,
+        userId: user.id,
+        projectId,
+      });
+      result = {
+        role: (await assertCanManageProjectWorkspacesAction(supabase, tenantId, user.id, projectId)).role,
+        workspaces,
+      };
+    }
 
     return Response.json(
       {
@@ -90,15 +106,6 @@ export async function POST(request: Request, context: RouteContext) {
         400,
         "workspace_name_required",
         "A project workspace name is required.",
-      );
-    }
-
-    const { role } = await resolveAccessibleProjectWorkspaces(supabase, tenantId, user.id, projectId);
-    if (role !== "owner" && role !== "admin") {
-      throw new HttpError(
-        403,
-        "project_workspace_manage_forbidden",
-        "Only workspace owners and admins can manage project staffing.",
       );
     }
 

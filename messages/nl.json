@@ -20,7 +20,8 @@
     "ariaPrimary": "Primaire navigatie",
     "dashboard": "Dashboard",
     "projects": "Projecten",
-    "members": "Leden",
+    "mediaLibrary": "Media Library",
+    "members": "Organisatiegebruikers",
     "profiles": "Personen",
     "templates": "Verklaringen"
   },
@@ -101,15 +102,85 @@
     "backToHome": "Terug naar home"
   },
   "members": {
-    "title": "Leden",
-    "subtitle": "Nodig mensen uit, wijzig werkruimterollen en trek openstaande organisatie-uitnodigingen in.",
+    "title": "Organisatiegebruikers",
+    "subtitle": "Nodig mensen uit, wijzig organisatierollen en beheer openstaande organisatie-uitnodigingen.",
     "readOnly": "Alleen workspace owners en admins kunnen organisatieleden beheren.",
     "backToProjects": "Terug naar projecten",
+    "delegated": {
+      "readOnly": "Je kunt organisatiegebruikers bekijken, maar owner/admin-acties blijven verborgen.",
+      "inviteHelper": "Je kunt reviewers en fotografen uitnodigen. Rolwijzigingen en verwijderingen zijn beperkt tot toegestane reviewer- en fotograafrijen.",
+      "mutationHelper": "Je kunt toegestane reviewer- en fotograafrijen wijzigen of verwijderen. Owner-, admin- en je eigen rij blijven alleen-lezen.",
+      "inviteSubtitle": "Gedelegeerde uitnodigingen kunnen alleen voor reviewers en fotografen worden verstuurd.",
+      "membersSubtitle": "Rolwijzigingen en verwijderingen zijn alleen beschikbaar waar toegestaan. Aangepaste rollen en reviewertoegang blijven voor owners en admins.",
+      "pendingInvitesSubtitle": "Openstaande admin-uitnodigingen zijn hier zichtbaar, maar blijven alleen-lezen.",
+      "ownInvitesSubtitle": "Je kunt alleen openstaande reviewer- en fotograafuitnodigingen beheren die je zelf hebt gemaakt.",
+      "readOnlyAction": "Alleen-lezen",
+      "empty": "Er zijn geen organisatiegebruikers of openstaande uitnodigingen zichtbaar voor je huidige toegang.",
+      "inviteForbidden": "Je kunt alleen reviewers en fotografen uitnodigen.",
+      "inviteMutationForbidden": "Je kunt alleen openstaande reviewer- en fotograafuitnodigingen opnieuw versturen of intrekken die je zelf hebt gemaakt.",
+      "resendForbidden": "Deze uitnodiging kan met je huidige toegang niet opnieuw worden verstuurd.",
+      "revokeForbidden": "Deze uitnodiging kan met je huidige toegang niet worden ingetrokken.",
+      "roleChanged": "Lidmaatschapsrol bijgewerkt.",
+      "removed": "Lid verwijderd.",
+      "roleChangeForbidden": "Je kunt met je huidige toegang geen organisatierollen wijzigen.",
+      "removeForbidden": "Je kunt met je huidige toegang geen organisatiegebruikers verwijderen.",
+      "targetForbidden": "Deze organisatiegebruiker is beschermd tegen deze actie.",
+      "selfTargetForbidden": "Je kunt je eigen organisatierij niet wijzigen of verwijderen.",
+      "invalidRole": "Kies reviewer of fotograaf voor gedelegeerde rolwijzigingen.",
+      "roleChangeFallback": "Deze lidmaatschapsrol kan niet worden bijgewerkt.",
+      "removeFallback": "Dit lid kan niet worden verwijderd."
+    },
     "roles": {
       "owner": "Owner",
       "admin": "Admin",
       "reviewer": "Reviewer",
       "photographer": "Fotograaf"
+    },
+    "roleDescriptions": {
+      "owner": "Volledige organisatietoegang met beschermde eigenaarstatus.",
+      "admin": "Volledige organisatietoegang zonder eigenaarbescherming.",
+      "reviewer": "Geschikt voor reviewtoegang. Projecten vragen tenant-brede of projectspecifieke toekenningen.",
+      "photographer": "Capture- en uploadtoegang in toegewezen projectworkspaces."
+    },
+    "roleReference": {
+      "title": "Roloverzicht",
+      "subtitle": "Vaste rollen zijn gekoppeld aan deze huidige mogelijkheden.",
+      "capabilitiesColumn": "Mogelijkheden",
+      "ownerProtected": "Owners zijn read-only, niet uitnodigbaar en niet verwijderbaar in deze slice."
+    },
+    "capabilityGroups": {
+      "organizationUsers": "Organisatiegebruikers",
+      "templatesProfiles": "Verklaringen en personen",
+      "projectsWorkspaces": "Projecten en workspaces",
+      "capture": "Capture",
+      "review": "Review",
+      "workflowCorrection": "Workflow en correctie",
+      "mediaLibrary": "Media Library"
+    },
+    "capabilities": {
+      "organizationUsersManage": "organisatiegebruikers beheren",
+      "organizationUsersInvite": "gebruikers uitnodigen",
+      "organizationUsersChangeRoles": "niet-owner rollen wijzigen",
+      "organizationUsersRemove": "niet-owner gebruikers verwijderen",
+      "templatesManage": "verklaringen beheren",
+      "profilesView": "personen bekijken",
+      "profilesManage": "personen beheren",
+      "projectsCreate": "projecten maken",
+      "projectWorkspacesManage": "projectworkspaces beheren",
+      "captureWorkspace": "workspace-capture uitvoeren",
+      "captureCreateOneOffInvites": "eenmalige toestemmingsuitnodigingen maken",
+      "captureCreateRecurringProjectConsentRequests": "projecttoestemmingsverzoeken maken",
+      "captureUploadAssets": "assets uploaden",
+      "reviewWorkspace": "workspaces reviewen",
+      "reviewInitiateConsentUpgradeRequests": "toestemmingsupdates starten",
+      "workflowFinalizeProject": "projecten finaliseren",
+      "workflowStartProjectCorrection": "projectcorrectie starten",
+      "workflowReopenWorkspaceForCorrection": "workspaces heropenen voor correctie",
+      "correctionReview": "correcties reviewen",
+      "correctionConsentIntake": "correctietoestemming verwerken",
+      "correctionMediaIntake": "correctiemedia toevoegen",
+      "mediaLibraryAccess": "Media Library openen",
+      "mediaLibraryManageFolders": "Media Library-mappen beheren"
     },
     "invite": {
       "title": "Lid uitnodigen",
@@ -117,6 +188,7 @@
       "emailLabel": "E-mail",
       "emailPlaceholder": "naam@example.com",
       "roleLabel": "Rol",
+      "selectedRoleHelp": "{role}: {description}",
       "submit": "Uitnodiging versturen",
       "submitting": "Bezig met versturen...",
       "success": "Uitnodiging opgeslagen en klaargezet voor verzending.",
@@ -124,19 +196,160 @@
     },
     "membersTable": {
       "title": "Huidige leden",
-      "subtitle": "Owners zijn hier zichtbaar maar blijven read-only in deze eerste slice.",
+      "subtitle": "Owners zijn hier zichtbaar maar blijven beschermd tegen rolwijzigingen en verwijdering.",
+      "removalExplanation": "Een gebruiker verwijderen haalt alleen toegang tot deze organisatie weg. Het auth-account wordt niet verwijderd en de gebruiker kan nog bij andere organisaties horen.",
       "columns": {
         "email": "E-mail",
         "role": "Rol",
+        "reviewerAccess": "Reviewertoegang",
         "joined": "Toegevoegd",
         "actions": "Acties"
       },
       "saveRole": "Rol opslaan",
       "remove": "Verwijderen",
-      "removeConfirm": "{email} uit deze werkruimte verwijderen?",
+      "removeConfirm": "{email} uit deze organisatie verwijderen? Het auth-account wordt niet verwijderd.",
       "roleUpdated": "Lidmaatschapsrol bijgewerkt.",
       "removed": "Lid verwijderd.",
-      "ownerNote": "Owner"
+      "ownerNote": "Owner",
+      "ownerProtectedExplanation": "Owner beschermd"
+    },
+    "reviewerAccess": {
+      "tenantWideActive": "Alle projecten",
+      "noTenantWide": "Alleen projecttoekenningen",
+      "projectCount": "{count, plural, one {# projecttoekenning} other {# projecttoekenningen}}",
+      "grantTenantWide": "Alle projecten geven",
+      "revokeTenantWide": "Alle projecten intrekken",
+      "tenantWideGranted": "Tenant-brede reviewertoegang toegekend.",
+      "tenantWideRevoked": "Tenant-brede reviewertoegang ingetrokken.",
+      "notReviewer": "Niet geschikt"
+    },
+    "effectiveAccess": {
+      "show": "Toegang",
+      "hide": "Toegang verbergen",
+      "loading": "Effectieve toegang laden...",
+      "empty": "Geen effectieve toegangsdetails geladen.",
+      "fixedRole": "Vaste rol",
+      "customRoles": "Aangepaste rollen",
+      "reviewerAccess": "Reviewertoegang",
+      "photographerAssignments": "Fotograaf-workspaces",
+      "effectiveCapabilities": "Effectieve mogelijkheden",
+      "ignoredCapabilities": "Genegeerde mogelijkheden",
+      "noCapabilities": "Geen mogelijkheden gelden voor deze scope.",
+      "none": "Geen",
+      "yes": "ja",
+      "no": "nee",
+      "count": "{count, plural, one {# item} other {# items}}",
+      "reviewerSummary": "Tenant-breed: {tenantWide}; projecten: {projectCount}",
+      "sourcesLabel": "Bronnen: {sources}",
+      "ignoredCapability": "{role}: {capability} genegeerd omdat {reason}.",
+      "scope": {
+        "tenant": "Organisatie",
+        "project": "Project: {project}",
+        "workspace": "{project} / {workspace}"
+      },
+      "sources": {
+        "fixedRole": "Vaste rol: {role}",
+        "customRole": "Aangepaste rol: {role}",
+        "reviewerTenant": "Reviewertoegang: alle projecten",
+        "reviewerProject": "Reviewertoegang: {project}",
+        "photographerWorkspace": "Fotograaftoewijzing: {project} / {workspace}",
+        "unknown": "Onbekende bron"
+      },
+      "warnings": {
+        "fixed_owner_admin_broad_access": "Vaste owner/admin-rollen zijn breed en blijven speciaal voor tenantveiligheid en rolbeheer.",
+        "tenant_wide_reviewer_access_summarized": "Tenant-brede reviewertoegang wordt samengevat in plaats van per project getoond.",
+        "ignored_capabilities_present": "Sommige mogelijkheden van aangepaste rollen worden genegeerd op hun toegewezen scope."
+      },
+      "ignoredReasons": {
+        "assignment_scope_not_effective": "de toewijzingsscope deze mogelijkheid hier niet geeft",
+        "requested_scope_not_supported": "de mogelijkheid niet wordt ondersteund op deze scope",
+        "wrong_project": "de toewijzing naar een ander project verwijst",
+        "wrong_workspace": "de toewijzing naar een andere workspace verwijst"
+      },
+      "errors": {
+        "fallback": "Effectieve toegang kan niet worden geladen."
+      }
+    },
+    "customRoles": {
+      "title": "Aangepaste rollen",
+      "subtitle": "Definieer tenant-lokale permissiesets vanuit de huidige catalogus.",
+      "definitionOnlyNote": "Aangepaste rollen definieren herbruikbare permissiebundels. Owners en admins beheren roldefinities en toewijzingen.",
+      "empty": "Geen actieve aangepaste rollen.",
+      "columns": {
+        "name": "Naam",
+        "description": "Beschrijving",
+        "capabilities": "Mogelijkheden",
+        "actions": "Acties"
+      },
+      "edit": "Bewerken",
+      "archive": "Archiveren",
+      "archiveConfirm": "{name} archiveren? Deze rol verschijnt dan niet meer als actieve aangepaste rol.",
+      "archived": "Gearchiveerd",
+      "created": "Aangepaste rol gemaakt.",
+      "updated": "Aangepaste rol bijgewerkt.",
+      "archiveChanged": "Aangepaste rol gearchiveerd.",
+      "archiveUnchanged": "Aangepaste rol was al gearchiveerd."
+    },
+    "customRoleAssignments": {
+      "column": "Aangepaste rollen",
+      "title": "Aangepaste roltoewijzingen",
+      "assignRole": "Rol toewijzen",
+      "assignedRoles": "Toegewezen rollen",
+      "noAssignedRoles": "Geen aangepaste rollen",
+      "noAssignableRoles": "Geen rollen beschikbaar",
+      "createRoleFirst": "Maak eerst een actieve aangepaste rol voordat je er een toewijst.",
+      "selectPlaceholder": "Selecteer een aangepaste rol",
+      "scopeLabel": "Scope",
+      "scope": {
+        "tenant": "Organisatie",
+        "project": "Project",
+        "workspace": "Workspace"
+      },
+      "targetLabel": "Doel",
+      "projectLabel": "Project",
+      "workspaceLabel": "Workspace",
+      "projectPlaceholder": "Selecteer een project",
+      "workspacePlaceholder": "Selecteer een workspace",
+      "allOrganizationTarget": "Hele organisatie",
+      "unknownTarget": "Onbekend doel",
+      "scopeWarning": "Sommige mogelijkheden van deze rol gelden niet voor deze scope.",
+      "effectiveCapabilities": "Geldt hier: {capabilities}",
+      "ignoredCapabilities": "Genegeerd hier: {capabilities}",
+      "zeroEffectiveCapabilities": "Deze rol heeft geen mogelijkheden die gelden voor de gekozen scope.",
+      "scopeProjectRequired": "Selecteer een project voordat je deze rol toewijst.",
+      "scopeWorkspaceRequired": "Selecteer een workspace voordat je deze rol toewijst.",
+      "remove": "Verwijderen",
+      "removeConfirm": "{role} verwijderen bij {email}?",
+      "assigned": "Aangepaste rol toegewezen.",
+      "revoked": "Aangepaste rol verwijderd.",
+      "note": "Aangepaste rollen geven alleen toegang in onderdelen waar handhaving voor aangepaste rollen is ingevoerd. Roltoewijzing blijft voor owners en admins.",
+      "archivedAssignedRole": "{role} is gearchiveerd en kan niet meer worden toegewezen.",
+      "errors": {
+        "fallback": "Aangepaste roltoewijzingen kunnen niet worden bijgewerkt.",
+        "roleArchived": "Gearchiveerde aangepaste rollen kunnen niet worden toegewezen.",
+        "systemRoleForbidden": "Systeemrollen kunnen hier niet worden toegewezen.",
+        "memberNotFound": "Lid niet gevonden.",
+        "roleNotFound": "Aangepaste rol niet gevonden.",
+        "invalidScope": "Selecteer een geldige toewijzingsscope.",
+        "projectNotFound": "Project niet gevonden.",
+        "workspaceNotFound": "Workspace niet gevonden.",
+        "zeroEffectiveCapabilities": "Deze rol heeft geen mogelijkheden die gelden voor die scope.",
+        "conflict": "Aangepaste roltoewijzing kan niet worden bijgewerkt. Probeer het opnieuw."
+      }
+    },
+    "customRoleForm": {
+      "createTitle": "Aangepaste rol maken",
+      "editTitle": "Aangepaste rol bewerken",
+      "nameLabel": "Rolnaam",
+      "descriptionLabel": "Beschrijving",
+      "descriptionPlaceholder": "Optioneel",
+      "capabilitiesLabel": "Mogelijkheden",
+      "create": "Rol maken",
+      "update": "Rol bijwerken",
+      "cancel": "Annuleren",
+      "emptyCapabilityError": "Selecteer ten minste een mogelijkheid.",
+      "duplicateNameError": "Er bestaat al een aangepaste rol met deze naam.",
+      "error": "Aangepaste rol kan niet worden bijgewerkt."
     },
     "pendingInvites": {
       "title": "Openstaande uitnodigingen",
@@ -461,6 +674,7 @@
       "continueUpload": "Upload doorgaan",
       "cancel": "Annuleren",
       "headshotsManagedNote": "Profiel-headshots blijven hun bestaande persoonsgebonden uploadflow gebruiken. Deze uploader is voor projectfoto's en video's.",
+      "correctionNotice": "Nieuwe uploads gelden alleen voor de volgende releaseversie. Eerdere releases blijven ongewijzigd.",
       "checkingDuplicates": "Duplicaten controleren...",
       "hashUnavailableWarning": "Van sommige bestanden kon in deze browser geen hash worden gemaakt. Duplicaatdetectie kan voor die bestanden minder streng zijn.",
       "prepareError": "Deze uploadwachtrij kon niet worden voorbereid.",
@@ -494,11 +708,23 @@
       "defaultTemplateWarning": "De standaard toestemmingsverklaring is niet langer beschikbaar voor nieuwe uitnodigingen. Kies een nieuw gepubliceerde toestemmingsverklaring.",
       "breadcrumbProjects": "Projecten",
       "projectSectionsAria": "Projectsecties",
-      "exportProject": "Project exporteren",
       "workspaceSectionLabel": "Workspaces",
       "workspaceSelected": "Geselecteerde workspace: {name}",
       "workspaceNoneAssigned": "Er zijn nog geen workspaces aan dit project toegewezen.",
       "workspaceNoData": "Selecteer of wijs een workspace toe om verder te gaan.",
+      "reviewerAccess": {
+        "title": "Projectreviewers",
+        "subtitle": "Geef reviewerleden toegang tot dit project en alle workspaces ervan.",
+        "reviewerLabel": "Reviewer",
+        "noneAvailable": "Geen reviewerleden beschikbaar",
+        "grant": "Projecttoegang geven",
+        "revoke": "Intrekken",
+        "empty": "Geen projectspecifieke reviewers.",
+        "tenantWideNote": "Tenant-brede reviewers hebben al toegang: {emails}",
+        "granted": "Projectreviewertoegang toegekend.",
+        "revoked": "Projectreviewertoegang ingetrokken.",
+        "error": "Projectreviewertoegang kan niet worden bijgewerkt."
+      },
       "sectionParticipants": "Deelnemers",
       "sectionAssets": "Assets",
       "subtitle": "Beheer bekende profielen, eenmalige toestemmingsintake, persoonsgegevens en projectfotomatching op één plek.",
@@ -563,14 +789,22 @@
         "workspaceHandedOffAt": "Overgedragen {date}",
         "workspaceValidatedAt": "Gevalideerd {date}",
         "workspaceNeedsChangesAt": "Needs changes sinds {date}",
+        "workspaceCorrectionReopenedAt": "Correctie heropend {date}",
         "projectProgress": "{validated} van {total} workspaces gevalideerd",
+        "projectCorrectionProgress": "{validated} van {total} workspaces opnieuw gevalideerd voor correctie",
         "projectActiveHelper": "Finaliseer het project nadat elke workspace is gevalideerd en alle blokkades zijn opgelost.",
         "projectReadyHelper": "Alle zichtbare workspaces zijn gevalideerd en klaar voor finalisatie.",
         "projectFinalizedAt": "Gefinaliseerd {date}",
+        "projectCorrectionOpenedAt": "Correctie geopend {date}",
+        "projectCorrectionOpenHelper": "Correcties blijven review-only en publiceren bij finalisatie een nieuwe releaseversie.",
+        "projectCorrectionReadyHelper": "Correctieworkspaces zijn opnieuw gevalideerd en klaar om een nieuwe releaseversie te publiceren.",
         "captureLockedHandedOff": "Geauthenticeerde capture-wijzigingen zijn na handoff vergrendeld. Bestaande publieke links kunnen nog wel worden afgerond tot validatie.",
         "captureLockedValidated": "Geauthenticeerde capture-wijzigingen zijn vergrendeld terwijl deze workspace is gevalideerd.",
         "reviewLockedValidated": "Reviewwijzigingen zijn vergrendeld terwijl deze workspace is gevalideerd. Heropen de workspace om correcties te maken.",
+        "reviewLockedCorrectionValidated": "Deze workspace is opnieuw gevalideerd. Heropen hem voor correctie voordat je meer reviewwijzigingen maakt.",
         "projectFinalizedReadOnly": "Dit project is gefinaliseerd. Capture, review, staffing en templates zijn alleen-lezen.",
+        "projectCorrectionCaptureLocked": "Correctie is geopend. Capture-uploads, staffing en templatewijzigingen blijven vergrendeld. Heropende workspaces kunnen wel correctieverzoeken voor consent versturen vanuit het reviewvlak.",
+        "projectCorrectionConsentIntakeHelper": "Deze heropende correctieworkspace kan eenmalige correctie-uitnodigingen, consent-upgrades en terugkerende projectverzoeken versturen. Capture-uploads blijven vergrendeld.",
         "projectArchivedReadOnly": "Dit project is gearchiveerd, dus workflowwijzigingen zijn niet beschikbaar.",
         "staffingLockedFinalized": "Workspace-staffing is vergrendeld na projectfinalisatie.",
         "blockersTitle": "Validatieblokkades",
@@ -583,6 +817,8 @@
         "projectStates": {
           "active": "Actief",
           "ready_to_finalize": "Klaar voor finalisatie",
+          "correction_open": "Correctie geopend",
+          "correction_ready_to_finalize": "Correctie klaar voor finalisatie",
           "finalized": "Gefinaliseerd"
         },
         "actions": {
@@ -594,8 +830,14 @@
           "needsChangesPending": "Opslaan...",
           "reopen": "Workspace heropenen",
           "reopenPending": "Heropenen...",
+          "reopenForCorrection": "Heropen voor correctie",
+          "reopenForCorrectionPending": "Heropenen voor correctie...",
+          "startCorrection": "Start correctie",
+          "startCorrectionPending": "Correctie starten...",
           "finalize": "Project finaliseren",
-          "finalizePending": "Finaliseren..."
+          "finalizePending": "Finaliseren...",
+          "finalizeCorrection": "Gecorrigeerde release publiceren",
+          "finalizeCorrectionPending": "Gecorrigeerde release publiceren..."
         },
         "blockers": {
           "matchingInProgress": "Matching is nog bezig.",
@@ -838,6 +1080,202 @@
       "already": "Terugkerende toestemming was al ingetrokken.",
       "invalid": "Deze terugkerende intrek-link is ongeldig.",
       "expired": "Deze terugkerende intrek-link is verlopen."
+    }
+  },
+  "mediaLibrary": {
+    "shared": {
+      "badges": {
+        "blocked": "Geblokkeerd",
+        "restricted": "Beperkt",
+        "manual": "Handmatig"
+      },
+      "downloadConfirm": {
+        "blockedOnly": "Er zijn geblokkeerde gezichten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?",
+        "restrictedOnly": "Er zijn ingetrokken personen of niet-toegestane gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?",
+        "blockedRestricted": "Er zijn geblokkeerde gezichten en beperkte gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?"
+      }
+    },
+    "list": {
+      "title": "Media Library",
+      "subtitle": "De nieuwste gepubliceerde projectfoto's en video's staan hier als read-only release snapshots. Oudere release-assets blijven via directe links beschikbaar.",
+      "empty": "Er is nog geen vrijgegeven media beschikbaar.",
+      "previewUnavailable": "Preview niet beschikbaar",
+      "releaseVersionValue": "Release v{version}",
+      "linkedPeopleCount": "{count, plural, one {# gekoppelde persoon} other {# gekoppelde personen}}",
+      "sidebar": {
+        "allAssets": "Alle assets",
+        "foldersTitle": "Folders",
+        "emptyFolders": "Nog geen folders.",
+        "createFolder": "Folder maken",
+        "renameFolder": "Hernoemen",
+        "archiveFolder": "Archiveren",
+        "archiveConfirm": "Folder \"{name}\" archiveren?",
+        "currentFolder": "Huidige folder"
+      },
+      "selection": {
+        "count": "{count, plural, one {# asset geselecteerd} other {# assets geselecteerd}}",
+        "clear": "Wissen",
+        "addToFolder": "Aan folder toevoegen",
+        "moveToFolder": "Naar folder verplaatsen",
+        "removeFromFolder": "Uit folder verwijderen",
+        "noFolder": "Kies folder"
+      },
+      "folderForm": {
+        "nameLabel": "Nieuwe folder",
+        "namePlaceholder": "Foldernaam",
+        "createSubmit": "Maken",
+        "renameSubmit": "Opslaan",
+        "cancel": "Annuleren"
+      },
+      "folderMessages": {
+        "created": "Folder aangemaakt.",
+        "renamed": "Folder hernoemd.",
+        "archived": "Folder gearchiveerd.",
+        "assigned": "Assets aan folder toegevoegd.",
+        "moved": "Assets verplaatst.",
+        "removed": "Assets uit folder verwijderd."
+      },
+      "folderErrors": {
+        "nameRequired": "Foldernaam is verplicht.",
+        "nameConflict": "Een actieve folder gebruikt deze naam al.",
+        "folderArchived": "Gearchiveerde folders kunnen niet worden gewijzigd.",
+        "generic": "De Media Library-folder kon niet worden bijgewerkt."
+      },
+      "assetTypes": {
+        "photo": "Foto",
+        "video": "Video"
+      },
+      "labels": {
+        "workspace": "Workspace",
+        "releaseVersion": "Releaseversie",
+        "linkedPeople": "Gekoppelde personen",
+        "releaseCreated": "Release aangemaakt"
+      },
+      "actions": {
+        "open": "Openen",
+        "download": "Origineel downloaden"
+      }
+    },
+    "detail": {
+      "backToList": "Terug naar Media Library",
+      "previewUnavailable": "Voor deze release-asset is geen preview beschikbaar.",
+      "download": "Origineel downloaden",
+      "releaseVersionValue": "Release v{version}",
+      "linkedPeopleCount": "{count, plural, one {# gekoppelde persoon} other {# gekoppelde personen}}",
+      "unknownOwner": "Onbekende persoon",
+      "noEmail": "Geen e-mailadres opgeslagen",
+      "scopeGranted": "Toegestaan",
+      "scopeNotGranted": "Niet toegestaan",
+      "assetTypes": {
+        "photo": "Foto",
+        "video": "Video"
+      },
+      "safetyBanner": {
+        "blocked": {
+          "title": "Er zijn geblokkeerde gezichten in deze release-snapshot aanwezig.",
+          "body": "Deze asset is als zodanig vrijgegeven. Downloaden blijft beschikbaar voor geautoriseerde Media Library-gebruikers, maar controleer eerst de context van de geblokkeerde gezichten."
+        },
+        "blockedRestricted": {
+          "title": "Geblokkeerde gezichten en beperkte rechten vragen om controle.",
+          "body": "Deze asset is geldig vrijgegeven, maar in de onveranderlijke release-snapshot staan zowel geblokkeerde gezichten als beperkte rechten van gekoppelde personen."
+        },
+        "restricted": {
+          "title": "Vrijgegeven rechten van gekoppelde personen vragen om voorzichtigheid.",
+          "body": "Een of meer gekoppelde personen zijn ingetrokken of hebben niet-toegestane gebruiksrechten in deze onveranderlijke release-snapshot."
+        },
+        "stats": {
+          "blockedFaces": "{count, plural, one {# geblokkeerd gezicht} other {# geblokkeerde gezichten}}",
+          "revokedOwners": "{count, plural, one {# ingetrokken gekoppelde persoon} other {# ingetrokken gekoppelde personen}}",
+          "restrictedScopes": "{count, plural, one {# niet-toegestaan gebruiksrecht} other {# niet-toegestane gebruiksrechten}}"
+        }
+      },
+      "ownerStatuses": {
+        "active": "Actief",
+        "revoked": "Ingetrokken"
+      },
+      "ownerKinds": {
+        "project_consent": "Eenmalige toestemming",
+        "project_recurring_consent": "Terugkerende projecttoestemming"
+      },
+      "scopeStatuses": {
+        "granted": "Toegestaan",
+        "not_granted": "Niet toegestaan",
+        "revoked": "Ingetrokken",
+        "not_collected": "Niet verzameld"
+      },
+      "labels": {
+        "assetType": "Assettype",
+        "project": "Project",
+        "workspace": "Workspace",
+        "releaseVersion": "Releaseversie",
+        "releaseCreated": "Release aangemaakt",
+        "linkedPeople": "Gekoppelde personen"
+      },
+      "sections": {
+        "links": "Release-overzicht",
+        "reviewContext": "Release reviewcontext",
+        "linkedOwners": "Gekoppelde personen",
+        "scopes": "Scope-snapshot",
+        "previewReview": "Vrijgegeven assetpreview",
+        "snapshotNotes": "Snapshot-notities",
+        "usagePermissions": "Gebruiksrechten",
+        "effectiveScopes": "Effectieve scopes",
+        "signedScopes": "Ondertekende scopes"
+      },
+      "counts": {
+        "exactFaceLinks": "{count, plural, one {# exacte gezichtskoppeling} other {# exacte gezichtskoppelingen}}",
+        "wholeAssetLinks": "{count, plural, one {# hele-asset-koppeling} other {# hele-asset-koppelingen}}",
+        "fallbackLinks": "{count, plural, one {# fallback-koppeling} other {# fallback-koppelingen}}",
+        "suppressedFaces": "{count, plural, one {# onderdrukt gezicht} other {# onderdrukte gezichten}}",
+        "hiddenFaces": "{count, plural, one {# verborgen gezicht} other {# verborgen gezichten}}",
+        "blockedFaces": "{count, plural, one {# geblokkeerd gezicht} other {# geblokkeerde gezichten}}",
+        "manualFaces": "{count, plural, one {# handmatig gezicht} other {# handmatige gezichten}}"
+      },
+      "usagePermissions": {
+        "restricted": "Beperkt",
+        "selected": "Geselecteerd",
+        "selectionHelp": "Selecteer een gekoppelde persoon om de bijbehorende face-overlay en de vastgelegde gebruiksrechten uit deze release-snapshot te bekijken.",
+        "videoHelp": "Video-assets blijven read-only in de Media Library. Gebruik de vrijgegeven samenvattingen hieronder om gebruiksrechten en eventuele hele-asset- of fallback-context te bekijken."
+      },
+      "ownerStrip": {
+        "singleFace": "Gezicht {face}",
+        "multipleFaces": "{count, plural, one {# gezicht} other {# gezichten}}"
+      },
+      "context": {
+        "faceLink": "Gezicht {face} / {source}",
+        "wholeAssetLink": "Hele-asset-koppeling",
+        "fallbackLink": "Fallback-koppeling",
+        "linkSourceManual": "Handmatige koppeling",
+        "linkSourceAuto": "Automatische koppeling"
+      },
+      "overlay": {
+        "detectedFaceLabel": "Gezicht {face}",
+        "blockedFaceLabel": "Geblokkeerd gezicht {face}",
+        "stateBlocked": "Geblokkeerd",
+        "stateDetected": "Gedetecteerd",
+        "stateManual": "Handmatig gezicht",
+        "linkSourceManual": "Handmatige koppeling",
+        "linkSourceAuto": "Automatische koppeling",
+        "permissionsRestricted": "Beperkte rechten"
+      },
+      "previewNotes": {
+        "hiddenFacesOmitted": "{count, plural, one {# verborgen gezicht is uit de overlay weggelaten.} other {# verborgen gezichten zijn uit de overlay weggelaten.}}",
+        "geometryUnavailable": "{count, plural, one {# relevant gezicht heeft geen bruikbare release-snapshot-geometrie voor de overlay.} other {# relevante gezichten hebben geen bruikbare release-snapshot-geometrie voor de overlay.}}"
+      },
+      "snapshotNotes": {
+        "hiddenFacesOmitted": "{count, plural, one {# verborgen gezicht is uit de vrijgegeven preview-overlay weggelaten.} other {# verborgen gezichten zijn uit de vrijgegeven preview-overlay weggelaten.}}",
+        "geometryUnavailable": "{count, plural, one {# zichtbaar gezicht kon niet worden gemarkeerd omdat de release-snapshot-geometrie onvolledig is.} other {# zichtbare gezichten konden niet worden gemarkeerd omdat de release-snapshot-geometrie onvolledig is.}}",
+        "wholeAssetLinks": "{count, plural, one {# gekoppelde persoon is via een hele-asset-koppeling opgenomen.} other {# gekoppelde personen zijn via hele-asset-koppelingen opgenomen.}}",
+        "fallbackLinks": "{count, plural, one {# gekoppelde persoon is via fallback-releasecontext opgenomen.} other {# gekoppelde personen zijn via fallback-releasecontext opgenomen.}}"
+      },
+      "previewReviewHelp": "Deze preview gebruikt alleen onveranderlijke release-snapshot-geometrie. Selecteer een gekoppelde persoon om de bijbehorende face-overlay en gebruiksrechten te focussen.",
+      "empty": {
+        "linkedOwners": "Er zijn geen gekoppelde personen in deze release-snapshot vastgelegd.",
+        "scopes": "Er is geen scopemetadata in deze release-snapshot vastgelegd.",
+        "usagePermissions": "Er zijn geen vrijgegeven gebruiksrechten in deze release-snapshot vastgelegd.",
+        "effectiveScopes": "Geen effectieve scopes vastgelegd.",
+        "signedScopes": "Geen ondertekende scopes vastgelegd."
+      }
     }
   },
   "templates": {

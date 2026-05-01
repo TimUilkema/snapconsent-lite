@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
 import { enqueueRecurringProjectParticipantReplay } from "@/lib/matching/project-recurring-sources";
 import { deriveRecurringProfileMatchingReadiness, type RecurringProfileMatchingReadiness } from "@/lib/profiles/profile-headshot-service";
+import type { CorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
 import { getVisiblePublishedTemplateById } from "@/lib/templates/template-service";
 import { deriveRecurringProfileConsentToken, hashPublicToken } from "@/lib/tokens/public-token";
 import { buildRecurringProfileConsentPath } from "@/lib/url/paths";
@@ -112,6 +113,7 @@ type CreateProjectProfileConsentRequestInput = {
   participantId: string;
   consentTemplateId?: string | null;
   idempotencyKey: string;
+  correctionProvenance?: CorrectionRequestProvenance | null;
 };
 
 type GetProjectParticipantsPanelDataInput = {
@@ -240,6 +242,21 @@ function getRecurringRequestExpiryIso() {
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 7);
   return expiresAt.toISOString();
+}
+
+function createServiceRoleClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new HttpError(500, "supabase_admin_not_configured", "Missing Supabase service role configuration.");
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
 }
 
 function mapTemplateSummary(
@@ -982,7 +999,10 @@ export async function createProjectProfileConsentRequest(input: CreateProjectPro
   const workspaceId =
     requestedWorkspaceId ??
     validateUuid(participant.workspace_id, "workspace_not_found", "Project workspace not found.");
-  const operation = `create_project_profile_consent_request:${participantId}:${workspaceId}`;
+  const correctionOperationSuffix = input.correctionProvenance
+    ? `:correction:${input.correctionProvenance.correctionSourceReleaseIdSnapshot}:${input.correctionProvenance.correctionOpenedAtSnapshot}`
+    : "";
+  const operation = `create_project_profile_consent_request:${participantId}:${workspaceId}${correctionOperationSuffix}`;
 
   const existingPayload = await readIdempotencyPayload<ProjectProfileConsentRequestPayload>(
     input.supabase,
@@ -1088,6 +1108,31 @@ export async function createProjectProfileConsentRequest(input: CreateProjectPro
       "project_profile_consent_request_create_failed",
       "Unable to create a project participant consent request.",
     );
+  }
+
+  if (input.correctionProvenance) {
+    const { data: updatedRequest, error: provenanceError } = await createServiceRoleClient()
+      .from("recurring_profile_consent_requests")
+      .update({
+        request_source: input.correctionProvenance.requestSource,
+        correction_opened_at_snapshot: input.correctionProvenance.correctionOpenedAtSnapshot,
+        correction_source_release_id_snapshot: input.correctionProvenance.correctionSourceReleaseIdSnapshot,
+      })
+      .eq("tenant_id", input.tenantId)
+      .eq("project_id", projectId)
+      .eq("workspace_id", workspaceId)
+      .eq("id", row.request_id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+
+    if (provenanceError || !updatedRequest?.id) {
+      throw new HttpError(
+        500,
+        "project_profile_consent_request_create_failed",
+        "Unable to create a project participant consent request.",
+      );
+    }
   }
 
   const resolvedToken = deriveRecurringProfileConsentToken({ requestId: row.request_id });

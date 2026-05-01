@@ -164,7 +164,7 @@ Variable meanings:
 
 - `NEXT_PUBLIC_SUPABASE_URL`: hosted Supabase project API URL
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: public anon key used by auth/session clients
-- `SUPABASE_SERVICE_ROLE_KEY`: server-only admin key used by uploads, exports, workers, matching, derivatives
+- `SUPABASE_SERVICE_ROLE_KEY`: server-only admin key used by uploads, workers, matching, derivatives, release snapshots, and Media Library signed downloads
 - `INVITE_TOKEN_SECRET`: server-side HMAC secret for invite token derivation
 - `AUTO_MATCH_PROVIDER`: selects `compreface` instead of the built-in stub provider
 - `AUTO_MATCH_PIPELINE_MODE`: use the current materialized matching pipeline

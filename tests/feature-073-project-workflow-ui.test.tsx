@@ -60,6 +60,12 @@ function renderWorkflowView(overrides: Partial<Parameters<typeof ProjectWorkflow
     finalizedAt: null,
     finalizedBy: null,
     workflowState: "active" as const,
+    correctionState: "none" as const,
+    correctionOpenedAt: null,
+    correctionOpenedBy: null,
+    correctionSourceReleaseId: null,
+    correctionReason: null,
+    hasCorrectionReopenedWorkspaces: false,
     totalWorkspaceCount: 2,
     validatedWorkspaceCount: 1,
     allWorkspacesValidated: false,
@@ -125,6 +131,12 @@ test("workflow view renders finalize action only when the project is ready", () 
       finalizedAt: null,
       finalizedBy: null,
       workflowState: "ready_to_finalize",
+      correctionState: "none",
+      correctionOpenedAt: null,
+      correctionOpenedBy: null,
+      correctionSourceReleaseId: null,
+      correctionReason: null,
+      hasCorrectionReopenedWorkspaces: false,
       totalWorkspaceCount: 2,
       validatedWorkspaceCount: 2,
       allWorkspacesValidated: true,
@@ -163,6 +175,12 @@ test("workflow view renders finalized read-only messaging", () => {
       finalizedAt: new Date().toISOString(),
       finalizedBy: "user-reviewer",
       workflowState: "finalized",
+      correctionState: "none",
+      correctionOpenedAt: null,
+      correctionOpenedBy: null,
+      correctionSourceReleaseId: null,
+      correctionReason: null,
+      hasCorrectionReopenedWorkspaces: false,
       totalWorkspaceCount: 2,
       validatedWorkspaceCount: 2,
       allWorkspacesValidated: true,
@@ -173,5 +191,96 @@ test("workflow view renders finalized read-only messaging", () => {
 
   assert.match(markup, /Finalized/);
   assert.match(markup, /This project is finalized\. Capture, review, staffing, and template changes are read-only\./);
+  assert.match(markup, /Start correction/);
   assert.doesNotMatch(markup, /Finalize project/);
+});
+
+test("workflow view renders correction controls on reopened finalized workspaces", () => {
+  const markup = renderWorkflowView({
+    canCaptureProjects: false,
+    canReviewProjects: true,
+    selectedWorkspace: {
+      id: randomUUID(),
+      name: "North hall",
+      workflow_state: "handed_off",
+      workflow_state_changed_at: new Date().toISOString(),
+      handed_off_at: new Date().toISOString(),
+      validated_at: new Date().toISOString(),
+      needs_changes_at: null,
+      reopened_at: new Date().toISOString(),
+    },
+    selectedWorkspaceSummary: createWorkspaceSummary({
+      workflowState: "handed_off",
+      isReadyForValidation: true,
+    }),
+    projectWorkflow: {
+      projectId: randomUUID(),
+      status: "active",
+      finalizedAt: new Date().toISOString(),
+      finalizedBy: "user-reviewer",
+      workflowState: "correction_open",
+      correctionState: "open",
+      correctionOpenedAt: new Date().toISOString(),
+      correctionOpenedBy: "user-reviewer",
+      correctionSourceReleaseId: "release-1",
+      correctionReason: null,
+      hasCorrectionReopenedWorkspaces: true,
+      totalWorkspaceCount: 2,
+      validatedWorkspaceCount: 1,
+      allWorkspacesValidated: false,
+      hasValidationBlockers: false,
+      workspaces: [],
+    },
+  });
+
+  assert.match(markup, /Correction open/);
+  assert.match(markup, /Correction reopened/);
+  assert.match(markup, /Corrections stay review-only and will publish a new release version when finalized\./);
+  assert.match(markup, /Mark validated/);
+  assert.doesNotMatch(markup, /Needs changes/);
+  assert.doesNotMatch(markup, /Start correction/);
+});
+
+test("workflow view explains that correction keeps capture locked but allows bounded consent intake", () => {
+  const correctionOpenedAt = new Date().toISOString();
+  const markup = renderWorkflowView({
+    canCaptureProjects: true,
+    canReviewProjects: true,
+    selectedWorkspace: {
+      id: randomUUID(),
+      name: "North hall",
+      workflow_state: "handed_off",
+      workflow_state_changed_at: correctionOpenedAt,
+      handed_off_at: new Date().toISOString(),
+      validated_at: new Date().toISOString(),
+      needs_changes_at: null,
+      reopened_at: correctionOpenedAt,
+    },
+    selectedWorkspaceSummary: createWorkspaceSummary({
+      workflowState: "handed_off",
+      isReadyForValidation: false,
+      activeInviteCount: 1,
+    }),
+    projectWorkflow: {
+      projectId: randomUUID(),
+      status: "active",
+      finalizedAt: new Date().toISOString(),
+      finalizedBy: "user-reviewer",
+      workflowState: "correction_open",
+      correctionState: "open",
+      correctionOpenedAt,
+      correctionOpenedBy: "user-reviewer",
+      correctionSourceReleaseId: "release-1",
+      correctionReason: null,
+      hasCorrectionReopenedWorkspaces: true,
+      totalWorkspaceCount: 2,
+      validatedWorkspaceCount: 1,
+      allWorkspacesValidated: false,
+      hasValidationBlockers: true,
+      workspaces: [],
+    },
+  });
+
+  assert.match(markup, /Capture uploads, staffing, and template changes stay locked\./);
+  assert.match(markup, /Reopened workspaces can still send correction consent requests from the review surface\./);
 });

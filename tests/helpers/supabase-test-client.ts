@@ -192,3 +192,42 @@ export async function createPhotographerProjectWorkspace(input: {
   assert.ok(data?.id, "photographer project workspace should exist");
   return data.id as string;
 }
+
+export async function getSystemRoleDefinitionId(role: "owner" | "admin" | "reviewer" | "photographer") {
+  const { data, error } = await adminClient
+    .from("role_definitions")
+    .select("id")
+    .eq("is_system", true)
+    .eq("system_role_key", role)
+    .single();
+
+  assertNoPostgrestError(error, `select system role ${role}`);
+  assert.ok(data?.id, `system role ${role} should exist`);
+  return data.id as string;
+}
+
+export async function createReviewerRoleAssignment(input: {
+  tenantId: string;
+  userId: string;
+  createdBy: string;
+  projectId?: string | null;
+}) {
+  const roleDefinitionId = await getSystemRoleDefinitionId("reviewer");
+  const { data, error } = await adminClient
+    .from("role_assignments")
+    .insert({
+      tenant_id: input.tenantId,
+      user_id: input.userId,
+      role_definition_id: roleDefinitionId,
+      scope_type: input.projectId ? "project" : "tenant",
+      project_id: input.projectId ?? null,
+      workspace_id: null,
+      created_by: input.createdBy,
+    })
+    .select("id")
+    .single();
+
+  assertNoPostgrestError(error, "insert reviewer role assignment");
+  assert.ok(data?.id, "reviewer role assignment should exist");
+  return data.id as string;
+}

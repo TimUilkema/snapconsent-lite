@@ -60,6 +60,7 @@ import {
 type AssetsUploadFormProps = {
   projectId: string;
   workspaceId: string;
+  mode?: "capture" | "correction";
 };
 
 type PreflightResponse = {
@@ -167,7 +168,11 @@ function validateSelectedFiles(selectedFiles: File[]): SelectedFileValidation {
   };
 }
 
-export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormProps) {
+export function AssetsUploadForm({
+  projectId,
+  workspaceId,
+  mode = "capture",
+}: AssetsUploadFormProps) {
   const router = useRouter();
   const t = useTranslations("projects.assetsUploadForm");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -185,7 +190,11 @@ export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormPro
   const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("upload_anyway");
-  const manifestScopeKey = `${projectId}:${workspaceId}`;
+  const manifestScopeKey = `${projectId}:${workspaceId}:${mode}`;
+  const endpointBase =
+    mode === "correction"
+      ? `/api/projects/${projectId}/correction/assets`
+      : `/api/projects/${projectId}/assets`;
 
   const acceptValue = useMemo(() => getAcceptedProjectAssetUploadAcceptValue(), []);
 
@@ -269,7 +278,7 @@ export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormPro
 
     const targetSet = new Set(targetIds);
     const targetItems = current.items.filter((item) => targetSet.has(item.clientItemId));
-    const response = await fetch(`/api/projects/${projectId}/assets/preflight`, {
+    const response = await fetch(`${endpointBase}/preflight`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -440,7 +449,7 @@ export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormPro
 
   async function runPrepareBatch(itemsToPrepare: ProjectUploadManifest["items"]) {
     const assetType = itemsToPrepare[0]?.assetType ?? "photo";
-    const response = await fetch(`/api/projects/${projectId}/assets/batch/prepare`, {
+    const response = await fetch(`${endpointBase}/batch/prepare`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -594,7 +603,7 @@ export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormPro
   }
 
   async function runFinalizeBatch(itemsToFinalize: ProjectUploadManifest["items"]) {
-    const response = await fetch(`/api/projects/${projectId}/assets/batch/finalize`, {
+    const response = await fetch(`${endpointBase}/batch/finalize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1167,6 +1176,11 @@ export function AssetsUploadForm({ projectId, workspaceId }: AssetsUploadFormPro
       <p className="text-sm text-zinc-600">
         {t("headshotsManagedNote")}
       </p>
+      {mode === "correction" ? (
+        <p className="text-sm text-zinc-600">
+          {t("correctionNotice")}
+        </p>
+      ) : null}
 
       {isPreparing ? <p className="text-xs text-zinc-600">{t("checkingDuplicates")}</p> : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}

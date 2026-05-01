@@ -1,8 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { HttpError, jsonError } from "@/lib/http/errors";
 import { createInviteWithIdempotency } from "@/lib/idempotency/invite-idempotency";
-import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
-import { getVisiblePublishedTemplateById } from "@/lib/templates/template-service";
+import { buildCorrectionRequestProvenance } from "@/lib/projects/project-workflow-service";
+import {
+  loadProjectWorkflowRowForAccess,
+  requireWorkspaceCaptureMutationAccessForRequest,
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest,
+} from "@/lib/projects/project-workspace-request";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
 type RouteContext = {
@@ -41,13 +46,30 @@ export async function POST(request: Request, context: RouteContext) {
       typeof (body as { workspaceId?: unknown } | null)?.workspaceId === "string"
         ? String((body as { workspaceId?: unknown }).workspaceId).trim()
         : "";
-    const { workspace } = await requireWorkspaceCaptureMutationAccessForRequest({
-      supabase,
-      tenantId,
-      userId: user.id,
-      projectId,
-      requestedWorkspaceId,
-    });
+    const projectWorkflow = await loadProjectWorkflowRowForAccess(supabase, tenantId, projectId);
+    const correctionAccess = projectWorkflow.finalized_at !== null && projectWorkflow.correction_state === "open"
+      ? await requireWorkspaceCorrectionConsentIntakeAccessForRequest({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          requestedWorkspaceId,
+        })
+      : null;
+    const normalAccess = correctionAccess
+      ? null
+      : await requireWorkspaceCaptureMutationAccessForRequest({
+          supabase,
+          tenantId,
+          userId: user.id,
+          projectId,
+          requestedWorkspaceId,
+          capabilityKey: "capture.create_one_off_invites",
+        });
+    const workspace = correctionAccess?.workspace ?? normalAccess?.workspace;
+    if (!workspace) {
+      throw new HttpError(500, "workspace_lookup_failed", "Unable to load project workspace.");
+    }
 
     const { data: project, error: projectError } = await supabase
       .from("projects")
@@ -92,13 +114,14 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const result = await createInviteWithIdempotency({
-      supabase,
+      supabase: createAdminClient(),
       tenantId,
       projectId,
       workspaceId: workspace.id,
       userId: user.id,
       idempotencyKey,
       consentTemplateId,
+      correctionProvenance: correctionAccess ? buildCorrectionRequestProvenance(correctionAccess.project) : null,
     });
 
     return Response.json(result.payload, { status: result.status });

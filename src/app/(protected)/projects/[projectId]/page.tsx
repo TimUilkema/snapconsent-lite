@@ -13,6 +13,7 @@ import { OneOffConsentUpgradeForm } from "@/components/projects/one-off-consent-
 import { PreviewableImage } from "@/components/projects/previewable-image";
 import { ProjectParticipantsPanel } from "@/components/projects/project-participants-panel";
 import { ProjectMatchingProgress } from "@/components/projects/project-matching-progress";
+import { ProjectReviewerAccessPanel } from "@/components/projects/project-reviewer-access-panel";
 import { ProjectWorkflowControls } from "@/components/projects/project-workflow-controls";
 import { ProjectWorkspaceStaffingForm } from "@/components/projects/project-workspace-staffing-form";
 import { InviteActions } from "@/components/projects/invite-actions";
@@ -22,6 +23,11 @@ import { formatDateTime } from "@/lib/i18n/format";
 import { loadCurrentProjectConsentHeadshots } from "@/lib/matching/face-materialization";
 import { getProjectMatchingProgress } from "@/lib/matching/project-matching-progress";
 import { filterCurrentOneOffInviteRows } from "@/lib/projects/current-one-off-consent";
+import {
+  listAssignablePhotographersForProjectAdministration,
+  listProjectAdministrationWorkspaces,
+  resolveProjectAdministrationAccess,
+} from "@/lib/projects/project-administration-service";
 import { getProjectWorkflowSummary } from "@/lib/projects/project-workflow-service";
 import { getProjectParticipantsPanelData } from "@/lib/projects/project-participants-service";
 import { resolveProjectWorkspaceSelection } from "@/lib/projects/project-workspaces-service";
@@ -29,7 +35,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { listVisibleTemplatesForTenant } from "@/lib/templates/template-service";
 import type { StructuredFieldsSnapshot } from "@/lib/templates/structured-fields";
+import {
+  resolveEffectiveProjectCapabilities,
+  resolveEffectiveWorkspaceCapabilities,
+} from "@/lib/tenant/effective-permissions";
 import { resolveProjectPermissions } from "@/lib/tenant/permissions";
+import { listProjectReviewerAssignments } from "@/lib/tenant/reviewer-access-service";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 import { deriveInviteToken } from "@/lib/tokens/public-token";
 import { resolveLoopbackStorageUrlForHostHeader } from "@/lib/url/resolve-loopback-storage-url";
@@ -52,6 +63,9 @@ type InviteRow = {
   used_count: number;
   max_uses: number;
   created_at: string;
+  request_source: "normal" | "correction";
+  correction_opened_at_snapshot: string | null;
+  correction_source_release_id_snapshot: string | null;
   consent_template?: {
     id: string;
     template_key: string;
@@ -81,6 +95,9 @@ type RawInviteRow = {
   used_count: number;
   max_uses: number;
   created_at: string;
+  request_source: "normal" | "correction";
+  correction_opened_at_snapshot: string | null;
+  correction_source_release_id_snapshot: string | null;
   consent_template?:
     | {
         id: string;
@@ -159,6 +176,9 @@ type PendingUpgradeRequestRow = {
         expires_at: string | null;
         used_count: number;
         max_uses: number;
+        request_source: "normal" | "correction";
+        correction_opened_at_snapshot: string | null;
+        correction_source_release_id_snapshot: string | null;
       }
     | Array<{
         id: string;
@@ -166,8 +186,16 @@ type PendingUpgradeRequestRow = {
         expires_at: string | null;
         used_count: number;
         max_uses: number;
+        request_source: "normal" | "correction";
+        correction_opened_at_snapshot: string | null;
+        correction_source_release_id_snapshot: string | null;
       }>
     | null;
+};
+
+type InviteIdempotencyResponse = {
+  inviteId?: string;
+  invitePath?: string;
 };
 
 type HeadshotAssetRow = {
@@ -182,10 +210,6 @@ type RecurringProfileHeadshotPreviewRow = {
   storage_bucket: string | null;
   storage_path: string | null;
   created_at: string;
-};
-
-type TenantPhotographerMembershipRow = {
-  user_id: string;
 };
 
 function buildProjectWorkspaceHref(
@@ -227,6 +251,73 @@ function getWorkspaceWorkflowBadgeTone(state: string, isSelected: boolean) {
     : "border border-zinc-300 bg-zinc-100 text-zinc-700";
 }
 
+function isWorkspaceCorrectionReopenedForActiveCycle(input: {
+  correctionOpenedAt: string | null;
+  correctionOpen: boolean;
+  selectedWorkspace:
+    | {
+        workflow_state: string;
+        reopened_at: string | null;
+      }
+    | null;
+}) {
+  return Boolean(
+    input.correctionOpen
+      && input.selectedWorkspace?.workflow_state === "handed_off"
+      && input.selectedWorkspace.reopened_at
+      && input.correctionOpenedAt
+      && input.selectedWorkspace.reopened_at >= input.correctionOpenedAt,
+  );
+}
+
+function isInviteFromActiveCorrectionCycle(
+  invite: Pick<
+    InviteRow,
+    "request_source" | "correction_opened_at_snapshot" | "correction_source_release_id_snapshot"
+  >,
+  projectWorkflow: Pick<
+    Awaited<ReturnType<typeof getProjectWorkflowSummary>>,
+    "correctionState" | "correctionOpenedAt" | "correctionSourceReleaseId"
+  >,
+) {
+  return (
+    projectWorkflow.correctionState === "open"
+    && invite.request_source === "correction"
+    && invite.correction_opened_at_snapshot !== null
+    && invite.correction_opened_at_snapshot === projectWorkflow.correctionOpenedAt
+    && invite.correction_source_release_id_snapshot !== null
+    && invite.correction_source_release_id_snapshot === projectWorkflow.correctionSourceReleaseId
+  );
+}
+
+function derivePendingUpgradeInvitePath(
+  tenantId: string,
+  projectId: string,
+  upgradeRequestId: string,
+  invite:
+    | {
+        request_source: "normal" | "correction";
+        correction_opened_at_snapshot: string | null;
+        correction_source_release_id_snapshot: string | null;
+      }
+    | null,
+) {
+  const correctionOperationSuffix =
+    invite?.request_source === "correction"
+    && invite.correction_opened_at_snapshot
+    && invite.correction_source_release_id_snapshot
+      ? `:correction:${invite.correction_source_release_id_snapshot}:${invite.correction_opened_at_snapshot}`
+      : "";
+
+  return buildInvitePath(
+    deriveInviteToken({
+      tenantId,
+      projectId,
+      idempotencyKey: `${upgradeRequestId}${correctionOperationSuffix}`,
+    }),
+  );
+}
+
 export default async function ProjectDashboardPage({ params, searchParams }: RouteProps) {
   const locale = await getLocale();
   const t = await getTranslations("projects.detail");
@@ -250,11 +341,10 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   if (!tenantId) {
     redirect("/projects");
   }
-  const projectPermissions = await resolveProjectPermissions(supabase, tenantId, user.id);
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, description, status, created_at, finalized_at, finalized_by")
+    .select("id, name, description, status, created_at, created_by, finalized_at, finalized_by")
     .eq("id", projectId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -262,6 +352,13 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   if (!project) {
     notFound();
   }
+  const projectAdministrationAccess = await resolveProjectAdministrationAccess({
+    supabase,
+    tenantId,
+    userId: user.id,
+    projectCreatedByUserId: project.created_by,
+  });
+  const projectPermissions = await resolveProjectPermissions(supabase, tenantId, user.id, project.id);
 
   let workspaceSelection: Awaited<ReturnType<typeof resolveProjectWorkspaceSelection>>;
   try {
@@ -274,7 +371,121 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     });
   } catch (error) {
     if (error instanceof HttpError && error.status === 404) {
-      notFound();
+      if (!projectAdministrationAccess.canViewProjectAdministration) {
+        notFound();
+      }
+
+      const administrationWorkspaces = projectAdministrationAccess.canManageProjectWorkspaces
+        ? await listProjectAdministrationWorkspaces({
+            supabase,
+            tenantId,
+            userId: user.id,
+            projectId: project.id,
+          })
+        : [];
+      const staffingMutationsAllowed = Boolean(
+        projectAdministrationAccess.canManageProjectWorkspaces
+          && project.status === "active"
+          && !project.finalized_at,
+      );
+      const assignablePhotographers = staffingMutationsAllowed
+        ? await listAssignablePhotographersForProjectAdministration({
+            supabase,
+            tenantId,
+            userId: user.id,
+            projectId: project.id,
+            adminSupabase,
+          })
+        : [];
+
+      return (
+        <div className="space-y-6">
+          <section className="app-shell rounded-2xl px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-600">
+                <Link href="/projects" className="font-medium text-zinc-700 underline underline-offset-4">
+                  {t("breadcrumbProjects")}
+                </Link>
+                <span>/</span>
+                <span>{project.name}</span>
+              </div>
+
+              <div>
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">{project.name}</h1>
+                <p className="mt-2 text-sm leading-6 text-zinc-600">{t("subtitle")}</p>
+                {project.description ? (
+                  <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-800">{project.description}</p>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="content-card rounded-2xl p-5">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+              <div className="space-y-4">
+                <div className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    {t("workspaceSectionLabel")}
+                  </p>
+                  {administrationWorkspaces.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {administrationWorkspaces.map((workspace) => (
+                        <span
+                          key={workspace.id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800"
+                        >
+                          <span>{workspace.name}</span>
+                          <span
+                            className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium ${getWorkspaceWorkflowBadgeTone(
+                              workspace.workflow_state,
+                              false,
+                            )}`}
+                          >
+                            {t(`workflow.workspaceStates.${workspace.workflow_state}`)}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-zinc-600">{t("workspaceNoneAssigned")}</p>
+                  )}
+                </div>
+
+                {staffingMutationsAllowed ? (
+                  <ProjectWorkspaceStaffingForm
+                    projectId={project.id}
+                    photographers={assignablePhotographers}
+                    existingWorkspaces={administrationWorkspaces.map((workspace) => ({
+                      id: workspace.id,
+                      photographerUserId: workspace.photographer_user_id,
+                      name: workspace.name,
+                    }))}
+                  />
+                ) : projectAdministrationAccess.canManageProjectWorkspaces ? (
+                  <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+                    {project.finalized_at
+                      ? t("workflow.staffingLockedFinalized")
+                      : t("workflow.projectArchivedReadOnly")}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <div className="rounded-xl border border-zinc-200 bg-white p-3">
+                  <p className="text-sm text-zinc-500">{t("statsStatus")}</p>
+                  <p className="mt-1 font-medium text-zinc-900">{project.status}</p>
+                </div>
+                <div className="rounded-xl border border-zinc-200 bg-white p-3">
+                  <p className="text-sm text-zinc-500">{t("statsCreated")}</p>
+                  <p className="mt-1 font-medium text-zinc-900">
+                    {formatDateTime(project.created_at, locale)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      );
     }
 
     throw error;
@@ -301,23 +512,107 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   });
   const selectedWorkspaceWorkflow =
     projectWorkflow.workspaces.find((workspace) => workspace.workspaceId === selectedWorkspace?.id) ?? null;
-  const captureMutationsAllowed = Boolean(
-    projectPermissions.canCaptureProjects
-      && selectedWorkspace
+  const correctionOpen = projectWorkflow.correctionState === "open";
+  const correctionWorkspaceReopenedForCurrentCycle = isWorkspaceCorrectionReopenedForActiveCycle({
+    correctionOpenedAt: projectWorkflow.correctionOpenedAt,
+    correctionOpen,
+    selectedWorkspace,
+  });
+  const projectEffectiveCapabilities = await resolveEffectiveProjectCapabilities({
+    supabase,
+    adminSupabase,
+    tenantId,
+    userId: user.id,
+    projectId: project.id,
+  });
+  const projectCapabilitySet = new Set(projectEffectiveCapabilities.capabilityKeys);
+  const workspaceEffectiveCapabilities = selectedWorkspace
+    ? await resolveEffectiveWorkspaceCapabilities({
+        supabase,
+        adminSupabase,
+        tenantId,
+        userId: user.id,
+        projectId: project.id,
+        workspaceId: selectedWorkspace.id,
+      })
+    : null;
+  const workspaceCapabilitySet = new Set(workspaceEffectiveCapabilities?.capabilityKeys ?? []);
+  const canOpenCaptureWorkspace = workspaceCapabilitySet.has("capture.workspace");
+  const canCreateOneOffInvites = workspaceCapabilitySet.has("capture.create_one_off_invites");
+  const canCreateRecurringProjectConsentRequests = workspaceCapabilitySet.has(
+    "capture.create_recurring_project_consent_requests",
+  );
+  const canUploadAssets = workspaceCapabilitySet.has("capture.upload_assets");
+  const canOpenReviewWorkspace = workspaceCapabilitySet.has("review.workspace");
+  const canInitiateConsentUpgradeRequests = workspaceCapabilitySet.has(
+    "review.initiate_consent_upgrade_requests",
+  );
+  const canFinalizeProject = projectCapabilitySet.has("workflow.finalize_project");
+  const canStartProjectCorrection = projectCapabilitySet.has("workflow.start_project_correction");
+  const canReopenWorkspaceForCorrection = workspaceCapabilitySet.has(
+    "workflow.reopen_workspace_for_correction",
+  );
+  const canCorrectionReview = workspaceCapabilitySet.has("correction.review");
+  const canCorrectionConsentIntake = workspaceCapabilitySet.has("correction.consent_intake");
+  const canCorrectionMediaIntake = workspaceCapabilitySet.has("correction.media_intake");
+  const normalCaptureStateOpen = Boolean(
+    selectedWorkspace
       && project.status === "active"
       && !project.finalized_at
       && (selectedWorkspace.workflow_state === "active" || selectedWorkspace.workflow_state === "needs_changes"),
   );
-  const reviewMutationsAllowed = Boolean(
-    projectPermissions.canReviewProjects
-      && selectedWorkspace
+  const normalReviewStateOpen = Boolean(
+    selectedWorkspace
       && project.status === "active"
+      && !correctionOpen
       && !project.finalized_at
       && (selectedWorkspace.workflow_state === "handed_off" || selectedWorkspace.workflow_state === "needs_changes"),
   );
-  const staffingMutationsAllowed = Boolean(
-    projectPermissions.canManageMembers && project.status === "active" && !project.finalized_at,
+  const inviteMutationsAllowed = canCreateOneOffInvites && normalCaptureStateOpen;
+  const recurringConsentMutationsAllowed =
+    canCreateRecurringProjectConsentRequests && normalCaptureStateOpen;
+  const assetUploadAllowed = canUploadAssets && normalCaptureStateOpen;
+  const correctionMediaIntakeAllowed = Boolean(
+    canCorrectionMediaIntake && correctionWorkspaceReopenedForCurrentCycle,
   );
+  const correctionConsentMutationsAllowed = Boolean(
+    canCorrectionConsentIntake && correctionWorkspaceReopenedForCurrentCycle,
+  );
+  const correctionReviewMutationsAllowed = Boolean(
+    canCorrectionReview
+      && selectedWorkspace
+      && project.status === "active"
+      && correctionOpen
+      && selectedWorkspace.workflow_state === "handed_off",
+  );
+  const captureMutationsAllowed = inviteMutationsAllowed
+    || recurringConsentMutationsAllowed
+    || assetUploadAllowed;
+  const reviewSafeMutationsAllowed = Boolean(
+    correctionOpen ? correctionReviewMutationsAllowed : canOpenReviewWorkspace && normalReviewStateOpen,
+  );
+  const reviewConsentFlowMutationsAllowed = Boolean(
+    correctionOpen
+      ? correctionConsentMutationsAllowed
+      : canInitiateConsentUpgradeRequests && normalReviewStateOpen,
+  );
+  const headshotReplacementAllowed = Boolean(
+    !correctionOpen && canOpenReviewWorkspace && normalReviewStateOpen,
+  );
+  const consentIntakeActionsAllowed =
+    recurringConsentMutationsAllowed || correctionConsentMutationsAllowed;
+  const canShowCaptureLockedNotice = canOpenCaptureWorkspace
+    || canCreateOneOffInvites
+    || canCreateRecurringProjectConsentRequests
+    || canUploadAssets;
+  const canShowReviewLockedNotice = canOpenReviewWorkspace || canCorrectionReview;
+  const canManageProjectStaffing = projectAdministrationAccess.canManageProjectWorkspaces;
+  const staffingMutationsAllowed = Boolean(
+    canManageProjectStaffing && project.status === "active" && !project.finalized_at,
+  );
+  const correctionConsentNotice = correctionConsentMutationsAllowed
+    ? t("workflow.projectCorrectionConsentIntakeHelper")
+    : null;
 
   const templates = await listVisibleTemplatesForTenant(supabase, tenantId);
   const participantPanelData = selectedWorkspace
@@ -349,50 +644,31 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   }));
 
   let assignablePhotographers: Array<{ userId: string; email: string }> = [];
+  let projectReviewerAccessData: Awaited<ReturnType<typeof listProjectReviewerAssignments>> | null = null;
   if (projectPermissions.canManageMembers) {
-    const { data: photographerMemberships, error: photographerMembershipsError } = await supabase
-      .from("memberships")
-      .select("user_id")
-      .eq("tenant_id", tenantId)
-      .eq("role", "photographer")
-      .order("created_at", { ascending: true });
+    projectReviewerAccessData = await listProjectReviewerAssignments({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId: project.id,
+    });
+  }
 
-    if (photographerMembershipsError) {
-      throw photographerMembershipsError;
-    }
-
-    const photographerUserIds = ((photographerMemberships ?? []) as TenantPhotographerMembershipRow[]).map(
-      (membership) => membership.user_id,
-    );
-    if (photographerUserIds.length > 0) {
-      const { data: authUsers, error: authUsersError } = await adminSupabase.auth.admin.listUsers({
-        page: 1,
-        perPage: 1000,
-      });
-
-      if (authUsersError) {
-        throw authUsersError;
-      }
-
-      const emailByUserId = new Map<string, string>();
-      authUsers.users.forEach((authUser) => {
-        if (photographerUserIds.includes(authUser.id)) {
-          emailByUserId.set(authUser.id, authUser.email?.trim().toLowerCase() ?? "unknown@email");
-        }
-      });
-
-      assignablePhotographers = photographerUserIds.map((photographerUserId) => ({
-        userId: photographerUserId,
-        email: emailByUserId.get(photographerUserId) ?? "unknown@email",
-      }));
-    }
+  if (canManageProjectStaffing) {
+    assignablePhotographers = await listAssignablePhotographersForProjectAdministration({
+      supabase,
+      tenantId,
+      userId: user.id,
+      projectId: project.id,
+      adminSupabase,
+    });
   }
 
   const { data: invites } = selectedWorkspace
     ? await supabase
         .from("subject_invites")
         .select(
-          "id, status, expires_at, used_count, max_uses, created_at, consent_template:consent_templates(id, template_key, name, version, version_number), consents(id, signed_at, superseded_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
+          "id, status, expires_at, used_count, max_uses, created_at, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot, consent_template:consent_templates(id, template_key, name, version, version_number), consents(id, signed_at, superseded_at, consent_text, consent_version, structured_fields_snapshot, face_match_opt_in, subjects(email, full_name))",
         )
         .eq("project_id", project.id)
         .eq("workspace_id", selectedWorkspace.id)
@@ -408,6 +684,9 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     used_count: invite.used_count,
     max_uses: invite.max_uses,
     created_at: invite.created_at,
+    request_source: invite.request_source,
+    correction_opened_at_snapshot: invite.correction_opened_at_snapshot,
+    correction_source_release_id_snapshot: invite.correction_source_release_id_snapshot,
     consent_template: firstRelation(invite.consent_template),
     consents: Array.isArray(invite.consents)
       ? invite.consents.map((consent) => ({
@@ -444,7 +723,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
     const { data: pendingUpgradeRequests } = await supabase
       .from("project_consent_upgrade_requests")
       .select(
-        "id, prior_consent_id, target_template_id, invite_id, target_template:consent_templates(id, name, version), invite:subject_invites(id, status, expires_at, used_count, max_uses)",
+        "id, prior_consent_id, target_template_id, invite_id, target_template:consent_templates(id, name, version), invite:subject_invites(id, status, expires_at, used_count, max_uses, request_source, correction_opened_at_snapshot, correction_source_release_id_snapshot)",
       )
       .eq("tenant_id", tenantId)
       .eq("project_id", project.id)
@@ -469,13 +748,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
         targetTemplateId: request.target_template_id,
         targetTemplateName: targetTemplate.name,
         targetTemplateVersion: targetTemplate.version,
-        invitePath: buildInvitePath(
-          deriveInviteToken({
-            tenantId,
-            projectId: project.id,
-            idempotencyKey: request.id,
-          }),
-        ),
+        invitePath: derivePendingUpgradeInvitePath(tenantId, project.id, request.id, invite),
         expiresAt: invite.expires_at ?? null,
       });
     });
@@ -484,17 +757,44 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
   const inviteOperation = selectedWorkspace
     ? `create_project_invite:${project.id}:${selectedWorkspace.id}`
     : `create_project_invite:${project.id}`;
+  const inviteOperations = [
+    inviteOperation,
+    ...(correctionOpen && projectWorkflow.correctionOpenedAt && projectWorkflow.correctionSourceReleaseId
+      ? [
+          `${inviteOperation}:correction:${projectWorkflow.correctionSourceReleaseId}:${projectWorkflow.correctionOpenedAt}`,
+        ]
+      : []),
+  ];
   const { data: idempotencyRows } = await supabase
     .from("idempotency_keys")
-    .select("idempotency_key, response_json")
+    .select("idempotency_key, operation, response_json")
     .eq("tenant_id", tenantId)
-    .eq("operation", inviteOperation);
+    .in("operation", inviteOperations);
 
-  const inviteKeyMap = new Map<string, string>();
+  const invitePathMap = new Map<string, string>();
   (idempotencyRows ?? []).forEach((row) => {
-    const inviteId = (row.response_json as { inviteId?: string } | null)?.inviteId;
-    if (inviteId && row.idempotency_key) {
-      inviteKeyMap.set(inviteId, row.idempotency_key);
+    const payload = (row.response_json as InviteIdempotencyResponse | null) ?? null;
+    const inviteId = payload?.inviteId;
+    if (!inviteId || !row.idempotency_key) {
+      return;
+    }
+
+    if (typeof payload?.invitePath === "string" && payload.invitePath.startsWith("/")) {
+      invitePathMap.set(inviteId, payload.invitePath);
+      return;
+    }
+
+    if (row.operation === inviteOperation) {
+      invitePathMap.set(
+        inviteId,
+        buildInvitePath(
+          deriveInviteToken({
+            tenantId,
+            projectId: project.id,
+            idempotencyKey: row.idempotency_key,
+          }),
+        ),
+      );
     }
   });
 
@@ -654,18 +954,8 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
               <span>{project.name}</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {projectPermissions.canReviewProjects && selectedWorkspace ? (
-                <a
-                  href={`/api/projects/${project.id}/export?${new URLSearchParams({
-                    workspaceId: selectedWorkspace.id,
-                  }).toString()}`}
-                  className="rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800"
-                >
-                  {t("exportProject")}
-                </a>
-              ) : null}
               <nav className="flex flex-wrap gap-2" aria-label={t("projectSectionsAria")}>
-              <a
+                <a
                   href="#project-participants"
                   className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
                 >
@@ -734,8 +1024,12 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                   <ProjectWorkflowControls
                     projectId={project.id}
                     projectStatus={project.status}
-                    canCaptureProjects={projectPermissions.canCaptureProjects}
-                    canReviewProjects={projectPermissions.canReviewProjects}
+                    canHandoffWorkspace={canOpenCaptureWorkspace}
+                    canReviewWorkspace={canOpenReviewWorkspace}
+                    canValidateCorrectionWorkspace={canCorrectionReview}
+                    canFinalizeProject={canFinalizeProject}
+                    canStartProjectCorrection={canStartProjectCorrection}
+                    canReopenWorkspaceForCorrection={canReopenWorkspaceForCorrection}
                     selectedWorkspace={{
                       id: selectedWorkspace.id,
                       name: selectedWorkspace.name,
@@ -761,12 +1055,19 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                       name: workspace.name,
                     }))}
                   />
-                ) : projectPermissions.canManageMembers ? (
+                ) : canManageProjectStaffing ? (
                   <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
                     {project.finalized_at
                       ? t("workflow.staffingLockedFinalized")
                       : t("workflow.projectArchivedReadOnly")}
                   </p>
+                ) : null}
+
+                {projectReviewerAccessData ? (
+                  <ProjectReviewerAccessPanel
+                    projectId={project.id}
+                    data={projectReviewerAccessData}
+                  />
                 ) : null}
               </div>
             </div>
@@ -813,17 +1114,21 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
               data={participantPanelData}
               templates={templateOptions}
               defaultTemplateId={null}
-              defaultTemplateWarning={null}
-              allowCaptureActions={projectPermissions.canCaptureProjects}
-              allowCaptureMutations={captureMutationsAllowed}
+              defaultTemplateWarning={correctionConsentNotice}
+              allowConsentActions={
+                canCreateRecurringProjectConsentRequests || correctionConsentMutationsAllowed
+              }
+              allowConsentMutations={consentIntakeActionsAllowed}
               profileHeadshotUrls={recurringProfileHeadshotUrls}
             />
           ) : (
             <p className="text-sm text-zinc-600">{t("workspaceNoData")}</p>
           )}
-          {selectedWorkspace && projectPermissions.canCaptureProjects && !captureMutationsAllowed ? (
+          {selectedWorkspace && canShowCaptureLockedNotice && !captureMutationsAllowed ? (
             <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-              {project.finalized_at
+              {correctionOpen
+                ? t("workflow.projectCorrectionCaptureLocked")
+                : project.finalized_at
                 ? t("workflow.projectFinalizedReadOnly")
                 : selectedWorkspace.workflow_state === "validated"
                   ? t("workflow.captureLockedValidated")
@@ -832,9 +1137,9 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                     : t("workflow.projectArchivedReadOnly")}
             </p>
           ) : null}
-          {selectedWorkspace && projectPermissions.canReviewProjects && !reviewMutationsAllowed && selectedWorkspace.workflow_state === "validated" ? (
+          {selectedWorkspace && canShowReviewLockedNotice && !reviewSafeMutationsAllowed && selectedWorkspace.workflow_state === "validated" ? (
             <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-              {t("workflow.reviewLockedValidated")}
+              {correctionOpen ? t("workflow.reviewLockedCorrectionValidated") : t("workflow.reviewLockedValidated")}
             </p>
           ) : null}
 
@@ -842,6 +1147,11 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
           <div className="space-y-4 border-t border-zinc-200 pt-6">
             <div>
               <h3 className="text-base font-semibold text-zinc-900">{t("oneOffParticipantsTitle")}</h3>
+              {correctionConsentNotice ? (
+                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {correctionConsentNotice}
+                </p>
+              ) : null}
             </div>
             {currentInviteRows.length ? (
               <ul className="space-y-2 text-sm">
@@ -893,25 +1203,30 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                           </div>
                         ) : null}
                       </div>
-                      {projectPermissions.canCaptureProjects ? (
+                      {canCreateOneOffInvites || correctionConsentMutationsAllowed ? (
                         <InviteActions
                           inviteId={invite.id}
                           projectId={project.id}
                           workspaceId={selectedWorkspace.id}
-                          invitePath={
-                            inviteKeyMap.has(invite.id)
-                              ? buildInvitePath(
-                                  deriveInviteToken({
-                                    tenantId,
-                                    projectId: project.id,
-                                    idempotencyKey: inviteKeyMap.get(invite.id) ?? "",
-                                  }),
-                                )
-                              : null
+                          invitePath={invitePathMap.get(invite.id) ?? null}
+                          isShareable={
+                            invite.status === "active"
+                            && invite.used_count === 0
+                            && (
+                              !correctionOpen
+                              || isInviteFromActiveCorrectionCycle(invite, projectWorkflow)
+                            )
                           }
-                          isShareable={invite.status === "active" && invite.used_count === 0}
                           isRevokable={
-                            captureMutationsAllowed && invite.status === "active" && invite.used_count === 0
+                            invite.status === "active"
+                            && invite.used_count === 0
+                            && (
+                              inviteMutationsAllowed
+                              || (
+                                correctionConsentMutationsAllowed
+                                && isInviteFromActiveCorrectionCycle(invite, projectWorkflow)
+                              )
+                            )
                           }
                         />
                       ) : null}
@@ -1005,7 +1320,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                         </div>
                                       )}
 
-                                      {reviewMutationsAllowed && consent && invite.consent_template ? (
+                                      {reviewConsentFlowMutationsAllowed && consent && invite.consent_template ? (
                                         <OneOffConsentUpgradeForm
                                           projectId={project.id}
                                           consentId={consent.id}
@@ -1064,7 +1379,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                         </div>
                                       ) : null}
 
-                                      {reviewMutationsAllowed && consent?.face_match_opt_in && hasLinkedHeadshot ? (
+                                      {headshotReplacementAllowed && consent?.face_match_opt_in && hasLinkedHeadshot ? (
                                         <ConsentHeadshotReplaceControl
                                           projectId={project.id}
                                           consentId={consent.id}
@@ -1073,7 +1388,7 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                                     </section>
                                   </div>
 
-                                  {reviewMutationsAllowed && consent ? (
+                                  {reviewSafeMutationsAllowed && consent ? (
                                     <ConsentAssetMatchingPanel
                                       projectId={project.id}
                                       consentId={consent.id}
@@ -1097,14 +1412,14 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
           ) : null}
         </section>
 
-        {captureMutationsAllowed && selectedWorkspace ? (
+        {(inviteMutationsAllowed || correctionConsentMutationsAllowed) && selectedWorkspace ? (
           <aside>
             <CreateInviteForm
               projectId={project.id}
               workspaceId={selectedWorkspace.id}
               templates={templateOptions}
               defaultTemplateId={null}
-              warning={null}
+              warning={correctionConsentNotice}
             />
           </aside>
         ) : null}
@@ -1119,9 +1434,11 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
             </p>
           </div>
         </div>
-        {selectedWorkspace && projectPermissions.canCaptureProjects && !captureMutationsAllowed ? (
+        {selectedWorkspace && canUploadAssets && !assetUploadAllowed && !correctionMediaIntakeAllowed ? (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            {project.finalized_at
+            {correctionOpen
+              ? t("workflow.projectCorrectionCaptureLocked")
+              : project.finalized_at
               ? t("workflow.projectFinalizedReadOnly")
               : selectedWorkspace.workflow_state === "validated"
                 ? t("workflow.captureLockedValidated")
@@ -1130,12 +1447,16 @@ export default async function ProjectDashboardPage({ params, searchParams }: Rou
                   : t("workflow.projectArchivedReadOnly")}
           </p>
         ) : null}
-        {captureMutationsAllowed && selectedWorkspace ? (
-          <AssetsUploadForm projectId={project.id} workspaceId={selectedWorkspace.id} />
+        {(assetUploadAllowed || correctionMediaIntakeAllowed) && selectedWorkspace ? (
+          <AssetsUploadForm
+            projectId={project.id}
+            workspaceId={selectedWorkspace.id}
+            mode={correctionMediaIntakeAllowed && !assetUploadAllowed ? "correction" : "capture"}
+          />
         ) : null}
-        {selectedWorkspace && projectPermissions.canReviewProjects && !reviewMutationsAllowed && selectedWorkspace.workflow_state === "validated" ? (
+        {selectedWorkspace && canShowReviewLockedNotice && !reviewSafeMutationsAllowed && selectedWorkspace.workflow_state === "validated" ? (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            {t("workflow.reviewLockedValidated")}
+            {correctionOpen ? t("workflow.reviewLockedCorrectionValidated") : t("workflow.reviewLockedValidated")}
           </p>
         ) : null}
         {selectedWorkspace ? (

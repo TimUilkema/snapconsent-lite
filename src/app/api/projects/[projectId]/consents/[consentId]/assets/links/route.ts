@@ -12,8 +12,8 @@ import {
 import {
   assertWorkspaceScopedRowMatchesWorkspace,
   loadWorkspaceScopedRow,
+  requireWorkspaceCorrectionReviewMutationAccessForRow,
   requireWorkspaceReviewAccessForRow,
-  requireWorkspaceReviewMutationAccessForRow,
 } from "@/lib/projects/project-workspace-request";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -59,7 +59,7 @@ async function requireAuthAndScope(context: RouteContext, mutation = false) {
     notFoundMessage: "Consent not found.",
   });
   if (mutation) {
-    await requireWorkspaceReviewMutationAccessForRow({
+    await requireWorkspaceCorrectionReviewMutationAccessForRow({
       supabase,
       tenantId,
       userId: user.id,

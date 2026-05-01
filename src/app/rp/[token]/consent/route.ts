@@ -3,7 +3,10 @@ import { validateConsentBaseFields } from "@/lib/consent/validate-consent-base-f
 import { sendRecurringConsentReceiptEmail } from "@/lib/email/send-receipt";
 import { HttpError } from "@/lib/http/errors";
 import { redirectRelative } from "@/lib/http/redirect-relative";
-import { assertWorkspacePublicSubmissionAllowed } from "@/lib/projects/project-workflow-service";
+import {
+  assertWorkspaceCorrectionPublicSubmissionAllowed,
+  assertWorkspacePublicSubmissionAllowed,
+} from "@/lib/projects/project-workflow-service";
 import {
   markRecurringConsentReceiptSent,
   resolvePublicRecurringConsentRequestScope,
@@ -83,12 +86,31 @@ export async function POST(request: Request, context: RouteContext) {
     const supabase = await createClient();
     const requestScope = await resolvePublicRecurringConsentRequestScope(token);
     if (requestScope?.consentKind === "project" && requestScope.projectId && requestScope.workspaceId) {
-      await assertWorkspacePublicSubmissionAllowed(
-        createAdminClient(),
-        requestScope.tenantId,
-        requestScope.projectId,
-        requestScope.workspaceId,
-      );
+      const adminSupabase = createAdminClient();
+      try {
+        await assertWorkspacePublicSubmissionAllowed(
+          adminSupabase,
+          requestScope.tenantId,
+          requestScope.projectId,
+          requestScope.workspaceId,
+        );
+      } catch (error) {
+        if (!(error instanceof HttpError) || error.code !== "project_finalized") {
+          throw error;
+        }
+
+        await assertWorkspaceCorrectionPublicSubmissionAllowed(
+          adminSupabase,
+          requestScope.tenantId,
+          requestScope.projectId,
+          requestScope.workspaceId,
+          {
+            requestSource: requestScope.requestSource,
+            correctionOpenedAtSnapshot: requestScope.correctionOpenedAtSnapshot,
+            correctionSourceReleaseIdSnapshot: requestScope.correctionSourceReleaseIdSnapshot,
+          },
+        );
+      }
     }
     const consent = await submitRecurringProfileConsent({
       supabase,

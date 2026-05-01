@@ -1,6 +1,11 @@
 import { handleAddProjectProfileParticipantPost } from "@/lib/projects/project-participants-route-handlers";
 import { addProjectProfileParticipant } from "@/lib/projects/project-participants-service";
-import { requireWorkspaceCaptureMutationAccessForRequest } from "@/lib/projects/project-workspace-request";
+import {
+  loadProjectWorkflowRowForAccess,
+  requireWorkspaceCaptureMutationAccessForRequest,
+  requireWorkspaceCorrectionConsentIntakeAccessForRequest,
+} from "@/lib/projects/project-workspace-request";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -14,7 +19,13 @@ export async function POST(request: Request, context: RouteContext) {
   return handleAddProjectProfileParticipantPost(request, context, {
     createClient,
     resolveTenantId,
+    loadProjectWorkflowRowForAccess,
     requireWorkspaceCaptureMutationAccessForRequest,
-    addProjectProfileParticipant,
+    requireWorkspaceCorrectionConsentIntakeAccessForRequest,
+    addProjectProfileParticipant: (input) =>
+      addProjectProfileParticipant({
+        ...input,
+        supabase: createAdminClient(),
+      }),
   });
 }

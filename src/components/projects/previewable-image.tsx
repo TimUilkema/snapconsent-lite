@@ -36,6 +36,10 @@ type PreviewableImageProps = {
   emptyLabel?: string;
   previewFaceOverlays?: PreviewFaceOverlay[];
   showInlineFaceOverlays?: boolean;
+  selectedInlinePreviewOverlayIds?: string[];
+  hoveredInlinePreviewOverlayId?: string | null;
+  onHoveredInlinePreviewOverlayIdChange?: (overlayId: string | null) => void;
+  onInlinePreviewOverlayActivate?: (overlay: PreviewFaceOverlay, event: React.MouseEvent<HTMLAnchorElement>) => void;
   faceOverlayFit?: "contain" | "cover";
   onOpenPreview?: () => void;
   lightboxChrome?: "header" | "floating";
@@ -758,16 +762,27 @@ export function PreviewImageFaceOverlayLink({
   return (
     <a
       href={overlay.href}
-      className={`absolute z-10 block rounded-[10px] border-[3px] transition-colors ${getPreviewOverlayToneClasses(
-        overlay.tone ?? overlay.linkSource ?? "auto",
-        false,
-      ).box}`}
+      className={`absolute z-10 block rounded-[10px] border-[3px] transition-[border-color,box-shadow,opacity] ${
+        getPreviewOverlayToneClasses(overlay.tone ?? overlay.linkSource ?? "auto", Boolean(active)).box
+      } ${dimmed ? "opacity-45" : "opacity-100"}`}
       style={overlayStyle}
       aria-label={`Open ${overlay.label}`}
       title={`Open ${overlay.label}`}
-      >
-        <span className="absolute left-1 top-1">{renderOverlayBadge(overlay, "inline")}</span>
-      </a>
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
+      onFocus={() => onHoverChange?.(true)}
+      onBlur={() => onHoverChange?.(false)}
+      onClick={(event) => {
+        if (!onActivate) {
+          return;
+        }
+
+        event.preventDefault();
+        onActivate(overlay, event);
+      }}
+    >
+      <span className="absolute left-1 top-1">{renderOverlayBadge(overlay, "inline")}</span>
+    </a>
     );
   }
 
@@ -1436,6 +1451,10 @@ export function PreviewableImage({
   emptyLabel = "Image preview unavailable",
   previewFaceOverlays,
   showInlineFaceOverlays = false,
+  selectedInlinePreviewOverlayIds = [],
+  hoveredInlinePreviewOverlayId = null,
+  onHoveredInlinePreviewOverlayIdChange,
+  onInlinePreviewOverlayActivate,
   faceOverlayFit = "contain",
   onOpenPreview,
   lightboxChrome = "header",
@@ -1449,6 +1468,8 @@ export function PreviewableImage({
     onLoad: handleInlineImageLoad,
   } = useImageNaturalSize();
   const resolvedPreviewSrc = previewSrc ?? src;
+  const selectedInlineOverlayIds = new Set(selectedInlinePreviewOverlayIds);
+  const hasInlineSelection = selectedInlineOverlayIds.size > 0;
 
   if (!src || failedImageSrc === src) {
     return renderEmptyState(emptyState, emptyLabel, className);
@@ -1521,6 +1542,16 @@ export function PreviewableImage({
                   overlay={overlay}
                   overlayStyle={overlayStyle}
                   size="inline"
+                  active={
+                    hoveredInlinePreviewOverlayId === overlay.id
+                    || (hoveredInlinePreviewOverlayId === null && selectedInlineOverlayIds.has(overlay.id))
+                  }
+                  selected={selectedInlineOverlayIds.has(overlay.id)}
+                  dimmed={hasInlineSelection && !selectedInlineOverlayIds.has(overlay.id)}
+                  onHoverChange={(active) =>
+                    onHoveredInlinePreviewOverlayIdChange?.(active ? overlay.id : null)
+                  }
+                  onActivate={onInlinePreviewOverlayActivate}
                 />
               );
             })
