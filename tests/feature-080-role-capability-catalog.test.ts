@@ -134,6 +134,7 @@ function renderMembersPanelView() {
       { locale: "en", messages: enMessages },
       createElement(MemberManagementPanelView, {
         data,
+        showAdvancedRoleSettings: true,
         statusMessage: null,
         isPending: false,
         inviteEmail: "",
@@ -281,21 +282,23 @@ test("feature 080 named capabilities preserve existing access boundaries", () =>
   assert.equal(roleHasCapability("photographer", "correction.media_intake"), false);
 });
 
-test("feature 080 members UI renders role descriptions, capability groups, and owner/removal explanations", () => {
+test("feature 080 members UI keeps fixed-role catalog behavior outside the simplified default page", () => {
   const markup = renderMembersPanelView();
 
-  assert.match(markup, /Role reference/);
+  assert.doesNotMatch(markup, /Role reference/);
   assert.match(markup, /Custom roles/);
   assert.match(markup, /Create custom role/);
-  assert.match(markup, /Full organization access with protected ownership\./);
-  assert.match(markup, /Eligible for review access/);
-  assert.match(markup, /Capture and upload access in assigned project workspaces\./);
   assert.match(markup, /Organization users/);
   assert.match(markup, /Templates and profiles/);
   assert.match(markup, /Workflow and correction/);
   assert.match(markup, /manage organization users/);
   assert.match(markup, /add correction media/);
-  assert.match(markup, /Owners are read-only, non-inviteable, and non-removable in this slice\./);
+  assert.equal(enMessages.members.roleDescriptions.owner, "Full organization access with protected ownership.");
+  assert.match(enMessages.members.roleDescriptions.reviewer, /Eligible for review access/);
+  assert.equal(
+    enMessages.members.roleDescriptions.photographer,
+    "Capture and upload access in assigned project workspaces.",
+  );
   assert.match(markup, /The auth account is not deleted/);
   assert.match(markup, /Owner protected/);
   assert.doesNotMatch(markup, /<option value="owner"/);

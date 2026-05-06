@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleAddMediaLibraryAssetsToFolderPost, handleArchiveMediaLibraryFolderPost, handleCreateMediaLibraryFolderPost, handleRenameMediaLibraryFolderPatch } from "../src/lib/media-library/media-library-folder-route-handlers";
+import {
+  handleAddMediaLibraryAssetsToFolderPost,
+  handleArchiveMediaLibraryFolderPost,
+  handleCreateMediaLibraryFolderPost,
+  handleMoveMediaLibraryFolderPost,
+  handleRenameMediaLibraryFolderPatch,
+} from "../src/lib/media-library/media-library-folder-route-handlers";
 
 function createAuthenticatedClient(userId = "user-1") {
   return {
@@ -82,6 +88,7 @@ test("feature 078 rename folder route resolves tenant and returns service payloa
           folder: {
             id: "folder-1",
             name: "Homepage",
+            parentFolderId: null,
             createdAt: new Date().toISOString(),
             createdBy: "user-reviewer",
             updatedAt: new Date().toISOString(),
@@ -98,6 +105,77 @@ test("feature 078 rename folder route resolves tenant and returns service payloa
   const payload = await response.json();
   assert.equal(payload.changed, true);
   assert.equal(payload.folder.name, "Homepage");
+});
+
+test("feature 102 move folder route validates parent and forwards server tenant context", async () => {
+  const invalidResponse = await handleMoveMediaLibraryFolderPost(
+    new Request("http://localhost/api/media-library/folders/folder-1/move", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ parentFolderId: "" }),
+    }),
+    {
+      params: Promise.resolve({
+        folderId: "folder-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-reviewer") as never,
+      resolveTenantId: async () => "tenant-1",
+      moveMediaLibraryFolder: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  );
+
+  assert.equal(invalidResponse.status, 400);
+  assert.deepEqual(await invalidResponse.json(), {
+    error: "invalid_parent_folder_id",
+    message: "Select a valid parent folder.",
+  });
+
+  const successResponse = await handleMoveMediaLibraryFolderPost(
+    new Request("http://localhost/api/media-library/folders/folder-1/move", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ parentFolderId: "folder-2" }),
+    }),
+    {
+      params: Promise.resolve({
+        folderId: "folder-1",
+      }),
+    },
+    {
+      createClient: async () => createAuthenticatedClient("user-reviewer") as never,
+      resolveTenantId: async () => "tenant-1",
+      moveMediaLibraryFolder: async (input) => {
+        assert.equal(input.tenantId, "tenant-1");
+        assert.equal(input.userId, "user-reviewer");
+        assert.equal(input.folderId, "folder-1");
+        assert.equal(input.parentFolderId, "folder-2");
+
+        return {
+          changed: true,
+          folder: {
+            id: "folder-1",
+            name: "Homepage",
+            parentFolderId: "folder-2",
+            updatedAt: new Date().toISOString(),
+            updatedBy: "user-reviewer",
+          },
+        };
+      },
+    },
+  );
+
+  assert.equal(successResponse.status, 200);
+  const payload = await successResponse.json();
+  assert.equal(payload.changed, true);
+  assert.equal(payload.folder.parentFolderId, "folder-2");
 });
 
 test("feature 078 archive folder route serializes folder conflicts", async () => {

@@ -10,6 +10,7 @@ type MediaLibraryFolderRow = {
   id: string;
   tenant_id: string;
   name: string;
+  parent_folder_id: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;
@@ -33,6 +34,7 @@ type MediaLibraryFolderMembershipRow = {
 export type MediaLibraryFolderRecord = {
   id: string;
   name: string;
+  parentFolderId: string | null;
   createdAt: string;
   createdBy: string;
   updatedAt: string;
@@ -46,6 +48,17 @@ export type MediaLibraryFolderBatchResult = {
   requestedCount: number;
   changedCount: number;
   noopCount: number;
+};
+
+type MediaLibraryFolderMoveRpcRow = {
+  ok: boolean;
+  error_code: string | null;
+  folder_id: string | null;
+  parent_folder_id: string | null;
+  name: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+  changed: boolean;
 };
 
 function isUniqueViolation(error: { code?: string } | null | undefined) {
@@ -72,6 +85,7 @@ function mapFolderRecord(row: MediaLibraryFolderRow): MediaLibraryFolderRecord {
   return {
     id: row.id,
     name: row.name,
+    parentFolderId: row.parent_folder_id,
     createdAt: row.created_at,
     createdBy: row.created_by,
     updatedAt: row.updated_at,
@@ -102,7 +116,7 @@ async function loadFolderById(input: {
 }) {
   const { data, error } = await input.supabase
     .from("media_library_folders")
-    .select("id, tenant_id, name, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
+    .select("id, tenant_id, name, parent_folder_id, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
     .eq("tenant_id", input.tenantId)
     .eq("id", input.folderId)
     .maybeSingle();
@@ -119,6 +133,42 @@ async function loadFolderById(input: {
   return folder;
 }
 
+async function folderHasArchivedAncestor(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  folder: Pick<MediaLibraryFolderRow, "id" | "parent_folder_id">;
+}) {
+  const visited = new Set<string>([input.folder.id]);
+  let parentFolderId = input.folder.parent_folder_id;
+
+  while (parentFolderId) {
+    if (visited.has(parentFolderId)) {
+      return true;
+    }
+    visited.add(parentFolderId);
+
+    const { data, error } = await input.supabase
+      .from("media_library_folders")
+      .select("id, tenant_id, parent_folder_id, archived_at")
+      .eq("tenant_id", input.tenantId)
+      .eq("id", parentFolderId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "media_library_lookup_failed", "Unable to load Media Library folder ancestors.");
+    }
+
+    const parent = (data as Pick<MediaLibraryFolderRow, "id" | "tenant_id" | "parent_folder_id" | "archived_at"> | null) ?? null;
+    if (!parent || parent.archived_at) {
+      return true;
+    }
+
+    parentFolderId = parent.parent_folder_id;
+  }
+
+  return false;
+}
+
 async function loadActiveFolderById(input: {
   supabase: SupabaseClient;
   tenantId: string;
@@ -128,33 +178,32 @@ async function loadActiveFolderById(input: {
   if (folder.archived_at) {
     throw new HttpError(409, "folder_archived", "Archived folders cannot be changed.");
   }
+  if (await folderHasArchivedAncestor({ ...input, folder })) {
+    throw new HttpError(409, "folder_archived", "Archived folders cannot be changed.");
+  }
 
   return folder;
 }
 
-async function loadActiveFolderByName(input: {
-  supabase: SupabaseClient;
-  tenantId: string;
-  name: string;
-}) {
-  const { data, error } = await input.supabase
-    .from("media_library_folders")
-    .select("id, tenant_id, name, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
-    .eq("tenant_id", input.tenantId)
-    .eq("name", input.name)
-    .is("archived_at", null)
-    .maybeSingle();
-
-  if (error) {
-    throw new HttpError(500, "media_library_write_failed", "Unable to load the Media Library folder.");
+function mapFolderMoveRpcError(errorCode: string | null | undefined) {
+  switch (errorCode) {
+    case "folder_not_found":
+      return new HttpError(404, "folder_not_found", "Folder not found.");
+    case "target_folder_not_found":
+      return new HttpError(404, "target_folder_not_found", "Target folder not found.");
+    case "folder_archived":
+      return new HttpError(409, "folder_archived", "Archived folders cannot be changed.");
+    case "target_folder_archived":
+      return new HttpError(409, "target_folder_archived", "Target folder is archived.");
+    case "folder_move_into_self":
+      return new HttpError(409, "folder_move_into_self", "A folder cannot be moved into itself.");
+    case "folder_move_into_descendant":
+      return new HttpError(409, "folder_move_into_descendant", "A folder cannot be moved into one of its child folders.");
+    case "folder_name_conflict":
+      return new HttpError(409, "folder_name_conflict", "An active folder already uses that name in this location.");
+    default:
+      return new HttpError(409, "folder_move_conflict", "Unable to move the Media Library folder.");
   }
-
-  const folder = (data as MediaLibraryFolderRow | null) ?? null;
-  if (!folder) {
-    throw new HttpError(500, "media_library_write_failed", "Unable to load the Media Library folder.");
-  }
-
-  return folder;
 }
 
 async function loadMediaLibraryAssetsById(input: {
@@ -221,7 +270,7 @@ export async function listActiveMediaLibraryFolders(input: {
 
   const { data, error } = await input.supabase
     .from("media_library_folders")
-    .select("id, tenant_id, name, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
+    .select("id, tenant_id, name, parent_folder_id, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
     .eq("tenant_id", input.tenantId)
     .is("archived_at", null)
     .order("name", { ascending: true });
@@ -230,7 +279,26 @@ export async function listActiveMediaLibraryFolders(input: {
     throw new HttpError(500, "media_library_lookup_failed", "Unable to load Media Library folders.");
   }
 
-  return ((data ?? []) as MediaLibraryFolderRow[]).map(mapFolderRecord);
+  const rows = (data ?? []) as MediaLibraryFolderRow[];
+  const rowById = new Map(rows.map((row) => [row.id, row] as const));
+  return rows
+    .filter((row) => {
+      let parentFolderId = row.parent_folder_id;
+      const visited = new Set<string>([row.id]);
+      while (parentFolderId) {
+        if (visited.has(parentFolderId)) {
+          return false;
+        }
+        visited.add(parentFolderId);
+        const parent = rowById.get(parentFolderId) ?? null;
+        if (!parent) {
+          return false;
+        }
+        parentFolderId = parent.parent_folder_id;
+      }
+      return true;
+    })
+    .map(mapFolderRecord);
 }
 
 export async function getActiveMediaLibraryFolder(input: {
@@ -264,7 +332,7 @@ export async function createMediaLibraryFolder(input: {
 
   const adminSupabase = createServiceRoleClient();
   const now = new Date().toISOString();
-  const { error } = await input.supabase
+  const { data, error } = await adminSupabase
     .from("media_library_folders")
     .insert({
       tenant_id: input.tenantId,
@@ -272,7 +340,9 @@ export async function createMediaLibraryFolder(input: {
       created_by: input.userId,
       updated_by: input.userId,
       updated_at: now,
-    });
+    })
+    .select("id, tenant_id, name, parent_folder_id, created_at, created_by, updated_at, updated_by, archived_at, archived_by")
+    .single();
 
   if (isUniqueViolation(error)) {
     throw new HttpError(409, "folder_name_conflict", "An active folder already uses that name.");
@@ -282,13 +352,7 @@ export async function createMediaLibraryFolder(input: {
     throw new HttpError(500, "media_library_write_failed", "Unable to create the Media Library folder.");
   }
 
-  return mapFolderRecord(
-    await loadActiveFolderByName({
-      supabase: adminSupabase,
-      tenantId: input.tenantId,
-      name: normalizedName,
-    }),
-  );
+  return mapFolderRecord(data as MediaLibraryFolderRow);
 }
 
 export async function renameMediaLibraryFolder(input: {
@@ -397,6 +461,58 @@ export async function archiveMediaLibraryFolder(input: {
       }),
     ),
     changed: true,
+  };
+}
+
+export async function moveMediaLibraryFolder(input: {
+  supabase: SupabaseClient;
+  tenantId: string;
+  userId: string;
+  folderId: string;
+  parentFolderId: string | null;
+}) {
+  await authorizeMediaLibraryFolderManagement(input);
+
+  const normalizedParentFolderId = input.parentFolderId?.trim() ? input.parentFolderId.trim() : null;
+  const adminSupabase = createServiceRoleClient();
+  const { data, error } = await adminSupabase.rpc("move_media_library_folder", {
+    p_tenant_id: input.tenantId,
+    p_folder_id: input.folderId,
+    p_parent_folder_id: normalizedParentFolderId,
+    p_actor_user_id: input.userId,
+  });
+
+  if (isUniqueViolation(error)) {
+    throw new HttpError(409, "folder_name_conflict", "An active folder already uses that name in this location.");
+  }
+
+  if (error) {
+    throw new HttpError(500, "media_library_write_failed", "Unable to move the Media Library folder.");
+  }
+
+  const rows = (data ?? []) as MediaLibraryFolderMoveRpcRow[];
+  const result = rows[0] ?? null;
+  if (!result) {
+    throw new HttpError(500, "media_library_write_failed", "Unable to move the Media Library folder.");
+  }
+
+  if (!result.ok) {
+    throw mapFolderMoveRpcError(result.error_code);
+  }
+
+  if (!result.folder_id || !result.name || !result.updated_at || !result.updated_by) {
+    throw new HttpError(500, "media_library_write_failed", "Unable to move the Media Library folder.");
+  }
+
+  return {
+    folder: {
+      id: result.folder_id,
+      name: result.name,
+      parentFolderId: result.parent_folder_id,
+      updatedAt: result.updated_at,
+      updatedBy: result.updated_by,
+    },
+    changed: result.changed,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   archiveMediaLibraryFolder,
   createMediaLibraryFolder,
   getActiveMediaLibraryFolder,
+  moveMediaLibraryFolder,
   moveMediaLibraryAssetsToFolder,
   addMediaLibraryAssetsToFolder,
   removeMediaLibraryAssetsFromFolder,
@@ -551,6 +552,161 @@ test("feature 078 folder membership carries forward to the latest release versio
   });
   assert.equal(historicalDetail.releaseVersion, 1);
   assert.equal(historicalDetail.row.release_id, firstRelease.id);
+});
+
+test("feature 102 nested folders render visible paths, direct-only browsing, sibling conflicts, and non-cascading archive", async () => {
+  const context = await createFeature078Context();
+  const rootAssetId = await createProjectAsset({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    workspaceId: context.defaultWorkspaceId,
+    createdBy: context.ownerUserId,
+    originalFilename: "root-folder-photo.jpg",
+  });
+  const childAssetId = await createProjectAsset({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    workspaceId: context.defaultWorkspaceId,
+    createdBy: context.ownerUserId,
+    originalFilename: "child-folder-photo.jpg",
+  });
+  await finalizeProjectRecord({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    finalizedBy: context.reviewerUserId,
+  });
+  await ensureProjectReleaseSnapshot({
+    supabase: adminClient,
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    actorUserId: context.reviewerUserId,
+  });
+
+  const rootStableAssetId = await getStableMediaLibraryAssetId({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    sourceAssetId: rootAssetId,
+  });
+  const childStableAssetId = await getStableMediaLibraryAssetId({
+    tenantId: context.tenantId,
+    projectId: context.projectId,
+    sourceAssetId: childAssetId,
+  });
+  const parent = await createMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    name: "Parent",
+  });
+  const child = await createMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    name: "Child",
+  });
+  await moveMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: child.id,
+    parentFolderId: parent.id,
+  });
+  await assert.rejects(
+    moveMediaLibraryFolder({
+      supabase: context.reviewerClient,
+      tenantId: context.tenantId,
+      userId: context.reviewerUserId,
+      folderId: parent.id,
+      parentFolderId: child.id,
+    }),
+    { code: "folder_move_into_descendant" },
+  );
+  await addMediaLibraryAssetsToFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: parent.id,
+    mediaLibraryAssetIds: [rootStableAssetId],
+  });
+  await addMediaLibraryAssetsToFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: child.id,
+    mediaLibraryAssetIds: [childStableAssetId],
+  });
+
+  const childPageData = await getMediaLibraryPageData({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: child.id,
+  });
+  assert.deepEqual(childPageData.selectedFolderPath.map((segment) => segment.name), ["Parent", "Child"]);
+  assert.equal(childPageData.items.length, 1);
+  assert.equal(childPageData.items[0]?.mediaLibraryAssetId, childStableAssetId);
+  assert.ok(childPageData.folderOptions.some((folder) => folder.pathLabel === "Parent / Child"));
+
+  const parentPageData = await getMediaLibraryPageData({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: parent.id,
+  });
+  assert.equal(parentPageData.items.length, 1);
+  assert.equal(parentPageData.items[0]?.mediaLibraryAssetId, rootStableAssetId);
+
+  const secondParent = await createMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    name: "Second parent",
+  });
+  const sameNamedChild = await createMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    name: "Child",
+  });
+  await moveMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: sameNamedChild.id,
+    parentFolderId: secondParent.id,
+  });
+  await assert.rejects(
+    moveMediaLibraryFolder({
+      supabase: context.reviewerClient,
+      tenantId: context.tenantId,
+      userId: context.reviewerUserId,
+      folderId: sameNamedChild.id,
+      parentFolderId: parent.id,
+    }),
+    { code: "folder_name_conflict" },
+  );
+
+  await archiveMediaLibraryFolder({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+    folderId: parent.id,
+  });
+  const archivedTreePageData = await getMediaLibraryPageData({
+    supabase: context.reviewerClient,
+    tenantId: context.tenantId,
+    userId: context.reviewerUserId,
+  });
+  assert.ok(!archivedTreePageData.folderOptions.some((folder) => folder.id === child.id));
+  await assert.rejects(
+    getMediaLibraryPageData({
+      supabase: context.reviewerClient,
+      tenantId: context.tenantId,
+      userId: context.reviewerUserId,
+      folderId: child.id,
+    }),
+    { code: "folder_not_found" },
+  );
 });
 
 test("feature 078 Media Library page data stays tenant scoped and archived folders disappear from navigation", async () => {

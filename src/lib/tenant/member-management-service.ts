@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { deliverTenantMembershipInviteEmail } from "@/lib/email/outbound/tenant-membership-invite-delivery";
 import { HttpError } from "@/lib/http/errors";
+import { loadAuthUserEmailMap } from "@/lib/supabase/auth-user-email-map";
 import {
   createOrRefreshTenantMembershipInvite,
   deriveInviterDisplayName,
@@ -183,25 +184,10 @@ async function loadUserEmailMap(userIds: string[]) {
   }
 
   const admin = createServiceRoleClient();
-  const { data, error } = await admin.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
+  return loadAuthUserEmailMap(admin, userIds, {
+    errorCode: "tenant_member_lookup_failed",
+    errorMessage: "Unable to load workspace members.",
   });
-
-  if (error) {
-    throw new HttpError(500, "tenant_member_lookup_failed", "Unable to load workspace members.");
-  }
-
-  const wantedUserIds = new Set(userIds);
-  const result = new Map<string, string>();
-
-  data.users.forEach((user) => {
-    if (wantedUserIds.has(user.id)) {
-      result.set(user.id, user.email?.trim().toLowerCase() ?? "unknown@email");
-    }
-  });
-
-  return result;
 }
 
 function mapPendingInvite(row: PendingInviteRow): TenantPendingInviteRecord {

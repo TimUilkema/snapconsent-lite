@@ -1,239 +1,227 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTranslations } from "next-intl";
 
+import {
+  buildMediaLibraryUsagePermissionTable,
+  type MediaLibraryUsagePermissionCellStatus,
+  type MediaLibraryUsagePermissionColumn,
+} from "@/lib/project-releases/media-library-usage-permission-table";
+import type { ReleasePhotoFaceContext } from "@/lib/project-releases/media-library-release-overlays";
 import type { MediaLibraryUsagePermissionOwnerSummary } from "@/lib/project-releases/media-library-release-safety";
 
-function buildOwnerContextItems(
-  owner: MediaLibraryUsagePermissionOwnerSummary,
-  t: ReturnType<typeof useTranslations>,
-) {
-  const items: string[] = [];
-
-  items.push(
-    ...owner.exactFaceLinks.map((link) =>
-      t("context.faceLink", {
-        face: link.faceRank + 1,
-        source: link.linkSource === "manual" ? t("context.linkSourceManual") : t("context.linkSourceAuto"),
-      }),
-    ),
-  );
-
-  if (owner.hasWholeAssetLink) {
-    items.push(t("context.wholeAssetLink"));
-  }
-
-  if (owner.hasFallbackLink) {
-    items.push(t("context.fallbackLink"));
-  }
-
-  return items;
-}
-
-function getScopeStatusClasses(
-  status: MediaLibraryUsagePermissionOwnerSummary["effectiveScopes"][number]["status"],
-) {
+function statusTone(status: MediaLibraryUsagePermissionCellStatus | "final_granted" | "final_blocked") {
   switch (status) {
     case "granted":
-      return {
-        box: "border-emerald-600 bg-emerald-600 text-white",
-        row: "border-emerald-200 bg-emerald-50/80",
-        status: "text-emerald-800",
-      };
+    case "final_granted":
+      return "border-emerald-200 bg-emerald-50 text-emerald-800";
     case "revoked":
-      return {
-        box: "border-red-600 bg-red-600 text-white",
-        row: "border-red-200 bg-red-50/80",
-        status: "text-red-800",
-      };
+    case "blocked":
+    case "final_blocked":
+      return "border-red-200 bg-red-50 text-red-800";
     case "not_collected":
-      return {
-        box: "border-amber-500 bg-amber-50 text-amber-700",
-        row: "border-amber-200 bg-amber-50/80",
-        status: "text-amber-800",
-      };
+      return "border-amber-200 bg-amber-50 text-amber-800";
     case "not_granted":
+    case "not_available":
     default:
-      return {
-        box: "border-zinc-400 bg-white text-zinc-500",
-        row: "border-zinc-200 bg-zinc-50/80",
-        status: "text-zinc-700",
-      };
+      return "border-zinc-200 bg-zinc-50 text-zinc-700";
   }
 }
 
-function getSelectedScopeRowClasses(
-  status: MediaLibraryUsagePermissionOwnerSummary["effectiveScopes"][number]["status"],
-) {
-  switch (status) {
-    case "granted":
-      return "border-emerald-500/35 bg-emerald-500/12";
-    case "revoked":
-      return "border-red-500/35 bg-red-500/12";
-    case "not_collected":
-      return "border-amber-500/35 bg-amber-500/12";
-    case "not_granted":
-    default:
-      return "border-white/15 bg-white/8";
-  }
-}
-
-function renderScopeIndicator(
-  status: MediaLibraryUsagePermissionOwnerSummary["effectiveScopes"][number]["status"],
-) {
-  if (status === "granted") {
+function renderStatusIcon(status: MediaLibraryUsagePermissionCellStatus | "final_granted" | "final_blocked") {
+  if (status === "granted" || status === "final_granted") {
     return (
-      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+      <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="m3.5 8 2.5 2.5 6-6" />
       </svg>
     );
   }
 
-  if (status === "revoked") {
-    return (
-      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M4 4l8 8" />
-        <path d="M12 4 4 12" />
-      </svg>
-    );
-  }
-
-  if (status === "not_collected") {
+  if (status === "not_collected" || status === "not_available") {
     return <span className="text-[10px] font-bold">?</span>;
   }
 
-  return null;
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 4l8 8" />
+      <path d="M12 4 4 12" />
+    </svg>
+  );
+}
+
+function renderFaceIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 20a6 6 0 0 0-12 0" />
+      <circle cx="12" cy="10" r="4" />
+    </svg>
+  );
+}
+
+function getColumnLabel(
+  column: MediaLibraryUsagePermissionColumn,
+  t: ReturnType<typeof useTranslations>,
+) {
+  if (column.kind === "face" && column.faceRank !== null) {
+    return t("faceLabel", { face: column.faceRank + 1 });
+  }
+
+  return t("usagePermissions.assetLinkColumn");
+}
+
+function getColumnContext(
+  column: MediaLibraryUsagePermissionColumn,
+  t: ReturnType<typeof useTranslations>,
+) {
+  if (column.isBlocked) {
+    return t("overlay.stateBlocked");
+  }
+
+  if (column.linkSource === "manual") {
+    return t("context.linkSourceManual");
+  }
+
+  if (column.linkSource === "auto") {
+    return t("context.linkSourceAuto");
+  }
+
+  return t("usagePermissions.noLinkedConsent");
+}
+
+function getCellLabel(status: MediaLibraryUsagePermissionCellStatus, t: ReturnType<typeof useTranslations>) {
+  if (status === "blocked") {
+    return t("usagePermissions.blockedNoConsent");
+  }
+
+  if (status === "not_available") {
+    return t("usagePermissions.notAvailable");
+  }
+
+  return t(`scopeStatuses.${status}`);
 }
 
 export function ReleaseUsagePermissions({
   owners,
-  selectedOwnerId = null,
-  onSelectOwnerId,
+  faces,
+  selectedColumnId = null,
+  hoveredColumnId = null,
+  onSelectColumnId,
+  onHoverColumnId,
 }: {
   owners: MediaLibraryUsagePermissionOwnerSummary[];
-  selectedOwnerId?: string | null;
-  onSelectOwnerId?: (ownerId: string) => void;
+  faces?: ReleasePhotoFaceContext[];
+  selectedColumnId?: string | null;
+  hoveredColumnId?: string | null;
+  onSelectColumnId?: (columnId: string | null) => void;
+  onHoverColumnId?: (columnId: string | null) => void;
 }) {
   const t = useTranslations("mediaLibrary.detail");
+  const table = useMemo(
+    () => buildMediaLibraryUsagePermissionTable({ owners, faces }),
+    [owners, faces],
+  );
+  const activeColumnId = hoveredColumnId ?? selectedColumnId;
 
-  if (owners.length === 0) {
+  if (owners.length === 0 && table.columns.length === 0) {
     return <p className="text-sm text-zinc-600">{t("empty.usagePermissions")}</p>;
   }
 
+  if (table.rows.length === 0) {
+    return <p className="text-sm text-zinc-600">{t("empty.effectiveScopes")}</p>;
+  }
+
   return (
-    <div className="space-y-4">
-      {owners.map((owner) => {
-        const contextItems = buildOwnerContextItems(owner, t);
-        const isSelected = selectedOwnerId === owner.projectFaceAssigneeId;
-        const Container = onSelectOwnerId ? "button" : "div";
-
-        return (
-          <Container
-            id={`usage-owner-${owner.projectFaceAssigneeId}`}
-            key={owner.projectFaceAssigneeId}
-            {...(onSelectOwnerId
-              ? {
-                  type: "button" as const,
-                  onClick: () => onSelectOwnerId(owner.projectFaceAssigneeId),
-                  "aria-pressed": isSelected,
-                }
-              : {})}
-            data-selected={isSelected ? "true" : "false"}
-            className={`block w-full rounded-[22px] border p-4 text-left transition-colors ${
-              isSelected
-                ? "border-zinc-900 bg-zinc-900 text-white shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
-                : "border-zinc-200 bg-white text-zinc-900 hover:border-zinc-300"
-            }`}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">
-                  {owner.displayName ?? t("unknownOwner")}
-                </p>
-                <p className={`mt-1 text-sm ${isSelected ? "text-zinc-300" : "text-zinc-600"}`}>
-                  {owner.email ?? t("noEmail")}
-                </p>
-                <p className={`mt-1 text-sm ${isSelected ? "text-zinc-300" : "text-zinc-600"}`}>
-                  {owner.currentStatus ? t(`ownerStatuses.${owner.currentStatus}`) : t("ownerStatuses.active")}
-                  {owner.identityKind ? ` / ${t(`ownerKinds.${owner.identityKind}`)}` : ""}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {owner.hasRestrictedState ? (
-                  <span
-                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${
-                      isSelected
-                        ? "border-white/25 bg-white/10 text-white"
-                        : "border-amber-200 bg-amber-50 text-amber-800"
+    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
+      <table className="min-w-full border-separate border-spacing-0 text-sm">
+        <thead className="bg-zinc-50 text-left text-zinc-700">
+          <tr>
+            <th scope="col" className="border-b border-zinc-200 px-3 py-3 font-medium text-zinc-900">
+              {t("usagePermissions.scopeColumn")}
+            </th>
+            {table.columns.map((column) => {
+              const isActive = activeColumnId === column.id;
+              return (
+                <th
+                  id={`usage-column-${column.id}`}
+                  key={column.id}
+                  scope="col"
+                  className={`border-b border-l border-zinc-200 px-2 py-2 align-top transition-colors ${
+                    isActive ? "bg-zinc-100" : "bg-zinc-50"
+                  }`}
+                  onMouseEnter={() => onHoverColumnId?.(column.id)}
+                  onMouseLeave={() => onHoverColumnId?.(null)}
+                >
+                  <button
+                    id={column.kind === "face" && column.assetFaceId ? `release-face-${column.assetFaceId}` : undefined}
+                    type="button"
+                    className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 focus:ring-offset-1 ${
+                      isActive
+                        ? "border-zinc-400 bg-white text-zinc-950"
+                        : "border-transparent text-zinc-800 hover:border-zinc-200 hover:bg-white"
                     }`}
+                    aria-pressed={selectedColumnId === column.id}
+                    onClick={() => onSelectColumnId?.(selectedColumnId === column.id ? null : column.id)}
+                    onFocus={() => onHoverColumnId?.(column.id)}
+                    onBlur={() => onHoverColumnId?.(null)}
+                    title={getColumnLabel(column, t)}
                   >
-                    {t("usagePermissions.restricted")}
-                  </span>
-                ) : null}
-                {isSelected ? (
-                  <span className="inline-flex items-center rounded-full border border-white/25 bg-white/10 px-2.5 py-1 text-xs font-medium text-white">
-                    {t("usagePermissions.selected")}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            {contextItems.length > 0 ? (
-              <ul className="mt-3 flex flex-wrap gap-2 text-xs">
-                {contextItems.map((item) => (
-                  <li
-                    key={item}
-                    className={`rounded-full border px-2.5 py-1 ${
-                      isSelected
-                        ? "border-white/20 bg-white/10 text-zinc-100"
-                        : "border-zinc-200 bg-zinc-50 text-zinc-700"
-                    }`}
-                  >
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            <div className="mt-4 space-y-2">
-              {owner.effectiveScopes.length === 0 ? (
-                <p className={`text-sm ${isSelected ? "text-zinc-300" : "text-zinc-600"}`}>
-                  {t("empty.effectiveScopes")}
-                </p>
-              ) : (
-                owner.effectiveScopes.map((scope) => {
-                  const classes = getScopeStatusClasses(scope.status);
-
-                  return (
-                    <div
-                      key={`${scope.templateKey}:${scope.scopeKey}`}
-                      className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 ${
-                        isSelected
-                          ? getSelectedScopeRowClasses(scope.status)
-                          : classes.row
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span
-                          className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${classes.box}`}
-                        >
-                          {renderScopeIndicator(scope.status)}
-                        </span>
-                        <span className={`min-w-0 text-sm font-medium ${isSelected ? "text-white" : "text-zinc-900"}`}>
-                          {scope.label}
-                        </span>
-                      </div>
-                      <span className={`shrink-0 text-xs font-medium ${isSelected ? "text-zinc-200" : classes.status}`}>
-                        {t(`scopeStatuses.${scope.status}`)}
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-700">
+                      {renderFaceIcon()}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block whitespace-nowrap font-medium">{getColumnLabel(column, t)}</span>
+                      <span className="block whitespace-nowrap text-xs font-normal text-zinc-500">
+                        {getColumnContext(column, t)}
                       </span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </Container>
-        );
-      })}
+                    </span>
+                  </button>
+                </th>
+              );
+            })}
+            <th scope="col" className="border-b border-l border-zinc-200 px-3 py-3 font-medium text-zinc-900">
+              {t("usagePermissions.finalColumn")}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row) => (
+            <tr key={row.id} className="transition-colors hover:bg-zinc-50">
+              <th scope="row" className="border-b border-zinc-100 px-3 py-3 text-left font-medium text-zinc-900">
+                {row.label}
+              </th>
+              {row.cells.map((cell) => {
+                const isActive = activeColumnId === cell.columnId;
+                return (
+                  <td
+                    key={cell.columnId}
+                    className={`border-b border-l border-zinc-100 px-3 py-3 transition-colors ${
+                      isActive ? "bg-zinc-50" : ""
+                    }`}
+                    onMouseEnter={() => onHoverColumnId?.(cell.columnId)}
+                    onMouseLeave={() => onHoverColumnId?.(null)}
+                  >
+                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium ${statusTone(cell.status)}`}>
+                      {renderStatusIcon(cell.status)}
+                      {getCellLabel(cell.status, t)}
+                    </span>
+                  </td>
+                );
+              })}
+              <td className="border-b border-l border-zinc-100 px-3 py-3">
+                <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${
+                  row.finalStatus === "granted" ? statusTone("final_granted") : statusTone("final_blocked")
+                }`}>
+                  {renderStatusIcon(row.finalStatus === "granted" ? "final_granted" : "final_blocked")}
+                  {row.finalStatus === "granted"
+                    ? t("usagePermissions.finalGranted")
+                    : t("usagePermissions.finalBlocked")}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

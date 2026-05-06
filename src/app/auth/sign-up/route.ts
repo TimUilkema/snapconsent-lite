@@ -47,11 +47,32 @@ function redirectWithAuthError(input: {
   );
 }
 
+function normalizeSignUpDestination(value: FormDataEntryValue | null, fallback: string) {
+  const path = normalizeRelativePath(value, fallback);
+
+  if (
+    path === "/dashboard" ||
+    path === "/projects" ||
+    path === "/create-account" ||
+    path === "/organization/setup" ||
+    path === "/select-tenant" ||
+    path.startsWith("/join/")
+  ) {
+    return path;
+  }
+
+  return fallback;
+}
+
 export async function POST(request: Request) {
   const formData = await request.formData();
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
-  const next = normalizeRelativePath(formData.get("next"), "/dashboard");
+  const next = normalizeSignUpDestination(formData.get("next"), "/dashboard");
+  const confirmationRedirect = normalizeSignUpDestination(
+    formData.get("confirmation_redirect"),
+    "/create-account",
+  );
   const errorRedirect = formData.get("error_redirect");
   const pendingOrgInviteToken = String(formData.get("pending_org_invite_token") ?? "").trim();
 
@@ -68,6 +89,9 @@ export async function POST(request: Request) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
+    options: {
+      emailRedirectTo: new URL("/login?confirmed=1", request.url).toString(),
+    },
   });
 
   if (error) {
@@ -79,9 +103,13 @@ export async function POST(request: Request) {
     });
   }
 
-  const destination = data.session
+  if (data.session && !data.user?.email_confirmed_at) {
+    await supabase.auth.signOut();
+  }
+
+  const destination = data.session && data.user?.email_confirmed_at
     ? next
-    : appendQueryToRelativePath(next, { confirmation: "1" });
+    : appendQueryToRelativePath(confirmationRedirect, { confirmation: "1" });
 
   const response = redirectRelative(request, destination);
   if (pendingOrgInviteToken) {

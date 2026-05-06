@@ -19,11 +19,7 @@ import {
   type RoleAssignmentScopeType,
 } from "@/lib/tenant/custom-role-scope-effects";
 import {
-  CAPABILITY_GROUPS,
   CAPABILITY_LABEL_KEYS,
-  MEMBERSHIP_ROLES,
-  roleHasCapability,
-  type MembershipRole,
   type TenantCapability,
 } from "@/lib/tenant/role-capabilities";
 
@@ -45,12 +41,10 @@ type CustomRoleSelectionState = {
   workspaceId: string;
 };
 
-type RoleCapabilityGroup = {
-  key: string;
-  capabilities: TenantCapability[];
-};
+type MemberCustomRoleAssignment = TenantMemberManagementData["customRoleAssignments"][number]["assignments"][number];
 
 type MemberManagementPanelViewProps = MemberManagementPanelProps & {
+  showAdvancedRoleSettings?: boolean;
   statusMessage: StatusMessage;
   isPending: boolean;
   inviteEmail: string;
@@ -80,6 +74,7 @@ type MemberManagementPanelViewProps = MemberManagementPanelProps & {
   onPendingInviteRoleChange: (inviteId: string, role: string) => void;
   onResendInvite: (invite: TenantPendingInviteRecord) => void;
   onRevokeInvite: (invite: TenantPendingInviteRecord) => void;
+  onToggleAdvancedRoleSettings?: () => void;
   onToggleEffectiveAccess?: (member: TenantMemberRecord) => void;
   onRefreshRoles: () => void;
 };
@@ -102,15 +97,6 @@ function defaultCustomRoleSelection(): CustomRoleSelectionState {
   };
 }
 
-function getRoleCapabilityGroups(role: MembershipRole): RoleCapabilityGroup[] {
-  return CAPABILITY_GROUPS
-    .map((group) => ({
-      key: group.key,
-      capabilities: group.capabilities.filter((capability) => roleHasCapability(role, capability)),
-    }))
-    .filter((group) => group.capabilities.length > 0);
-}
-
 export function MemberManagementPanel({ data }: MemberManagementPanelProps) {
   const t = useTranslations("members");
   const router = useRouter();
@@ -131,6 +117,7 @@ export function MemberManagementPanel({ data }: MemberManagementPanelProps) {
   const [effectiveAccessLoadingUserId, setEffectiveAccessLoadingUserId] = useState<string | null>(null);
   const [effectiveAccessErrors, setEffectiveAccessErrors] = useState<Record<string, string>>({});
   const [expandedEffectiveAccessUserId, setExpandedEffectiveAccessUserId] = useState<string | null>(null);
+  const [showAdvancedRoleSettings, setShowAdvancedRoleSettings] = useState(false);
 
   async function handleResponse(response: Response) {
     const payload = await response.json().catch(() => null);
@@ -430,9 +417,17 @@ export function MemberManagementPanel({ data }: MemberManagementPanelProps) {
     }
   }
 
+  function toggleAdvancedRoleSettings() {
+    if (showAdvancedRoleSettings) {
+      setExpandedEffectiveAccessUserId(null);
+    }
+    setShowAdvancedRoleSettings((current) => !current);
+  }
+
   return (
     <MemberManagementPanelView
       data={data}
+      showAdvancedRoleSettings={showAdvancedRoleSettings}
       statusMessage={statusMessage}
       isPending={isPending}
       inviteEmail={inviteEmail}
@@ -488,6 +483,7 @@ export function MemberManagementPanel({ data }: MemberManagementPanelProps) {
       }
       onResendInvite={resendInvite}
       onRevokeInvite={revokeInvite}
+      onToggleAdvancedRoleSettings={toggleAdvancedRoleSettings}
       onToggleEffectiveAccess={toggleEffectiveAccess}
       onRefreshRoles={() => router.refresh()}
     />
@@ -496,6 +492,7 @@ export function MemberManagementPanel({ data }: MemberManagementPanelProps) {
 
 export function MemberManagementPanelView({
   data,
+  showAdvancedRoleSettings = false,
   statusMessage,
   isPending,
   inviteEmail,
@@ -521,6 +518,7 @@ export function MemberManagementPanelView({
   onPendingInviteRoleChange,
   onResendInvite,
   onRevokeInvite,
+  onToggleAdvancedRoleSettings = () => undefined,
   onToggleEffectiveAccess = () => undefined,
   onRefreshRoles,
 }: MemberManagementPanelViewProps) {
@@ -554,6 +552,45 @@ export function MemberManagementPanelView({
     const projectName = assignment.projectName ?? t("customRoleAssignments.unknownTarget");
     const workspaceName = assignment.workspaceName ?? t("customRoleAssignments.unknownTarget");
     return `${projectName} / ${workspaceName}`;
+  }
+
+  function accessSummaryItems(member: TenantMemberRecord, assignedCustomRoles: MemberCustomRoleAssignment[]) {
+    const items: string[] = [];
+
+    if (assignedCustomRoles.length > 0) {
+      items.push(t("accessSummary.customRoleCount", { count: assignedCustomRoles.length }));
+    }
+
+    if (member.role === "reviewer") {
+      const reviewerAccess = reviewerAccessByUserId.get(member.userId);
+      const projectCount = reviewerAccess?.projectAssignments.length ?? 0;
+
+      if (reviewerAccess?.tenantWideAccess.active) {
+        items.push(t("accessSummary.reviewAllProjects"));
+      } else if (projectCount > 0) {
+        items.push(t("accessSummary.reviewProjectCount", { count: projectCount }));
+      } else {
+        items.push(t("accessSummary.reviewNotGranted"));
+      }
+    }
+
+    return items;
+  }
+
+  function renderAccessSummary(member: TenantMemberRecord, assignedCustomRoles: MemberCustomRoleAssignment[]) {
+    const items = accessSummaryItems(member, assignedCustomRoles);
+
+    if (items.length === 0) {
+      return <span className="text-zinc-500">{t("accessSummary.none")}</span>;
+    }
+
+    return (
+      <div className="space-y-1 text-zinc-700">
+        {items.map((item) => (
+          <div key={item}>{item}</div>
+        ))}
+      </div>
+    );
   }
 
   function effectiveScopeLabel(scope: MemberEffectiveAccessSummary["effectiveScopes"][number]) {
@@ -777,61 +814,37 @@ export function MemberManagementPanelView({
       </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white px-4 py-4">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold text-zinc-900">{t("roleReference.title")}</h2>
-          <p className="text-sm text-zinc-600">{t("roleReference.subtitle")}</p>
-        </div>
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-zinc-200 text-left text-zinc-600">
-                <th className="py-2 pr-4 font-medium">{t("membersTable.columns.role")}</th>
-                <th className="py-2 font-medium">{t("roleReference.capabilitiesColumn")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MEMBERSHIP_ROLES.map((role) => (
-                <tr key={role} className="border-b border-zinc-100 align-top last:border-b-0">
-                  <td className="w-56 py-3 pr-4">
-                    <div className="font-medium text-zinc-900">{t(`roles.${role}`)}</div>
-                    <div className="mt-1 text-zinc-600">{t(`roleDescriptions.${role}`)}</div>
-                    {role === "owner" ? (
-                      <div className="mt-2 text-xs leading-5 text-zinc-500">
-                        {t("roleReference.ownerProtected")}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="py-3">
-                    <div className="space-y-2">
-                      {getRoleCapabilityGroups(role).map((group) => (
-                        <div key={group.key}>
-                          <div className="font-medium text-zinc-800">
-                            {t(`capabilityGroups.${group.key}`)}
-                          </div>
-                          <div className="mt-1 text-zinc-600">
-                            {group.capabilities
-                              .map((capability) => t(`capabilities.${CAPABILITY_LABEL_KEYS[capability]}`))
-                              .join(", ")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-zinc-900">{t("advancedRoleSettings.title")}</h2>
+            <p className="text-sm text-zinc-600">{t("advancedRoleSettings.description")}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleAdvancedRoleSettings}
+            aria-expanded={showAdvancedRoleSettings}
+            aria-controls="members-advanced-role-settings"
+            className="self-start rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+          >
+            {showAdvancedRoleSettings ? t("advancedRoleSettings.hide") : t("advancedRoleSettings.show")}
+          </button>
         </div>
       </section>
 
-      <CustomRoleManagementSection data={data.roleEditor} onRefresh={onRefreshRoles} />
+      {showAdvancedRoleSettings ? (
+        <div id="members-advanced-role-settings" className="space-y-4">
+          <CustomRoleManagementSection data={data.roleEditor} onRefresh={onRefreshRoles} />
+        </div>
+      ) : null}
 
       <section className="rounded-lg border border-zinc-200 bg-white px-4 py-4">
         <div className="space-y-1">
           <h2 className="text-base font-semibold text-zinc-900">{t("membersTable.title")}</h2>
           <p className="text-sm text-zinc-600">{t("membersTable.subtitle")}</p>
           <p className="text-sm text-zinc-600">{t("membersTable.removalExplanation")}</p>
-          <p className="text-sm text-zinc-600">{t("customRoleAssignments.note")}</p>
+          {showAdvancedRoleSettings ? (
+            <p className="text-sm text-zinc-600">{t("customRoleAssignments.note")}</p>
+          ) : null}
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full border-collapse text-sm">
@@ -839,8 +852,14 @@ export function MemberManagementPanelView({
               <tr className="border-b border-zinc-200 text-left text-zinc-600">
                 <th className="py-2 pr-4 font-medium">{t("membersTable.columns.email")}</th>
                 <th className="py-2 pr-4 font-medium">{t("membersTable.columns.role")}</th>
-                <th className="py-2 pr-4 font-medium">{t("membersTable.columns.reviewerAccess")}</th>
-                <th className="py-2 pr-4 font-medium">{t("customRoleAssignments.column")}</th>
+                {showAdvancedRoleSettings ? (
+                  <>
+                    <th className="py-2 pr-4 font-medium">{t("membersTable.columns.reviewerAccess")}</th>
+                    <th className="py-2 pr-4 font-medium">{t("customRoleAssignments.column")}</th>
+                  </>
+                ) : (
+                  <th className="py-2 pr-4 font-medium">{t("accessSummary.column")}</th>
+                )}
                 <th className="py-2 pr-4 font-medium">{t("membersTable.columns.joined")}</th>
                 <th className="py-2 font-medium">{t("membersTable.columns.actions")}</th>
               </tr>
@@ -889,215 +908,223 @@ export function MemberManagementPanelView({
                       <span className="text-zinc-900">{t("roles.owner")}</span>
                     )}
                   </td>
-                  <td className="py-3 pr-4">
-                    {member.role === "reviewer" ? (
-                      <div className="space-y-2">
-                        <div className="text-zinc-700">
-                          {reviewerAccessByUserId.get(member.userId)?.tenantWideAccess.active
-                            ? t("reviewerAccess.tenantWideActive")
-                            : t("reviewerAccess.noTenantWide")}
-                        </div>
-                        <div className="text-zinc-600">
-                          {t("reviewerAccess.projectCount", {
-                            count:
-                              reviewerAccessByUserId.get(member.userId)?.projectAssignments.length ?? 0,
-                          })}
-                        </div>
-                        {reviewerAccessByUserId.get(member.userId)?.tenantWideAccess.active ? (
-                          <button
-                            type="button"
-                            onClick={() => onRevokeTenantWideReviewerAccess(member)}
-                            disabled={isPending}
-                            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {t("reviewerAccess.revokeTenantWide")}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => onGrantTenantWideReviewerAccess(member)}
-                            disabled={isPending}
-                            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {t("reviewerAccess.grantTenantWide")}
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-zinc-500">{t("reviewerAccess.notReviewer")}</span>
-                    )}
-                  </td>
-                  <td className="min-w-72 py-3 pr-4">
-                    <div className="space-y-3">
-                      {assignedCustomRoles.length === 0 ? (
-                        <div className="text-zinc-500">
-                          {t("customRoleAssignments.noAssignedRoles")}
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {assignedCustomRoles.map((assignment) => (
-                            <div
-                              key={assignment.assignmentId}
-                              className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5"
-                            >
-                              <div className="min-w-0">
-                                <div className="truncate font-medium text-zinc-900">
-                                  {assignment.role.name}
-                                </div>
-                                <div className="text-xs text-zinc-600">
-                                  {t(`customRoleAssignments.scope.${assignment.scopeType}`)}
-                                  {" - "}
-                                  {assignmentTargetLabel(assignment)}
-                                </div>
-                                {assignment.hasScopeWarnings ? (
-                                  <div className="text-xs text-amber-700">
-                                    {t("customRoleAssignments.scopeWarning")}
-                                  </div>
-                                ) : null}
-                                {assignment.role.archivedAt ? (
-                                  <div className="text-xs text-zinc-600">
-                                    {t("customRoleAssignments.archivedAssignedRole", {
-                                      role: assignment.role.name,
-                                    })}
-                                  </div>
-                                ) : null}
-                              </div>
+                  {showAdvancedRoleSettings ? (
+                    <>
+                      <td className="py-3 pr-4">
+                        {member.role === "reviewer" ? (
+                          <div className="space-y-2">
+                            <div className="text-zinc-700">
+                              {reviewerAccessByUserId.get(member.userId)?.tenantWideAccess.active
+                                ? t("reviewerAccess.tenantWideActive")
+                                : t("reviewerAccess.noTenantWide")}
+                            </div>
+                            <div className="text-zinc-600">
+                              {t("reviewerAccess.projectCount", {
+                                count:
+                                  reviewerAccessByUserId.get(member.userId)?.projectAssignments.length ?? 0,
+                              })}
+                            </div>
+                            {reviewerAccessByUserId.get(member.userId)?.tenantWideAccess.active ? (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  onRevokeCustomRole(
-                                    member,
-                                    assignment.assignmentId,
-                                    assignment.role.name,
-                                  )
-                                }
+                                onClick={() => onRevokeTenantWideReviewerAccess(member)}
                                 disabled={isPending}
-                                className="shrink-0 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {t("customRoleAssignments.remove")}
+                                {t("reviewerAccess.revokeTenantWide")}
                               </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {data.assignableCustomRoles.length === 0 ? (
-                        <div className="text-xs leading-5 text-zinc-600">
-                          {t("customRoleAssignments.createRoleFirst")}
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="flex flex-wrap gap-2">
-                            <select
-                              value={selection.roleId}
-                              onChange={(event) =>
-                                onCustomRoleSelectionChange(member.userId, { roleId: event.target.value })
-                              }
-                              disabled={isPending}
-                              className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <option value="">{t("customRoleAssignments.selectPlaceholder")}</option>
-                              {data.assignableCustomRoles.map((role) => (
-                                <option key={role.roleId} value={role.roleId}>
-                                  {role.name}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={selection.scopeType}
-                              onChange={(event) =>
-                                onCustomRoleSelectionChange(member.userId, {
-                                  scopeType: event.target.value as RoleAssignmentScopeType,
-                                })
-                              }
-                              disabled={isPending}
-                              className="min-w-32 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
-                              aria-label={t("customRoleAssignments.scopeLabel")}
-                            >
-                              <option value="tenant">{t("customRoleAssignments.scope.tenant")}</option>
-                              <option value="project">{t("customRoleAssignments.scope.project")}</option>
-                              <option value="workspace">{t("customRoleAssignments.scope.workspace")}</option>
-                            </select>
-                            {requiresProject ? (
-                              <select
-                                value={selection.projectId}
-                                onChange={(event) =>
-                                  onCustomRoleSelectionChange(member.userId, { projectId: event.target.value })
-                                }
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => onGrantTenantWideReviewerAccess(member)}
                                 disabled={isPending}
-                                className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                aria-label={t("customRoleAssignments.projectLabel")}
+                                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                <option value="">{t("customRoleAssignments.projectPlaceholder")}</option>
-                                {assignmentProjects.map((project) => (
-                                  <option key={project.projectId} value={project.projectId}>
-                                    {project.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : null}
-                            {requiresWorkspace ? (
-                              <select
-                                value={selection.workspaceId}
-                                onChange={(event) =>
-                                  onCustomRoleSelectionChange(member.userId, { workspaceId: event.target.value })
-                                }
-                                disabled={isPending || !selectedProject}
-                                className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                aria-label={t("customRoleAssignments.workspaceLabel")}
-                              >
-                                <option value="">{t("customRoleAssignments.workspacePlaceholder")}</option>
-                                {(selectedProject?.workspaces ?? []).map((workspace) => (
-                                  <option key={workspace.workspaceId} value={workspace.workspaceId}>
-                                    {workspace.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => onAssignCustomRole(member)}
-                              disabled={isAssignmentBlocked}
-                              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {t("customRoleAssignments.assignRole")}
-                            </button>
+                                {t("reviewerAccess.grantTenantWide")}
+                              </button>
+                            )}
                           </div>
-                          {scopeEffect?.hasZeroEffectiveCapabilities ? (
-                            <div className="text-xs leading-5 text-red-700">
-                              {t("customRoleAssignments.zeroEffectiveCapabilities")}
+                        ) : (
+                          <span className="text-zinc-500">{t("reviewerAccess.notReviewer")}</span>
+                        )}
+                      </td>
+                      <td className="min-w-72 py-3 pr-4">
+                        <div className="space-y-3">
+                          {assignedCustomRoles.length === 0 ? (
+                            <div className="text-zinc-500">
+                              {t("customRoleAssignments.noAssignedRoles")}
                             </div>
-                          ) : scopeEffect?.hasScopeWarnings ? (
-                            <div className="text-xs leading-5 text-amber-700">
-                              <div>{t("customRoleAssignments.scopeWarning")}</div>
-                              <div>
-                                {t("customRoleAssignments.effectiveCapabilities", {
-                                  capabilities: capabilityList(scopeEffect.effectiveCapabilityKeys),
-                                })}
-                              </div>
-                              <div>
-                                {t("customRoleAssignments.ignoredCapabilities", {
-                                  capabilities: capabilityList(scopeEffect.ignoredCapabilityKeys),
-                                })}
-                              </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {assignedCustomRoles.map((assignment) => (
+                                <div
+                                  key={assignment.assignmentId}
+                                  className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate font-medium text-zinc-900">
+                                      {assignment.role.name}
+                                    </div>
+                                    <div className="text-xs text-zinc-600">
+                                      {t(`customRoleAssignments.scope.${assignment.scopeType}`)}
+                                      {" - "}
+                                      {assignmentTargetLabel(assignment)}
+                                    </div>
+                                    {assignment.hasScopeWarnings ? (
+                                      <div className="text-xs text-amber-700">
+                                        {t("customRoleAssignments.scopeWarning")}
+                                      </div>
+                                    ) : null}
+                                    {assignment.role.archivedAt ? (
+                                      <div className="text-xs text-zinc-600">
+                                        {t("customRoleAssignments.archivedAssignedRole", {
+                                          role: assignment.role.name,
+                                        })}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onRevokeCustomRole(
+                                        member,
+                                        assignment.assignmentId,
+                                        assignment.role.name,
+                                      )
+                                    }
+                                    disabled={isPending}
+                                    className="shrink-0 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {t("customRoleAssignments.remove")}
+                                  </button>
+                                </div>
+                              ))}
                             </div>
-                          ) : null}
+                          )}
+                          {data.assignableCustomRoles.length === 0 ? (
+                            <div className="text-xs leading-5 text-zinc-600">
+                              {t("customRoleAssignments.createRoleFirst")}
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap gap-2">
+                                <select
+                                  value={selection.roleId}
+                                  onChange={(event) =>
+                                    onCustomRoleSelectionChange(member.userId, { roleId: event.target.value })
+                                  }
+                                  disabled={isPending}
+                                  className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <option value="">{t("customRoleAssignments.selectPlaceholder")}</option>
+                                  {data.assignableCustomRoles.map((role) => (
+                                    <option key={role.roleId} value={role.roleId}>
+                                      {role.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={selection.scopeType}
+                                  onChange={(event) =>
+                                    onCustomRoleSelectionChange(member.userId, {
+                                      scopeType: event.target.value as RoleAssignmentScopeType,
+                                    })
+                                  }
+                                  disabled={isPending}
+                                  className="min-w-32 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                  aria-label={t("customRoleAssignments.scopeLabel")}
+                                >
+                                  <option value="tenant">{t("customRoleAssignments.scope.tenant")}</option>
+                                  <option value="project">{t("customRoleAssignments.scope.project")}</option>
+                                  <option value="workspace">{t("customRoleAssignments.scope.workspace")}</option>
+                                </select>
+                                {requiresProject ? (
+                                  <select
+                                    value={selection.projectId}
+                                    onChange={(event) =>
+                                      onCustomRoleSelectionChange(member.userId, { projectId: event.target.value })
+                                    }
+                                    disabled={isPending}
+                                    className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    aria-label={t("customRoleAssignments.projectLabel")}
+                                  >
+                                    <option value="">{t("customRoleAssignments.projectPlaceholder")}</option>
+                                    {assignmentProjects.map((project) => (
+                                      <option key={project.projectId} value={project.projectId}>
+                                        {project.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                                {requiresWorkspace ? (
+                                  <select
+                                    value={selection.workspaceId}
+                                    onChange={(event) =>
+                                      onCustomRoleSelectionChange(member.userId, { workspaceId: event.target.value })
+                                    }
+                                    disabled={isPending || !selectedProject}
+                                    className="min-w-44 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    aria-label={t("customRoleAssignments.workspaceLabel")}
+                                  >
+                                    <option value="">{t("customRoleAssignments.workspacePlaceholder")}</option>
+                                    {(selectedProject?.workspaces ?? []).map((workspace) => (
+                                      <option key={workspace.workspaceId} value={workspace.workspaceId}>
+                                        {workspace.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => onAssignCustomRole(member)}
+                                  disabled={isAssignmentBlocked}
+                                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {t("customRoleAssignments.assignRole")}
+                                </button>
+                              </div>
+                              {scopeEffect?.hasZeroEffectiveCapabilities ? (
+                                <div className="text-xs leading-5 text-red-700">
+                                  {t("customRoleAssignments.zeroEffectiveCapabilities")}
+                                </div>
+                              ) : scopeEffect?.hasScopeWarnings ? (
+                                <div className="text-xs leading-5 text-amber-700">
+                                  <div>{t("customRoleAssignments.scopeWarning")}</div>
+                                  <div>
+                                    {t("customRoleAssignments.effectiveCapabilities", {
+                                      capabilities: capabilityList(scopeEffect.effectiveCapabilityKeys),
+                                    })}
+                                  </div>
+                                  <div>
+                                    {t("customRoleAssignments.ignoredCapabilities", {
+                                      capabilities: capabilityList(scopeEffect.ignoredCapabilityKeys),
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  </td>
+                      </td>
+                    </>
+                  ) : (
+                    <td className="py-3 pr-4">{renderAccessSummary(member, assignedCustomRoles)}</td>
+                  )}
                   <td className="py-3 pr-4 text-zinc-600">{formatDateTime(member.createdAt)}</td>
                   <td className="py-3">
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onToggleEffectiveAccess(member)}
-                        disabled={effectiveAccessLoadingUserId === member.userId}
-                        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {expandedEffectiveAccessUserId === member.userId
-                          ? t("effectiveAccess.hide")
-                          : t("effectiveAccess.show")}
-                      </button>
+                      {showAdvancedRoleSettings ? (
+                        <button
+                          type="button"
+                          onClick={() => onToggleEffectiveAccess(member)}
+                          disabled={effectiveAccessLoadingUserId === member.userId}
+                          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {expandedEffectiveAccessUserId === member.userId
+                            ? t("effectiveAccess.hide")
+                            : t("effectiveAccess.show")}
+                        </button>
+                      ) : null}
                       {member.canEdit ? (
                         <>
                         <button
@@ -1123,7 +1150,7 @@ export function MemberManagementPanelView({
                     </div>
                   </td>
                 </tr>
-                {expandedEffectiveAccessUserId === member.userId ? (
+                {showAdvancedRoleSettings && expandedEffectiveAccessUserId === member.userId ? (
                   <tr className="border-b border-zinc-100">
                     <td colSpan={6} className="bg-zinc-50 px-4 py-4">
                       {renderEffectiveAccessDetail(member)}

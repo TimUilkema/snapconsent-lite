@@ -8,11 +8,14 @@ type ResolveTenantIdFn = typeof import("@/lib/tenant/resolve-tenant").resolveTen
 type GetReleaseAssetDetailFn =
   typeof import("@/lib/project-releases/project-release-service").getReleaseAssetDetail;
 
-export async function createMediaLibraryAssetDownloadResponse(
+type OriginalAssetMode = "download" | "open";
+
+export async function createMediaLibraryOriginalAssetResponse(
   input: {
     authSupabase: SupabaseClient;
     adminSupabase: SupabaseClient;
     releaseAssetId: string;
+    mode: OriginalAssetMode;
   },
   dependencies: {
     resolveTenantId: ResolveTenantIdFn;
@@ -52,7 +55,12 @@ export async function createMediaLibraryAssetDownloadResponse(
     );
   }
 
-  const { data, error } = await input.adminSupabase.storage.from(bucket).createSignedUrl(path, 120);
+  const storage = input.adminSupabase.storage.from(bucket);
+  const { data, error } = input.mode === "download"
+    ? await storage.createSignedUrl(path, 120, {
+        download: detail.row.original_filename || "media-library-original",
+      })
+    : await storage.createSignedUrl(path, 120);
   if (error || !data?.signedUrl) {
     throw new HttpError(
       409,
@@ -62,4 +70,44 @@ export async function createMediaLibraryAssetDownloadResponse(
   }
 
   return Response.redirect(data.signedUrl, 302);
+}
+
+export async function createMediaLibraryAssetDownloadResponse(
+  input: {
+    authSupabase: SupabaseClient;
+    adminSupabase: SupabaseClient;
+    releaseAssetId: string;
+  },
+  dependencies?: {
+    resolveTenantId: ResolveTenantIdFn;
+    getReleaseAssetDetail: GetReleaseAssetDetailFn;
+  },
+) {
+  return createMediaLibraryOriginalAssetResponse(
+    {
+      ...input,
+      mode: "download",
+    },
+    dependencies,
+  );
+}
+
+export async function createMediaLibraryAssetOpenResponse(
+  input: {
+    authSupabase: SupabaseClient;
+    adminSupabase: SupabaseClient;
+    releaseAssetId: string;
+  },
+  dependencies?: {
+    resolveTenantId: ResolveTenantIdFn;
+    getReleaseAssetDetail: GetReleaseAssetDetailFn;
+  },
+) {
+  return createMediaLibraryOriginalAssetResponse(
+    {
+      ...input,
+      mode: "open",
+    },
+    dependencies,
+  );
 }

@@ -219,7 +219,7 @@ test("outbound email worker retries transport failures and later sends the queue
       supabase: adminClient,
       transport: {
         send: async () => {
-          throw new Error("smtp unavailable");
+          throw new Error("smtp unavailable password=<GMAIL_APP_PASSWORD>");
         },
       },
     });
@@ -230,13 +230,19 @@ test("outbound email worker retries transport failures and later sends the queue
 
     const { data: retriedJob, error: retriedError } = await adminClient
       .from("outbound_email_jobs")
-      .select("status, attempt_count, run_after")
+      .select("status, attempt_count, run_after, last_error_code, last_error_message")
       .eq("tenant_id", context.tenantId)
       .eq("id", queued.jobId)
       .single();
     assertNoPostgrestError(retriedError, "select retried job");
     assert.equal(retriedJob.status, "pending");
     assert.equal(retriedJob.attempt_count, 1);
+    assert.equal(retriedJob.last_error_code, "outbound_email_dispatch_failed");
+    assert.equal(
+      retriedJob.last_error_message,
+      "Outbound email dispatch failed. Check server logs and SMTP configuration.",
+    );
+    assert.doesNotMatch(retriedJob.last_error_message ?? "", /<GMAIL_APP_PASSWORD>/);
 
     const { error: forceDueError } = await adminClient
       .from("outbound_email_jobs")

@@ -15,6 +15,7 @@ export type PreviewFaceOverlay = {
   id: string;
   href: string;
   label: string;
+  badgeLabel?: string | null;
   faceBoxNormalized: NormalizedFaceBox;
   headshotThumbnailUrl?: string | null;
   matchConfidence?: number | null;
@@ -522,7 +523,7 @@ function renderOverlayBadge(overlay: PreviewFaceOverlay, size: "inline" | "previ
     <span
       className={`inline-flex items-center justify-center border-2 border-white bg-emerald-700 font-semibold text-white shadow-sm ${badgeSizeClass}`}
     >
-      {getConsentInitials(overlay.label)}
+      {overlay.badgeLabel ?? getConsentInitials(overlay.label)}
     </span>
   );
 }

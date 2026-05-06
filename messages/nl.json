@@ -6,12 +6,12 @@
     }
   },
   "layout": {
-    "workspaceSetupIssueTitle": "Probleem met werkruimte-instelling",
-    "workspaceSetupIssueBody": "De werkruimte-lidmaatschap kon niet worden ingesteld. Meld je af, meld je opnieuw aan en probeer het opnieuw.",
+    "workspaceSetupIssueTitle": "Probleem met organisatie-instelling",
+    "workspaceSetupIssueBody": "Het organisatielidmaatschap kon niet worden ingesteld. Meld je af, meld je opnieuw aan en probeer het opnieuw.",
     "workspaceSetupIssueSupport": "Blijft dit misgaan, neem dan contact op met support met je account-e-mailadres en vraag om tenant bootstrap.",
     "backToLogin": "Terug naar inloggen",
     "appName": "SnapConsent",
-    "workspace": "Werkruimte",
+    "workspace": "Organisatie",
     "switchWorkspace": "Wisselen",
     "signedIn": "Ingelogd",
     "signOut": "Uitloggen"
@@ -30,6 +30,7 @@
     "subtitle": "Toestemming verzamelen, projectuitnodigingen en fotokoppeling voor teams die een duidelijke workflow nodig hebben in plaats van losse mappen en links.",
     "openAppTitle": "Open de app",
     "openAppBody": "Log in om projecten, uitnodigingen, assets en gekoppelde toestemmingen te beheren.",
+    "createAccount": "Account maken",
     "signIn": "Inloggen",
     "openDashboard": "Open dashboard",
     "currentScopeTitle": "Huidige scope",
@@ -41,6 +42,11 @@
     "emailLabel": "E-mail",
     "passwordLabel": "Wachtwoord",
     "submit": "Inloggen",
+    "confirmed": "Je e-mail is bevestigd. Log in om verder te gaan.",
+    "confirmationRequired": "Controleer je e-mail en bevestig je account voordat je inlogt.",
+    "signedInUnconfirmed": "Dit account moet nog per e-mail worden bevestigd. Controleer je inbox en log daarna opnieuw in.",
+    "createAccount": "Account maken",
+    "signOut": "Uitloggen",
     "backToHome": "Terug naar home",
     "errors": {
       "invalidCredentials": "Ongeldig e-mailadres of wachtwoord.",
@@ -51,9 +57,45 @@
       "fallback": "Inloggen mislukt."
     }
   },
+  "createAccount": {
+    "title": "Account maken",
+    "subtitle": "Maak je SnapConsent-account. Je bevestigt je e-mail voordat je de app opent.",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Wachtwoord",
+    "submit": "Account maken",
+    "checkEmailTitle": "Controleer je e-mail",
+    "checkEmailBody": "We hebben een SnapConsent-bevestigingslink gestuurd. Bevestig je e-mail en log daarna in om verder te gaan.",
+    "checkEmailSignedInBody": "Dit account moet nog per e-mail worden bevestigd. Controleer je inbox, log uit en log na bevestiging opnieuw in.",
+    "backToLogin": "Terug naar inloggen",
+    "signOut": "Uitloggen",
+    "errors": {
+      "invalidInput": "Vul een geldig e-mailadres en wachtwoord in.",
+      "accountExists": "Er bestaat al een account voor dit e-mailadres. Log in in plaats van opnieuw te registreren.",
+      "weakPassword": "Kies een sterker wachtwoord.",
+      "signUpFailed": "Account aanmaken lukt nu niet.",
+      "fallback": "Account aanmaken mislukt."
+    }
+  },
+  "organizationSetup": {
+    "title": "Stel je organisatie in",
+    "helper": "Hier komen je projecten, toestemmingsrecords en media te staan. Je kunt SnapConsent alleen gebruiken of later anderen uitnodigen.",
+    "nameLabel": "Organisatienaam",
+    "create": "Organisatie maken",
+    "continueDefault": "Doorgaan met standaardorganisatie",
+    "signedInFallback": "Ingelogd",
+    "signOut": "Uitloggen",
+    "backToHome": "Terug naar home",
+    "errors": {
+      "missingName": "Vul een organisatienaam in of ga door met de standaardorganisatie.",
+      "invalidName": "De organisatienaam moet tussen 2 en 120 tekens zijn.",
+      "unauthenticated": "Log in voordat je je organisatie instelt.",
+      "setupFailed": "Je organisatie kan nu niet worden ingesteld.",
+      "fallback": "Organisatie instellen mislukt."
+    }
+  },
   "tenantMembershipInvite": {
     "title": "Organisatie-uitnodiging",
-    "subtitle": "Log in met het uitgenodigde e-mailadres om deze werkruimte te openen.",
+    "subtitle": "Gebruik het uitgenodigde e-mailadres om lid te worden van deze organisatie.",
     "labels": {
       "organization": "Organisatie",
       "role": "Rol",
@@ -91,9 +133,11 @@
     "wrongEmailBody": "Deze uitnodiging is verstuurd naar {invitedEmail}. Log uit en gebruik dat e-mailadres om verder te gaan.",
     "signInTitle": "Inloggen",
     "signInBody": "Gebruik het uitgenodigde e-mailadres als je al een account hebt.",
+    "signInExistingBody": "Log in met dit e-mailadres om de uitnodiging te accepteren.",
     "signInSubmit": "Inloggen",
     "signUpTitle": "Account maken",
     "signUpBody": "Maak een nieuw account met het uitgenodigde e-mailadres.",
+    "signUpNewBody": "Maak een account met dit e-mailadres om de uitnodiging te accepteren.",
     "signUpSubmit": "Account maken",
     "accept": "Word lid van organisatie",
     "signOut": "Uitloggen",
@@ -103,7 +147,7 @@
   },
   "members": {
     "title": "Organisatiegebruikers",
-    "subtitle": "Nodig mensen uit, wijzig organisatierollen en beheer openstaande organisatie-uitnodigingen.",
+    "subtitle": "Nodig gebruikers uit en beheer hun hoofdrol in de organisatie.",
     "readOnly": "Alleen workspace owners en admins kunnen organisatieleden beheren.",
     "backToProjects": "Terug naar projecten",
     "delegated": {
@@ -147,6 +191,20 @@
       "subtitle": "Vaste rollen zijn gekoppeld aan deze huidige mogelijkheden.",
       "capabilitiesColumn": "Mogelijkheden",
       "ownerProtected": "Owners zijn read-only, niet uitnodigbaar en niet verwijderbaar in deze slice."
+    },
+    "advancedRoleSettings": {
+      "show": "Geavanceerde rolinstellingen tonen",
+      "hide": "Geavanceerde rolinstellingen verbergen",
+      "title": "Geavanceerde rolinstellingen",
+      "description": "Beheer aangepaste rollen, reviewtoegang en toegangsdetails. Deze instellingen zijn alleen beschikbaar voor owners en admins."
+    },
+    "accessSummary": {
+      "column": "Toegangssamenvatting",
+      "none": "Geen extra toegang",
+      "customRoleCount": "Extra toegang: {count, plural, one {# rol} other {# rollen}}",
+      "reviewAllProjects": "Reviewtoegang: alle projecten",
+      "reviewProjectCount": "Reviewtoegang: {count, plural, one {# project} other {# projecten}}",
+      "reviewNotGranted": "Reviewtoegang: niet toegekend"
     },
     "capabilityGroups": {
       "organizationUsers": "Organisatiegebruikers",
@@ -196,7 +254,7 @@
     },
     "membersTable": {
       "title": "Huidige leden",
-      "subtitle": "Owners zijn hier zichtbaar maar blijven beschermd tegen rolwijzigingen en verwijdering.",
+      "subtitle": "De hoofdrol bepaalt de basistoegang tot de organisatie. Owner-rijen blijven beschermd.",
       "removalExplanation": "Een gebruiker verwijderen haalt alleen toegang tot deze organisatie weg. Het auth-account wordt niet verwijderd en de gebruiker kan nog bij andere organisaties horen.",
       "columns": {
         "email": "E-mail",
@@ -372,9 +430,9 @@
     }
   },
   "activeTenant": {
-    "title": "Kies een werkruimte",
-    "subtitle": "Dit account hoort bij meer dan een organisatie. Kies de werkruimte die je nu wilt gebruiken.",
-    "choose": "Werkruimte openen",
+    "title": "Kies een organisatie",
+    "subtitle": "Dit account hoort bij meer dan een organisatie. Kies de organisatie die je nu wilt gebruiken.",
+    "choose": "Organisatie openen",
     "roleLabel": "Rol: {role}",
     "signedInFallback": "Ingelogd",
     "signOut": "Uitloggen",
@@ -386,7 +444,7 @@
       "photographer": "Fotograaf"
     },
     "errors": {
-      "invalidSelection": "Kies een werkruimte waar je nu lid van bent."
+      "invalidSelection": "Kies een organisatie waar je nu lid van bent."
     }
   },
   "dashboard": {
@@ -1090,9 +1148,9 @@
         "manual": "Handmatig"
       },
       "downloadConfirm": {
-        "blockedOnly": "Er zijn geblokkeerde gezichten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?",
-        "restrictedOnly": "Er zijn ingetrokken personen of niet-toegestane gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?",
-        "blockedRestricted": "Er zijn geblokkeerde gezichten en beperkte gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds downloaden. Doorgaan?"
+        "blockedOnly": "Er zijn geblokkeerde gezichten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds openen of downloaden. Doorgaan?",
+        "restrictedOnly": "Er zijn ingetrokken personen of niet-toegestane gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds openen of downloaden. Doorgaan?",
+        "blockedRestricted": "Er zijn geblokkeerde gezichten en beperkte gebruiksrechten in deze release-snapshot aanwezig.\n\nGeautoriseerde Media Library-gebruikers kunnen het origineel nog steeds openen of downloaden. Doorgaan?"
       }
     },
     "list": {
@@ -1108,13 +1166,51 @@
         "emptyFolders": "Nog geen folders.",
         "createFolder": "Folder maken",
         "renameFolder": "Hernoemen",
+        "renameFolderAriaLabel": "{name} hernoemen",
         "archiveFolder": "Archiveren",
+        "archiveFolderAriaLabel": "{name} archiveren",
         "archiveConfirm": "Folder \"{name}\" archiveren?",
-        "currentFolder": "Huidige folder"
+        "archiveConfirmWithChildren": "Folder \"{name}\" archiveren? Onderliggende folders en assets worden verborgen in de actieve boom, niet verwijderd.",
+        "currentFolder": "Huidige folder",
+        "currentPath": "Huidig folderpad",
+        "moveFolderAriaLabel": "{name} verplaatsen",
+        "rootDropTarget": "Zet hier neer om de folder naar root te verplaatsen"
+      },
+      "breadcrumb": {
+        "root": "Alle assets"
+      },
+      "drag": {
+        "assetHandle": "{name} naar een folder slepen",
+        "selectedAssetsHandle": "Geselecteerde assets naar een folder slepen",
+        "folderHandle": "Folder {name} slepen",
+        "assetOverlay": "{name} verplaatsen",
+        "selectedAssetsOverlay": "{count, plural, one {# geselecteerd asset verplaatsen} other {# geselecteerde assets verplaatsen}}",
+        "folderOverlay": "Folder {name} verplaatsen"
+      },
+      "drop": {
+        "moveAssetsToFolder": "Assets naar {name} verplaatsen",
+        "moveFolderToFolder": "Folder naar {name} verplaatsen",
+        "moveFolderToRoot": "Folder naar root verplaatsen",
+        "invalidTarget": "Ongeldig doel"
+      },
+      "view": {
+        "grid": "Grid",
+        "list": "Lijst",
+        "gridAriaLabel": "Gridweergave",
+        "listAriaLabel": "Lijstweergave"
+      },
+      "pagination": {
+        "previous": "Vorige",
+        "next": "Volgende",
+        "pageStatus": "Pagina {page} van {totalPages} · {totalCount, plural, one {# asset} other {# assets}}",
+        "pageSizeLabel": "Assets per pagina",
+        "pageSizeValue": "{count} per pagina"
       },
       "selection": {
         "count": "{count, plural, one {# asset geselecteerd} other {# assets geselecteerd}}",
         "clear": "Wissen",
+        "selectAllOnPage": "Alles op deze pagina selecteren",
+        "clearSelection": "Selectie wissen",
         "addToFolder": "Aan folder toevoegen",
         "moveToFolder": "Naar folder verplaatsen",
         "removeFromFolder": "Uit folder verwijderen",
@@ -1123,8 +1219,18 @@
       "folderForm": {
         "nameLabel": "Nieuwe folder",
         "namePlaceholder": "Foldernaam",
+        "createPlaceholder": "Nieuwe folder",
+        "createAriaLabel": "Foldernaam",
+        "createSubmitAriaLabel": "Folder maken",
+        "createSubmitting": "Maken",
+        "renameNameAriaLabel": "Foldernaam",
         "createSubmit": "Maken",
         "renameSubmit": "Opslaan",
+        "moveFolder": "Folder verplaatsen",
+        "parentFolderLabel": "Bovenliggende folder",
+        "rootOption": "Root",
+        "moveSubmit": "Verplaatsen",
+        "moveCancel": "Annuleren",
         "cancel": "Annuleren"
       },
       "folderMessages": {
@@ -1133,12 +1239,21 @@
         "archived": "Folder gearchiveerd.",
         "assigned": "Assets aan folder toegevoegd.",
         "moved": "Assets verplaatst.",
-        "removed": "Assets uit folder verwijderd."
+        "removed": "Assets uit folder verwijderd.",
+        "folderMoved": "Folder verplaatst.",
+        "folderMoveNoop": "Folder staat al op die plek.",
+        "assetsMoveNoop": "Assets staan al in die folder."
       },
       "folderErrors": {
         "nameRequired": "Foldernaam is verplicht.",
+        "renameRequired": "Foldernaam is verplicht.",
         "nameConflict": "Een actieve folder gebruikt deze naam al.",
         "folderArchived": "Gearchiveerde folders kunnen niet worden gewijzigd.",
+        "targetFolderArchived": "Die doelfolder is gearchiveerd.",
+        "moveIntoSelf": "Een folder kan niet in zichzelf worden geplaatst.",
+        "moveIntoDescendant": "Een folder kan niet in een onderliggende folder worden geplaatst.",
+        "moveConflict": "De folder kon niet worden verplaatst.",
+        "targetNotFound": "Doelfolder niet gevonden.",
         "generic": "De Media Library-folder kon niet worden bijgewerkt."
       },
       "assetTypes": {
@@ -1153,13 +1268,18 @@
       },
       "actions": {
         "open": "Openen",
+        "openDetail": "Openen",
+        "openOriginal": "Origineel openen",
         "download": "Origineel downloaden"
       }
     },
     "detail": {
       "backToList": "Terug naar Media Library",
       "previewUnavailable": "Voor deze release-asset is geen preview beschikbaar.",
+      "openOriginal": "Origineel openen",
       "download": "Origineel downloaden",
+      "faceLabel": "Gezicht {face}",
+      "faceBadgeLabel": "G{face}",
       "releaseVersionValue": "Release v{version}",
       "linkedPeopleCount": "{count, plural, one {# gekoppelde persoon} other {# gekoppelde personen}}",
       "unknownOwner": "Onbekende persoon",
@@ -1234,8 +1354,16 @@
       "usagePermissions": {
         "restricted": "Beperkt",
         "selected": "Geselecteerd",
-        "selectionHelp": "Selecteer een gekoppelde persoon om de bijbehorende face-overlay en de vastgelegde gebruiksrechten uit deze release-snapshot te bekijken.",
-        "videoHelp": "Video-assets blijven read-only in de Media Library. Gebruik de vrijgegeven samenvattingen hieronder om gebruiksrechten en eventuele hele-asset- of fallback-context te bekijken."
+        "scopeColumn": "Scope",
+        "assetLinkColumn": "Assetkoppeling",
+        "finalColumn": "Resultaat",
+        "finalGranted": "Bruikbaar",
+        "finalBlocked": "Geblokkeerd",
+        "blockedNoConsent": "Geblokkeerd",
+        "notAvailable": "Niet beschikbaar",
+        "noLinkedConsent": "Geen gekoppelde toestemming",
+        "selectionHelp": "Selecteer een gezicht om de bijbehorende overlay en de vastgelegde gebruiksrechten uit deze release-snapshot te bekijken.",
+        "videoHelp": "Video-assets blijven read-only in de Media Library. Gebruik de vrijgegeven rechtentabel hieronder om gebruiksrechten en eventuele hele-asset- of fallback-context te bekijken."
       },
       "ownerStrip": {
         "singleFace": "Gezicht {face}",

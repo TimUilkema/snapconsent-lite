@@ -38,8 +38,54 @@ Recommended local setup for phone testing:
 ## Core Auth Flow
 
 - Login: `/login`
+- Create account: `/create-account`
 - Protected dashboard: `/dashboard`
 - Projects area: `/projects`
+
+## Auth Email Confirmation
+
+Account signup confirmation is owned by Supabase Auth, not by SnapConsent product email jobs.
+
+- Local Auth confirmations are enabled through `supabase/config.toml`.
+- The local confirmation template lives at `supabase/templates/confirmation.html`.
+- The local confirmation landing URL is `http://localhost:3000/login?confirmed=1`.
+- By default, local Supabase Auth email can be inspected in Inbucket: `http://127.0.0.1:54324`.
+
+For hosted Supabase environments, enable Confirm Email in Supabase Auth settings, configure the confirmation template subject/body to match the committed local template, and allow the deployed confirmation URL, for example:
+
+```text
+https://app.snapconsent.com/login?confirmed=1
+```
+
+Supabase Auth SMTP is enabled in local `supabase/config.toml` and uses the same Gmail SMTP connection variables as the app product mailer:
+
+```env
+EMAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_REQUIRE_TLS=true
+SMTP_USER=<GMAIL_ADDRESS>
+SMTP_PASSWORD=<GMAIL_APP_PASSWORD>
+SMTP_FROM="SnapConsent <GMAIL_ADDRESS>"
+```
+
+The Supabase CLI reads `env(...)` values from the shell that starts Supabase, not automatically from Next's `.env.local`. On Windows, start or restart local Supabase with:
+
+```powershell
+.\scripts\start-supabase-auth-smtp.ps1
+```
+
+Use the same helper for other Supabase CLI commands that read `supabase/config.toml`:
+
+```powershell
+.\scripts\start-supabase-auth-smtp.ps1 db reset
+.\scripts\start-supabase-auth-smtp.ps1 status
+```
+
+Gmail Auth SMTP is development-only. Production Auth email should use a custom-domain sender/provider configured in Supabase Auth, for example `app@snapconsent.com`.
+
+First-run onboarding uses the user-facing term Organization. Backend tenant terminology remains unchanged. A confirmed user with no organization membership is routed to `/organization/setup`, where they can enter an organization name or continue with the default `My organization`.
 
 ## Projects + Invites Flow (002)
 
@@ -50,7 +96,7 @@ Recommended local setup for phone testing:
 5. Receipt email is sent to subject with revoke link.
 6. Subject can revoke consent from public revoke URL.
 
-## Local Email Verification
+## Outbound Email Verification
 
 SnapConsent now has a central outbound email foundation for server-side email jobs.
 
@@ -59,18 +105,56 @@ SnapConsent now has a central outbound email foundation for server-side email jo
 - Feature code should not call SMTP or provider libraries directly unless the foundation itself is being changed.
 - External email links should continue to use the existing relative path builders plus `APP_ORIGIN` through `src/lib/url/external-origin.ts`.
 
-The local Supabase config uses Inbucket for email testing, and the current SMTP transport points at that local sink by default.
+The default email transport is local sink mode:
+
+```env
+EMAIL_TRANSPORT=local-sink
+SMTP_HOST=127.0.0.1
+SMTP_PORT=54325
+SMTP_FROM=receipts@snapconsent.local
+```
+
+The local Supabase config uses Inbucket for email testing, and the default SMTP transport points at that local sink.
 
 - Inbucket UI: `http://127.0.0.1:54324`
 - SMTP target for app mailer: `127.0.0.1:54325`
 - Worker token env for queued and retried email dispatch: `OUTBOUND_EMAIL_WORKER_TOKEN`
 
-Current live use is the one-off consent receipt flow. Future invite, reminder, and request-style email features should extend the outbound foundation instead of creating a second notification path.
+Current app-managed outbound email jobs:
 
-After submitting consent, verify in Inbucket:
-- receipt delivered to subject email
+- one-off consent receipts with revoke links
+- tenant membership invite emails with join links
+
+Account signup confirmation, password reset, magic link, and email-change messages remain Supabase Auth emails. Do not add account confirmation to `src/lib/email/outbound/`.
+
+Future invite, reminder, request, and recurring email features should extend the outbound foundation instead of creating a second notification path.
+
+After submitting consent or sending a tenant membership invite, verify in Inbucket:
+- email delivered to the expected recipient
 - consent summary content
+- revoke or join link starts with `APP_ORIGIN`
 - revoke link works and marks consent revoked without deleting consent records
+
+### Real SMTP in local development
+
+Real SMTP sending is opt-in. Set `EMAIL_TRANSPORT=smtp` only in `.env.local` or another local secret store. Do not commit SMTP credentials, paste them into docs, or include them in screenshots or logs.
+
+Generic authenticated SMTP example for Gmail development:
+
+```env
+EMAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_REQUIRE_TLS=true
+SMTP_USER=<GMAIL_ADDRESS>
+SMTP_PASSWORD=<GMAIL_APP_PASSWORD>
+SMTP_FROM="SnapConsent <GMAIL_ADDRESS>"
+```
+
+Gmail is a development-only SMTP option. It requires a Gmail account with 2-Step Verification and an app password. The visible sender may be the authenticated Gmail account or an authorized alias. Production sending from `app@snapconsent.com` should use a custom-domain SMTP provider or transactional provider configured through the same outbound email foundation.
+
+Emails use `APP_ORIGIN` for public links. If an email will be opened on a phone or another device, set `APP_ORIGIN` to a LAN-reachable host or tunnel URL instead of `localhost`.
 
 If you need to drain queued email jobs locally, call the internal worker endpoint:
 

@@ -23,10 +23,12 @@ export type CurrentUserTenantMembership = {
 
 export async function listCurrentUserTenantMemberships(
   supabase: SupabaseClient,
+  authenticatedUserId: string,
 ): Promise<CurrentUserTenantMembership[]> {
   const { data: membershipRows, error: membershipError } = await supabase
     .from("memberships")
     .select("tenant_id, role, created_at")
+    .eq("user_id", authenticatedUserId)
     .order("created_at", { ascending: true });
 
   if (membershipError) {

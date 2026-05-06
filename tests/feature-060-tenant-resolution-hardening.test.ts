@@ -36,6 +36,7 @@ function createPostgrestError(message: string, code = "XX000"): PostgrestError {
 }
 
 function createSupabaseDouble(input?: {
+  authenticatedUserId?: string | null;
   ensuredTenantResponses?: RpcResponse[];
   userResponses?: UserResponse[];
   membershipResponses?: MembershipResponse[];
@@ -57,6 +58,8 @@ function createSupabaseDouble(input?: {
     ensuredTenantCalls: 0,
     getUserCalls: 0,
     loadCookieCalls: 0,
+    pendingInviteValidationCalls: 0,
+    membershipUserIds: [] as string[],
   };
 
   function takeResponse<T>(responses: T[], index: number) {
@@ -82,8 +85,13 @@ function createSupabaseDouble(input?: {
     },
   } as unknown as SupabaseClient;
 
+  const trustedAuthenticatedUserId = input?.authenticatedUserId === undefined
+    ? "user-1"
+    : input.authenticatedUserId;
   const dependencies = {
-    async loadMemberships() {
+    ...(trustedAuthenticatedUserId ? { authenticatedUserId: trustedAuthenticatedUserId } : {}),
+    async loadMemberships(_supabase: SupabaseClient, authenticatedUserId: string) {
+      stats.membershipUserIds.push(authenticatedUserId);
       const response = takeResponse(membershipResponses, stats.membershipCalls);
       stats.membershipCalls += 1;
       return response;
@@ -96,10 +104,10 @@ function createSupabaseDouble(input?: {
         error: response.error,
       };
     },
-    async hasAuthenticatedUser() {
+    async loadAuthenticatedUserId() {
       const response = takeResponse(userResponses, stats.getUserCalls);
       stats.getUserCalls += 1;
-      return !response.error && !!response.data.user;
+      return !response.error && response.data.user ? response.data.user.id : null;
     },
     async loadTenantCookies() {
       stats.loadCookieCalls += 1;
@@ -107,6 +115,10 @@ function createSupabaseDouble(input?: {
         activeTenantId: input?.cookies?.activeTenantId ?? null,
         pendingOrgInviteToken: input?.cookies?.pendingOrgInviteToken ?? null,
       };
+    },
+    async validatePendingOrgInviteToken(_supabase: SupabaseClient, token: string) {
+      stats.pendingInviteValidationCalls += 1;
+      return token !== "stale-join-token";
     },
   };
 
@@ -131,8 +143,46 @@ test("resolveTenantId returns the only membership without requiring an active te
 
   assert.equal(tenantId, "tenant-current");
   assert.equal(stats.membershipCalls, 1);
+  assert.deepEqual(stats.membershipUserIds, ["user-1"]);
   assert.equal(stats.ensuredTenantCalls, 0);
   assert.equal(stats.getUserCalls, 0);
+});
+
+test("resolveTenantId passes trusted authenticated user id into membership lookup without calling auth.getUser", async () => {
+  const { supabase, dependencies, stats } = createSupabaseDouble({
+    authenticatedUserId: "user-trusted",
+    membershipResponses: [
+      {
+        memberships: [{ tenant_id: "tenant-current", created_at: "2026-04-22T08:00:00.000Z" }],
+        error: null,
+      },
+    ],
+  });
+
+  const tenantId = await resolveTenantId(supabase, dependencies);
+
+  assert.equal(tenantId, "tenant-current");
+  assert.deepEqual(stats.membershipUserIds, ["user-trusted"]);
+  assert.equal(stats.getUserCalls, 0);
+});
+
+test("resolveTenantId derives authenticated user id when no trusted id is provided", async () => {
+  const { supabase, dependencies, stats } = createSupabaseDouble({
+    authenticatedUserId: null,
+    userResponses: [{ data: { user: { id: "user-derived" } }, error: null }],
+    membershipResponses: [
+      {
+        memberships: [{ tenant_id: "tenant-current", created_at: "2026-04-22T08:00:00.000Z" }],
+        error: null,
+      },
+    ],
+  });
+
+  const tenantId = await resolveTenantId(supabase, dependencies);
+
+  assert.equal(tenantId, "tenant-current");
+  assert.deepEqual(stats.membershipUserIds, ["user-derived"]);
+  assert.equal(stats.getUserCalls, 1);
 });
 
 test("resolveTenantId uses the active tenant cookie when a user belongs to multiple workspaces", async () => {
@@ -178,7 +228,25 @@ test("resolveTenantId requires explicit tenant selection when a user has multipl
   );
 });
 
-test("resolveTenantId falls back to ensure_tenant_for_current_user when an authenticated user has no memberships", async () => {
+test("resolveTenantId ignores stale active tenant cookie for a single current-user membership", async () => {
+  const { supabase, dependencies } = createSupabaseDouble({
+    membershipResponses: [
+      {
+        memberships: [{ tenant_id: "tenant-current", created_at: "2026-04-22T08:00:00.000Z" }],
+        error: null,
+      },
+    ],
+    cookies: {
+      activeTenantId: "tenant-stale",
+    },
+  });
+
+  const tenantId = await resolveTenantId(supabase, dependencies);
+
+  assert.equal(tenantId, "tenant-current");
+});
+
+test("resolveTenantId routes authenticated users with no memberships to organization setup", async () => {
   const { supabase, dependencies, stats } = createSupabaseDouble({
     membershipResponses: [
       { memberships: [], error: null },
@@ -186,7 +254,30 @@ test("resolveTenantId falls back to ensure_tenant_for_current_user when an authe
     ensuredTenantResponses: [{ data: "tenant-bootstrapped", error: null }],
   });
 
-  const tenantId = await resolveTenantId(supabase, dependencies);
+  await assert.rejects(
+    () => resolveTenantId(supabase, dependencies),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.status === 409 &&
+      error.code === "organization_setup_required",
+  );
+
+  assert.equal(stats.membershipCalls, 1);
+  assert.equal(stats.ensuredTenantCalls, 0);
+});
+
+test("resolveTenantId can still use explicit bootstrap recovery for no-membership users", async () => {
+  const { supabase, dependencies, stats } = createSupabaseDouble({
+    membershipResponses: [
+      { memberships: [], error: null },
+    ],
+    ensuredTenantResponses: [{ data: "tenant-bootstrapped", error: null }],
+  });
+
+  const tenantId = await resolveTenantId(supabase, {
+    ...dependencies,
+    missingMembershipBehavior: "bootstrap",
+  });
 
   assert.equal(tenantId, "tenant-bootstrapped");
   assert.equal(stats.membershipCalls, 1);
@@ -212,6 +303,29 @@ test("resolveTenantId blocks bootstrap when an invited onboarding cookie is pres
   );
 
   assert.equal(stats.ensuredTenantCalls, 0);
+  assert.equal(stats.pendingInviteValidationCalls, 1);
+});
+
+test("resolveTenantId ignores a stale invited onboarding cookie when the invite is no longer usable", async () => {
+  const { supabase, dependencies, stats } = createSupabaseDouble({
+    membershipResponses: [
+      { memberships: [], error: null },
+    ],
+    cookies: {
+      pendingOrgInviteToken: "stale-join-token",
+    },
+  });
+
+  await assert.rejects(
+    () => resolveTenantId(supabase, dependencies),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.status === 409 &&
+      error.code === "organization_setup_required",
+  );
+
+  assert.equal(stats.ensuredTenantCalls, 0);
+  assert.equal(stats.pendingInviteValidationCalls, 1);
 });
 
 test("resolveTenantId retries membership lookup after a failed bootstrap attempt", async () => {
@@ -226,7 +340,10 @@ test("resolveTenantId retries membership lookup after a failed bootstrap attempt
     ensuredTenantResponses: [{ data: null, error: createPostgrestError("bootstrap still warming") }],
   });
 
-  const tenantId = await resolveTenantId(supabase, dependencies);
+  const tenantId = await resolveTenantId(supabase, {
+    ...dependencies,
+    missingMembershipBehavior: "bootstrap",
+  });
 
   assert.equal(tenantId, "tenant-retry");
   assert.equal(stats.membershipCalls, 2);
@@ -235,6 +352,7 @@ test("resolveTenantId retries membership lookup after a failed bootstrap attempt
 
 test("resolveTenantId returns null instead of throwing when the user is no longer authenticated", async () => {
   const { supabase, dependencies, stats } = createSupabaseDouble({
+    authenticatedUserId: null,
     membershipResponses: [
       { memberships: [], error: createPostgrestError("membership lookup failed") },
       { memberships: [], error: createPostgrestError("membership retry failed") },
@@ -246,8 +364,8 @@ test("resolveTenantId returns null instead of throwing when the user is no longe
   const tenantId = await resolveTenantId(supabase, dependencies);
 
   assert.equal(tenantId, null);
-  assert.equal(stats.membershipCalls, 2);
-  assert.equal(stats.ensuredTenantCalls, 1);
+  assert.equal(stats.membershipCalls, 0);
+  assert.equal(stats.ensuredTenantCalls, 0);
   assert.equal(stats.getUserCalls, 1);
 });
 

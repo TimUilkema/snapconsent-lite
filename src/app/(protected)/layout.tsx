@@ -35,6 +35,10 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
     redirect("/login");
   }
 
+  if (!user.email_confirmed_at) {
+    redirect("/create-account?confirmation=1");
+  }
+
   let showMembers = false;
   let showMediaLibrary = false;
   let showProfiles = false;
@@ -44,7 +48,7 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
   let memberships = [] as Awaited<ReturnType<typeof listCurrentUserTenantMemberships>>;
 
   try {
-    const tenantId = await ensureTenantId(supabase);
+    const tenantId = await ensureTenantId(supabase, { authenticatedUserId: user.id });
     const [organizationUserAccess, mediaLibraryAccess, profileAccess, templateAccess] = await Promise.all([
       resolveOrganizationUserAccess({
         supabase,
@@ -59,7 +63,7 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
       resolveProfilesAccess(supabase, tenantId, user.id),
       resolveTemplateManagementAccess(supabase, tenantId, user.id),
     ]);
-    memberships = await listCurrentUserTenantMemberships(supabase);
+    memberships = await listCurrentUserTenantMemberships(supabase, user.id);
     activeTenantId = tenantId;
     showMembers = hasAnyOrganizationUserAccess(organizationUserAccess);
     showMediaLibrary = mediaLibraryAccess.canAccess;
@@ -77,6 +81,10 @@ export default async function ProtectedLayout({ children }: ProtectedLayoutProps
         if (inviteToken) {
           redirect(buildTenantMembershipInvitePath(inviteToken));
         }
+      }
+
+      if (error.code === "organization_setup_required") {
+        redirect("/organization/setup");
       }
     }
 

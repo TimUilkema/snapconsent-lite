@@ -6,12 +6,12 @@
     }
   },
   "layout": {
-    "workspaceSetupIssueTitle": "Workspace setup issue",
-    "workspaceSetupIssueBody": "Unable to set up your workspace membership. Sign out and sign in again, then retry.",
+    "workspaceSetupIssueTitle": "Organization setup issue",
+    "workspaceSetupIssueBody": "Unable to set up your organization membership. Sign out and sign in again, then retry.",
     "workspaceSetupIssueSupport": "If it keeps failing, contact support with your account email and request tenant bootstrap.",
     "backToLogin": "Back to login",
     "appName": "SnapConsent",
-    "workspace": "Workspace",
+    "workspace": "Organization",
     "switchWorkspace": "Switch",
     "signedIn": "Signed in",
     "signOut": "Sign out"
@@ -30,6 +30,7 @@
     "subtitle": "Consent collection, project invites, and photo linking for teams that need a clear workflow instead of a patchwork of folders and links.",
     "openAppTitle": "Open the app",
     "openAppBody": "Sign in to manage projects, invites, assets, and linked consents.",
+    "createAccount": "Create account",
     "signIn": "Sign in",
     "openDashboard": "Open dashboard",
     "currentScopeTitle": "Current scope",
@@ -41,6 +42,11 @@
     "emailLabel": "Email",
     "passwordLabel": "Password",
     "submit": "Sign in",
+    "confirmed": "Your email is confirmed. Sign in to continue.",
+    "confirmationRequired": "Check your email to confirm your account before signing in.",
+    "signedInUnconfirmed": "This account still needs email confirmation. Check your inbox, then sign in again.",
+    "createAccount": "Create account",
+    "signOut": "Sign out",
     "backToHome": "Back to home",
     "errors": {
       "invalidCredentials": "Invalid email or password.",
@@ -51,9 +57,45 @@
       "fallback": "Unable to sign in."
     }
   },
+  "createAccount": {
+    "title": "Create account",
+    "subtitle": "Create your SnapConsent account. You will confirm your email before entering the app.",
+    "emailLabel": "Email",
+    "passwordLabel": "Password",
+    "submit": "Create account",
+    "checkEmailTitle": "Check your email",
+    "checkEmailBody": "We sent a SnapConsent confirmation link. Confirm your email, then sign in to continue.",
+    "checkEmailSignedInBody": "This account still needs email confirmation. Check your inbox, then sign out and sign in again after confirming.",
+    "backToLogin": "Back to sign in",
+    "signOut": "Sign out",
+    "errors": {
+      "invalidInput": "Enter a valid email address and password.",
+      "accountExists": "An account already exists for this email address. Sign in instead.",
+      "weakPassword": "Choose a stronger password.",
+      "signUpFailed": "Unable to create your account right now.",
+      "fallback": "Unable to create your account."
+    }
+  },
+  "organizationSetup": {
+    "title": "Set up your organization",
+    "helper": "This is where your projects, consent records, and media will live. You can use SnapConsent by yourself or invite others later.",
+    "nameLabel": "Organization name",
+    "create": "Create organization",
+    "continueDefault": "Continue with default organization",
+    "signedInFallback": "Signed in",
+    "signOut": "Sign out",
+    "backToHome": "Back to home",
+    "errors": {
+      "missingName": "Enter an organization name or continue with the default organization.",
+      "invalidName": "Organization name must be between 2 and 120 characters.",
+      "unauthenticated": "Sign in before setting up your organization.",
+      "setupFailed": "Unable to set up your organization right now.",
+      "fallback": "Unable to set up your organization."
+    }
+  },
   "tenantMembershipInvite": {
     "title": "Organization invitation",
-    "subtitle": "Sign in with the invited email address to join this workspace.",
+    "subtitle": "Use the invited email address to join this organization.",
     "labels": {
       "organization": "Organization",
       "role": "Role",
@@ -91,9 +133,11 @@
     "wrongEmailBody": "This invite was sent to {invitedEmail}. Sign out and use that email address to continue.",
     "signInTitle": "Sign in",
     "signInBody": "Use the invited email address if you already have an account.",
+    "signInExistingBody": "Sign in with this email to accept the invite.",
     "signInSubmit": "Sign in",
     "signUpTitle": "Create account",
     "signUpBody": "Create a new account with the invited email address.",
+    "signUpNewBody": "Create an account with this email to accept the invite.",
     "signUpSubmit": "Create account",
     "accept": "Join organization",
     "signOut": "Sign out",
@@ -103,7 +147,7 @@
   },
   "members": {
     "title": "Organization users",
-    "subtitle": "Invite people, adjust organization roles, and manage pending organization invites.",
+    "subtitle": "Invite users and manage their main organization role.",
     "readOnly": "Only workspace owners and admins can manage organization members.",
     "backToProjects": "Back to projects",
     "delegated": {
@@ -147,6 +191,20 @@
       "subtitle": "Fixed roles map to these current capabilities.",
       "capabilitiesColumn": "Capabilities",
       "ownerProtected": "Owners are read-only, non-inviteable, and non-removable in this slice."
+    },
+    "advancedRoleSettings": {
+      "show": "Show advanced role settings",
+      "hide": "Hide advanced role settings",
+      "title": "Advanced role settings",
+      "description": "Manage custom roles, review access, and access details. These settings are available to owners and admins only."
+    },
+    "accessSummary": {
+      "column": "Access summary",
+      "none": "No additional access",
+      "customRoleCount": "Additional access: {count, plural, one {# role} other {# roles}}",
+      "reviewAllProjects": "Review access: all projects",
+      "reviewProjectCount": "Review access: {count, plural, one {# project} other {# projects}}",
+      "reviewNotGranted": "Review access: not granted"
     },
     "capabilityGroups": {
       "organizationUsers": "Organization users",
@@ -196,7 +254,7 @@
     },
     "membersTable": {
       "title": "Current members",
-      "subtitle": "Owners are visible here but stay protected from role changes and removal.",
+      "subtitle": "The main role controls baseline organization access. Owner rows stay protected.",
       "removalExplanation": "Removing a user only removes access to this organization. The auth account is not deleted, and the user may still belong to other organizations.",
       "columns": {
         "email": "Email",
@@ -372,9 +430,9 @@
     }
   },
   "activeTenant": {
-    "title": "Choose a workspace",
-    "subtitle": "This account belongs to more than one organization. Pick the workspace you want to use right now.",
-    "choose": "Open workspace",
+    "title": "Choose an organization",
+    "subtitle": "This account belongs to more than one organization. Pick the organization you want to use right now.",
+    "choose": "Open organization",
     "roleLabel": "Role: {role}",
     "signedInFallback": "Signed in",
     "signOut": "Sign out",
@@ -386,7 +444,7 @@
       "photographer": "Photographer"
     },
     "errors": {
-      "invalidSelection": "Select a workspace you currently belong to."
+      "invalidSelection": "Select an organization you currently belong to."
     }
   },
   "dashboard": {
@@ -1090,9 +1148,9 @@
         "manual": "Manual"
       },
       "downloadConfirm": {
-        "blockedOnly": "Blocked faces are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?",
-        "restrictedOnly": "Revoked owners or non-granted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?",
-        "blockedRestricted": "Blocked faces and restricted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still download the original. Continue?"
+        "blockedOnly": "Blocked faces are present in this release snapshot.\n\nAuthorized Media Library users can still open or download the original. Continue?",
+        "restrictedOnly": "Revoked owners or non-granted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still open or download the original. Continue?",
+        "blockedRestricted": "Blocked faces and restricted usage permissions are present in this release snapshot.\n\nAuthorized Media Library users can still open or download the original. Continue?"
       }
     },
     "list": {
@@ -1108,13 +1166,51 @@
         "emptyFolders": "No folders yet.",
         "createFolder": "Create folder",
         "renameFolder": "Rename",
+        "renameFolderAriaLabel": "Rename {name}",
         "archiveFolder": "Archive",
+        "archiveFolderAriaLabel": "Archive {name}",
         "archiveConfirm": "Archive folder \"{name}\"?",
-        "currentFolder": "Current folder"
+        "archiveConfirmWithChildren": "Archive folder \"{name}\"? Its child folders and contained assets will be hidden from the active tree, not deleted.",
+        "currentFolder": "Current folder",
+        "currentPath": "Current folder path",
+        "moveFolderAriaLabel": "Move {name}",
+        "rootDropTarget": "Drop here to move folder to root"
+      },
+      "breadcrumb": {
+        "root": "All assets"
+      },
+      "drag": {
+        "assetHandle": "Drag {name} to a folder",
+        "selectedAssetsHandle": "Drag selected assets to a folder",
+        "folderHandle": "Drag folder {name}",
+        "assetOverlay": "Moving {name}",
+        "selectedAssetsOverlay": "Moving {count, plural, one {# selected asset} other {# selected assets}}",
+        "folderOverlay": "Moving folder {name}"
+      },
+      "drop": {
+        "moveAssetsToFolder": "Move assets to {name}",
+        "moveFolderToFolder": "Move folder to {name}",
+        "moveFolderToRoot": "Move folder to root",
+        "invalidTarget": "Invalid move target"
+      },
+      "view": {
+        "grid": "Grid",
+        "list": "List",
+        "gridAriaLabel": "Grid view",
+        "listAriaLabel": "List view"
+      },
+      "pagination": {
+        "previous": "Previous",
+        "next": "Next",
+        "pageStatus": "Page {page} of {totalPages} · {totalCount, plural, one {# asset} other {# assets}}",
+        "pageSizeLabel": "Assets per page",
+        "pageSizeValue": "{count} per page"
       },
       "selection": {
         "count": "{count, plural, one {# asset selected} other {# assets selected}}",
         "clear": "Clear",
+        "selectAllOnPage": "Select all on page",
+        "clearSelection": "Clear selection",
         "addToFolder": "Add to folder",
         "moveToFolder": "Move to folder",
         "removeFromFolder": "Remove from folder",
@@ -1123,8 +1219,18 @@
       "folderForm": {
         "nameLabel": "New folder",
         "namePlaceholder": "Folder name",
+        "createPlaceholder": "New folder",
+        "createAriaLabel": "Folder name",
+        "createSubmitAriaLabel": "Create folder",
+        "createSubmitting": "Creating",
+        "renameNameAriaLabel": "Folder name",
         "createSubmit": "Create",
         "renameSubmit": "Save",
+        "moveFolder": "Move folder",
+        "parentFolderLabel": "Parent folder",
+        "rootOption": "Root",
+        "moveSubmit": "Move",
+        "moveCancel": "Cancel",
         "cancel": "Cancel"
       },
       "folderMessages": {
@@ -1133,12 +1239,21 @@
         "archived": "Folder archived.",
         "assigned": "Assets added to folder.",
         "moved": "Assets moved.",
-        "removed": "Assets removed from folder."
+        "removed": "Assets removed from folder.",
+        "folderMoved": "Folder moved.",
+        "folderMoveNoop": "Folder is already in that location.",
+        "assetsMoveNoop": "Assets are already in that folder."
       },
       "folderErrors": {
         "nameRequired": "Folder name is required.",
+        "renameRequired": "Folder name is required.",
         "nameConflict": "An active folder already uses that name.",
         "folderArchived": "Archived folders cannot be changed.",
+        "targetFolderArchived": "That target folder is archived.",
+        "moveIntoSelf": "A folder cannot be moved into itself.",
+        "moveIntoDescendant": "A folder cannot be moved into one of its child folders.",
+        "moveConflict": "Unable to move the folder.",
+        "targetNotFound": "Target folder not found.",
         "generic": "Unable to update the Media Library folder."
       },
       "assetTypes": {
@@ -1153,13 +1268,18 @@
       },
       "actions": {
         "open": "Open",
+        "openDetail": "Open",
+        "openOriginal": "Open original",
         "download": "Download original"
       }
     },
     "detail": {
       "backToList": "Back to Media Library",
       "previewUnavailable": "Preview unavailable for this released asset.",
+      "openOriginal": "Open original",
       "download": "Download original",
+      "faceLabel": "Face {face}",
+      "faceBadgeLabel": "F{face}",
       "releaseVersionValue": "Release v{version}",
       "linkedPeopleCount": "{count, plural, one {# linked person} other {# linked people}}",
       "unknownOwner": "Unknown owner",
@@ -1234,8 +1354,16 @@
       "usagePermissions": {
         "restricted": "Restricted",
         "selected": "Selected",
-        "selectionHelp": "Select a linked owner to focus their face overlay and review the released usage permissions captured in this snapshot.",
-        "videoHelp": "Video assets stay read-only in the Media Library. Use the released owner summaries below to review usage permissions and any whole-asset or fallback context."
+        "scopeColumn": "Scope",
+        "assetLinkColumn": "Asset link",
+        "finalColumn": "Result",
+        "finalGranted": "Usable",
+        "finalBlocked": "Blocked",
+        "blockedNoConsent": "Blocked",
+        "notAvailable": "Not available",
+        "noLinkedConsent": "No linked consent",
+        "selectionHelp": "Select a face to focus its overlay and review the released usage permissions captured in this snapshot.",
+        "videoHelp": "Video assets stay read-only in the Media Library. Use the released permission table below to review usage permissions and any whole-asset or fallback context."
       },
       "ownerStrip": {
         "singleFace": "Face {face}",

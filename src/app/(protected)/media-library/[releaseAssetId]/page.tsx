@@ -27,6 +27,9 @@ type RouteProps = {
   }>;
   searchParams: Promise<{
     folderId?: string;
+    page?: string;
+    limit?: string;
+    view?: string;
   }>;
 };
 
@@ -43,6 +46,53 @@ function getDownloadConfirmationMessage(
   }
 
   return t("restrictedOnly");
+}
+
+function isGenericDefaultWorkspaceName(name: string) {
+  return name.trim().toLocaleLowerCase() === "default workspace";
+}
+
+function shouldShowWorkspaceMetadata(detail: {
+  workspaceName: string;
+  row: {
+    workspace_snapshot: {
+      workspace: {
+        workspaceKind: "default" | "photographer";
+      };
+    };
+  };
+  releaseWorkspaceCount: number;
+  hasPhotographerWorkspaces: boolean;
+}) {
+  if (isGenericDefaultWorkspaceName(detail.workspaceName)) {
+    return false;
+  }
+
+  if (detail.row.workspace_snapshot.workspace.workspaceKind === "photographer") {
+    return true;
+  }
+
+  return detail.releaseWorkspaceCount > 1 || detail.hasPhotographerWorkspaces;
+}
+
+function OpenOriginalIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
 }
 
 export default async function MediaLibraryDetailPage({ params, searchParams }: RouteProps) {
@@ -64,7 +114,8 @@ export default async function MediaLibraryDetailPage({ params, searchParams }: R
   }
 
   const { releaseAssetId } = await params;
-  const requestedFolderId = (await searchParams).folderId?.trim() ?? "";
+  const resolvedSearchParams = await searchParams;
+  const requestedFolderId = resolvedSearchParams.folderId?.trim() ?? "";
 
   let detail;
   try {
@@ -113,6 +164,7 @@ export default async function MediaLibraryDetailPage({ params, searchParams }: R
   const usageOwners = buildMediaLibraryUsagePermissionSummaries(detail.row);
   const overlaySummary =
     detail.row.asset_type === "photo" ? buildReleasePhotoOverlaySummary(detail.row) : null;
+  const showWorkspaceMetadata = shouldShowWorkspaceMetadata(detail);
   let backHref = "/media-library";
   if (requestedFolderId) {
     try {
@@ -122,7 +174,18 @@ export default async function MediaLibraryDetailPage({ params, searchParams }: R
         userId: user.id,
         folderId: requestedFolderId,
       });
-      backHref = `/media-library?folderId=${requestedFolderId}`;
+      const backParams = new URLSearchParams();
+      backParams.set("folderId", requestedFolderId);
+      if (resolvedSearchParams.page?.trim()) {
+        backParams.set("page", resolvedSearchParams.page.trim());
+      }
+      if (resolvedSearchParams.limit?.trim()) {
+        backParams.set("limit", resolvedSearchParams.limit.trim());
+      }
+      if (resolvedSearchParams.view?.trim()) {
+        backParams.set("view", resolvedSearchParams.view.trim());
+      }
+      backHref = `/media-library?${backParams.toString()}`;
     } catch {
       backHref = "/media-library";
     }
@@ -154,10 +217,12 @@ export default async function MediaLibraryDetailPage({ params, searchParams }: R
               <dt className="font-medium text-zinc-800">{t("labels.project")}</dt>
               <dd>{detail.projectName}</dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="font-medium text-zinc-800">{t("labels.workspace")}</dt>
-              <dd>{detail.workspaceName}</dd>
-            </div>
+            {showWorkspaceMetadata ? (
+              <div className="flex justify-between gap-4">
+                <dt className="font-medium text-zinc-800">{t("labels.workspace")}</dt>
+                <dd>{detail.workspaceName}</dd>
+              </div>
+            ) : null}
             <div className="flex justify-between gap-4">
               <dt className="font-medium text-zinc-800">{t("labels.releaseVersion")}</dt>
               <dd>{t("releaseVersionValue", { version: detail.releaseVersion })}</dd>
@@ -175,12 +240,23 @@ export default async function MediaLibraryDetailPage({ params, searchParams }: R
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <ReleaseSafetyBadges summary={safetySummary} />
             <MediaLibraryDownloadButton
-              href={`/api/media-library/assets/${detail.row.id}/download`}
-              label={t("download")}
-              className="inline-flex rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+              href={`/api/media-library/assets/${detail.row.id}/open`}
+              label={t("openOriginal")}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-500 focus:ring-offset-1"
               requiresConfirmation={safetySummary.requiresDownloadConfirmation}
               confirmationMessage={getDownloadConfirmationMessage(safetySummary, tConfirm)}
-            />
+            >
+              <OpenOriginalIcon />
+            </MediaLibraryDownloadButton>
+            <MediaLibraryDownloadButton
+              href={`/api/media-library/assets/${detail.row.id}/download`}
+              label={t("download")}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-500 focus:ring-offset-1"
+              requiresConfirmation={safetySummary.requiresDownloadConfirmation}
+              confirmationMessage={getDownloadConfirmationMessage(safetySummary, tConfirm)}
+            >
+              <DownloadIcon />
+            </MediaLibraryDownloadButton>
           </div>
         </div>
       </section>

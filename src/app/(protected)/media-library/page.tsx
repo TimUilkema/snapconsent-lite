@@ -30,7 +30,7 @@ async function signPreviewUrl(input: {
       tenantId: input.tenantId,
       projectId: input.projectId,
       use: "thumbnail",
-      fallback: input.assetType === "photo" ? "original" : "none",
+      fallback: input.assetType === "photo" ? "transform" : "none",
     },
   );
 
@@ -55,8 +55,26 @@ function getDownloadConfirmationMessage(
 type PageProps = {
   searchParams: Promise<{
     folderId?: string;
+    page?: string;
+    limit?: string;
+    view?: string;
   }>;
 };
+
+type MediaLibraryViewMode = "grid" | "list";
+
+function parsePositiveInteger(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function parseViewMode(value: string | undefined): MediaLibraryViewMode {
+  return value === "list" ? "list" : "grid";
+}
 
 export default async function MediaLibraryPage({ searchParams }: PageProps) {
   const locale = await getLocale();
@@ -78,12 +96,14 @@ export default async function MediaLibraryPage({ searchParams }: PageProps) {
 
   let pageData;
   try {
-    const { folderId } = await searchParams;
+    const { folderId, page, limit } = await searchParams;
     pageData = await getMediaLibraryPageData({
       supabase,
       tenantId,
       userId: user.id,
       folderId: typeof folderId === "string" ? folderId : null,
+      page: parsePositiveInteger(page),
+      limit: parsePositiveInteger(limit),
     });
   } catch (error) {
     if (error instanceof HttpError && (error.status === 403 || error.status === 404)) {
@@ -93,6 +113,8 @@ export default async function MediaLibraryPage({ searchParams }: PageProps) {
     throw error;
   }
 
+  const { view } = await searchParams;
+  const viewMode = parseViewMode(view);
   const previewUrlByAssetId = new Map(
     await Promise.all(
       pageData.items.map(async (item) => [
@@ -121,9 +143,26 @@ export default async function MediaLibraryPage({ searchParams }: PageProps) {
         currentFolderId={pageData.selectedFolderId}
         currentFolderName={pageData.selectedFolder?.name ?? null}
         folders={pageData.folders}
+        folderOptions={pageData.folderOptions}
+        selectedFolderPath={pageData.selectedFolderPath}
+        pagination={pageData.pagination}
+        viewMode={viewMode}
         items={pageData.items.map((item) => {
           const safetySummary = deriveMediaLibraryReleaseSafety(item.row);
-          const folderContext = pageData.selectedFolderId ? `?folderId=${pageData.selectedFolderId}` : "";
+          const detailParams = new URLSearchParams();
+          if (pageData.selectedFolderId) {
+            detailParams.set("folderId", pageData.selectedFolderId);
+          }
+          if (pageData.pagination.page > 1) {
+            detailParams.set("page", String(pageData.pagination.page));
+          }
+          if (pageData.pagination.limit !== 24) {
+            detailParams.set("limit", String(pageData.pagination.limit));
+          }
+          if (viewMode !== "grid") {
+            detailParams.set("view", viewMode);
+          }
+          const folderContext = detailParams.size > 0 ? `?${detailParams.toString()}` : "";
 
           return {
             id: item.row.id,
@@ -133,10 +172,10 @@ export default async function MediaLibraryPage({ searchParams }: PageProps) {
             downloadHref: `/api/media-library/assets/${item.row.id}/download`,
             previewUrl: previewUrlByAssetId.get(item.row.id) ?? null,
             originalFilename: item.row.original_filename,
+            assetType: item.row.asset_type,
             assetTypeLabel: t(`assetTypes.${item.row.asset_type}`),
             projectName: item.projectName,
-            workspaceName: item.workspaceName,
-            releaseVersionLabel: t("releaseVersionValue", { version: item.releaseVersion }),
+            releaseVersion: item.releaseVersion,
             linkedPeopleLabel: t("linkedPeopleCount", {
               count: item.row.consent_snapshot.linkedPeopleCount,
             }),

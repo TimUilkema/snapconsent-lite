@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 export function shouldContinueMediaLibraryDownload(input: {
   requiresConfirmation: boolean;
@@ -20,17 +21,21 @@ export function MediaLibraryDownloadButton({
   className,
   requiresConfirmation,
   confirmationMessage,
+  children,
 }: {
   href: string;
   label: string;
   className: string;
   requiresConfirmation: boolean;
   confirmationMessage: string;
+  children?: ReactNode;
 }) {
   return (
     <Link
       href={href}
       className={className}
+      aria-label={children ? label : undefined}
+      title={label}
       onClick={(event) => {
         if (
           !shouldContinueMediaLibraryDownload({
@@ -42,7 +47,7 @@ export function MediaLibraryDownloadButton({
         }
       }}
     >
-      {label}
+      {children ?? label}
     </Link>
   );
 }

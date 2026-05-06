@@ -13,7 +13,6 @@ import type {
   OutboundEmailTransport,
 } from "@/lib/email/outbound/types";
 import { HttpError } from "@/lib/http/errors";
-import { normalizePostgrestError } from "@/lib/http/postgrest-error";
 
 type EnqueueResultRow = {
   job_id: string;
@@ -95,20 +94,12 @@ function toSafeErrorMessage(error: unknown) {
     return error.message;
   }
 
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Unknown outbound email error.";
+  return "Outbound email dispatch failed. Check server logs and SMTP configuration.";
 }
 
 function toSafeErrorCode(error: unknown) {
   if (error instanceof HttpError) {
     return error.code;
-  }
-
-  if (error instanceof Error) {
-    return normalizePostgrestError(error, "outbound_email_dispatch_failed").code;
   }
 
   return "outbound_email_dispatch_failed";

@@ -10,19 +10,22 @@ type ReleasedPhotoPreviewProps = {
   src: string;
   alt: string;
   faces: ReleasePhotoFaceContext[];
-  selectedOwnerId?: string | null;
-  onSelectOwnerId?: (ownerId: string | null) => void;
+  selectedFaceId?: string | null;
+  hoveredFaceId?: string | null;
+  onSelectFaceId?: (faceId: string | null) => void;
+  onHoverFaceId?: (faceId: string | null) => void;
 };
 
 type ReleasedPreviewOverlay = PreviewFaceOverlay & {
   ownerId: string | null;
+  assetFaceId: string;
 };
 
 function buildPreviewFaceOverlays(
   faces: ReleasePhotoFaceContext[],
   labels: {
-    blockedFaceLabel: (face: number) => string;
-    detectedFaceLabel: (face: number) => string;
+    faceLabel: (face: number) => string;
+    faceBadgeLabel: (face: number) => string;
     stateBlocked: string;
     stateDetected: string;
     stateManual: string;
@@ -33,12 +36,7 @@ function buildPreviewFaceOverlays(
 ) {
   return faces.map((face) => {
     const owner = face.linkedOwner;
-    const label =
-      owner?.displayName
-      ?? owner?.email
-      ?? (face.visualState === "blocked"
-        ? labels.blockedFaceLabel(face.faceRank + 1)
-        : labels.detectedFaceLabel(face.faceRank + 1));
+    const label = labels.faceLabel(face.faceRank + 1);
     const linkSourceLabel =
       face.visualState === "blocked"
         ? labels.stateBlocked
@@ -52,8 +50,9 @@ function buildPreviewFaceOverlays(
 
     return {
       id: `release-face-${face.assetFaceId}`,
-      href: owner ? `#usage-owner-${owner.projectFaceAssigneeId}` : `#release-face-${face.assetFaceId}`,
+      href: `#release-face-${face.assetFaceId}`,
       label,
+      badgeLabel: labels.faceBadgeLabel(face.faceRank + 1),
       faceBoxNormalized: face.faceBoxNormalized,
       linkSource: face.exactFaceLink?.linkSource ?? null,
       linkSourceLabel,
@@ -63,8 +62,9 @@ function buildPreviewFaceOverlays(
           ? labels.permissionsRestricted
           : owner?.currentStatus === "revoked"
             ? labels.permissionsRestricted
-            : linkSourceLabel,
+          : linkSourceLabel,
       ownerId: owner?.projectFaceAssigneeId ?? null,
+      assetFaceId: face.assetFaceId,
     } satisfies ReleasedPreviewOverlay;
   });
 }
@@ -73,16 +73,18 @@ export function ReleasedPhotoPreview({
   src,
   alt,
   faces,
-  selectedOwnerId = null,
-  onSelectOwnerId,
+  selectedFaceId = null,
+  hoveredFaceId = null,
+  onSelectFaceId,
+  onHoverFaceId,
 }: ReleasedPhotoPreviewProps) {
   const t = useTranslations("mediaLibrary.detail");
-  const [hoveredOverlayId, setHoveredOverlayId] = useState<string | null>(null);
+  const [internalHoveredFaceId, setInternalHoveredFaceId] = useState<string | null>(null);
   const previewFaceOverlays = useMemo(
     () =>
       buildPreviewFaceOverlays(faces, {
-        blockedFaceLabel: (face) => t("overlay.blockedFaceLabel", { face }),
-        detectedFaceLabel: (face) => t("overlay.detectedFaceLabel", { face }),
+        faceLabel: (face) => t("faceLabel", { face }),
+        faceBadgeLabel: (face) => t("faceBadgeLabel", { face }),
         stateBlocked: t("overlay.stateBlocked"),
         stateDetected: t("overlay.stateDetected"),
         stateManual: t("overlay.stateManual"),
@@ -92,33 +94,48 @@ export function ReleasedPhotoPreview({
       }),
     [faces, t],
   );
+  const overlayIdByFaceId = useMemo(
+    () => new Map(previewFaceOverlays.map((overlay) => [overlay.assetFaceId, overlay.id] as const)),
+    [previewFaceOverlays],
+  );
+  const faceIdByOverlayId = useMemo(
+    () => new Map(previewFaceOverlays.map((overlay) => [overlay.id, overlay.assetFaceId] as const)),
+    [previewFaceOverlays],
+  );
   const selectedInlinePreviewOverlayIds = useMemo(
     () =>
-      selectedOwnerId
-        ? previewFaceOverlays
-            .filter((overlay) => overlay.ownerId === selectedOwnerId)
-            .map((overlay) => overlay.id)
+      selectedFaceId
+        ? [overlayIdByFaceId.get(selectedFaceId)].filter((id): id is string => Boolean(id))
         : [],
-    [previewFaceOverlays, selectedOwnerId],
+    [overlayIdByFaceId, selectedFaceId],
   );
+  const focusedOverlayId =
+    hoveredFaceId
+      ? overlayIdByFaceId.get(hoveredFaceId) ?? null
+      : internalHoveredFaceId
+        ? overlayIdByFaceId.get(internalHoveredFaceId) ?? null
+        : null;
 
   return (
     <PreviewableImage
       src={src}
       previewSrc={src}
       alt={alt}
-      className="rounded-[22px] border border-zinc-200/90 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.88),_rgba(244,244,245,0.96)_42%,_rgba(228,228,231,1)_100%)] p-3"
-      imageClassName="h-[clamp(22rem,58vh,44rem)] w-full rounded-[18px] object-contain"
+      className="rounded-xl border border-zinc-200 bg-zinc-50 p-3"
+      imageClassName="h-[clamp(22rem,58vh,44rem)] w-full rounded-lg object-contain"
       previewImageClassName="h-full w-full object-contain"
       previewFaceOverlays={previewFaceOverlays}
       showInlineFaceOverlays
       selectedInlinePreviewOverlayIds={selectedInlinePreviewOverlayIds}
-      hoveredInlinePreviewOverlayId={hoveredOverlayId}
-      onHoveredInlinePreviewOverlayIdChange={setHoveredOverlayId}
+      hoveredInlinePreviewOverlayId={focusedOverlayId}
+      onHoveredInlinePreviewOverlayIdChange={(overlayId) => {
+        const nextFaceId = overlayId ? faceIdByOverlayId.get(overlayId) ?? null : null;
+        setInternalHoveredFaceId(nextFaceId);
+        onHoverFaceId?.(nextFaceId);
+      }}
       onInlinePreviewOverlayActivate={(overlay, event) => {
         event.preventDefault();
-        const ownerId = (overlay as ReleasedPreviewOverlay).ownerId;
-        onSelectOwnerId?.(ownerId);
+        onSelectFaceId?.((overlay as ReleasedPreviewOverlay).assetFaceId);
       }}
     />
   );

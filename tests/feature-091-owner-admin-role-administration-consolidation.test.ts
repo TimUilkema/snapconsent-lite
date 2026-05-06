@@ -778,6 +778,7 @@ test("feature 091 Members UI copy distinguishes permission bundles from role adm
         assignment,
         assignableRole,
       }),
+      showAdvancedRoleSettings: true,
       statusMessage: null,
       isPending: false,
       inviteEmail: "",

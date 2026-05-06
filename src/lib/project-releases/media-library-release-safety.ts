@@ -120,7 +120,6 @@ export function deriveMediaLibraryReleaseSafety(
     primaryState: hasBlockedFaces ? "blocked" : hasRestrictedState ? "restricted" : "clear",
     badges: [
       ...(hasBlockedFaces ? (["blocked"] as const) : []),
-      ...(hasRestrictedState ? (["restricted"] as const) : []),
       ...(hasManualFaces ? (["manual"] as const) : []),
     ],
   };

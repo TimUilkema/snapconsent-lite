@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 
 import { formatDate } from "@/lib/i18n/format";
+import { HttpError } from "@/lib/http/errors";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTenantId } from "@/lib/tenant/resolve-tenant";
 
@@ -25,7 +26,16 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const tenantId = await resolveTenantId(supabase);
+  let tenantId: string | null = null;
+  try {
+    tenantId = await resolveTenantId(supabase, { authenticatedUserId: user.id });
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "organization_setup_required") {
+      redirect("/organization/setup");
+    }
+
+    throw error;
+  }
 
   let recentProjects: ProjectRow[] = [];
   if (tenantId) {

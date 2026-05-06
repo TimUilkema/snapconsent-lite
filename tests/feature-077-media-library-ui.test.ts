@@ -51,21 +51,21 @@ function createSafetySummary(
   };
 }
 
-test("feature 077 list safety badges render blocked, restricted, and manual without hidden badges", () => {
+test("feature 077 list safety badges render blocked and manual without restricted or hidden badges", () => {
   const markup = renderWithMessages(
     createElement(ReleaseSafetyBadges, {
       summary: createSafetySummary({
         hasBlockedFaces: true,
         hasRestrictedState: true,
         hasManualFaces: true,
-        badges: ["blocked", "restricted", "manual"],
+        badges: ["blocked", "manual"],
       }),
     }),
   );
 
   assert.match(markup, /Blocked/);
-  assert.match(markup, /Restricted/);
   assert.match(markup, /Manual/);
+  assert.doesNotMatch(markup, /Restricted/);
   assert.doesNotMatch(markup, /Hidden/);
 });
 
@@ -95,7 +95,7 @@ test("feature 077 detail banner renders only for blocked or restricted state", (
   assert.equal(hiddenOnlyMarkup, "");
 });
 
-test("feature 077 usage permissions render effective scope state only with selectable owner focus", () => {
+test("feature 077 usage permissions render neutral face columns and final scope result", () => {
   const owners: MediaLibraryUsagePermissionOwnerSummary[] = [
     {
       projectFaceAssigneeId: "assignee-1",
@@ -146,21 +146,43 @@ test("feature 077 usage permissions render effective scope state only with selec
   const markup = renderWithMessages(
     createElement(ReleaseUsagePermissions, {
       owners,
-      selectedOwnerId: "assignee-1",
-      onSelectOwnerId: () => {},
+      faces: [
+        {
+          assetFaceId: "face-3",
+          faceRank: 2,
+          faceSource: "detector",
+          faceBoxNormalized: {
+            x_min: 0.2,
+            y_min: 0.15,
+            x_max: 0.42,
+            y_max: 0.54,
+          },
+          linkedOwner: owners[0] ?? null,
+          exactFaceLink: owners[0]?.exactFaceLinks[0] ?? null,
+          isHidden: false,
+          isBlocked: false,
+          isSuppressed: false,
+          isManual: false,
+          visualState: "linked_manual",
+          showInOverlay: true,
+          overlayTone: "manual",
+        },
+      ],
+      selectedColumnId: "face:face-3",
+      onSelectColumnId: () => {},
     }),
   );
 
-  assert.match(markup, /Jordan Jones/);
-  assert.match(markup, /Face 3 \/ Manual link/);
-  assert.match(markup, /Whole-asset link/);
-  assert.match(markup, /Fallback link/);
+  assert.match(markup, /Face 3/);
+  assert.match(markup, /Manual link/);
   assert.match(markup, /Social/);
   assert.match(markup, /Granted/);
+  assert.match(markup, /Usable/);
   assert.match(markup, /Print/);
   assert.match(markup, /Not granted/);
-  assert.match(markup, /Restricted/);
-  assert.match(markup, /Selected/);
+  assert.match(markup, /Blocked/);
+  assert.doesNotMatch(markup, /Jordan Jones/);
+  assert.doesNotMatch(markup, /jordan@example.com/);
   assert.doesNotMatch(markup, /Signed scopes/);
 });
 
@@ -262,10 +284,12 @@ test("feature 077 released photo review surface uses linked-owner focus instead 
     }),
   );
 
-  assert.match(markup, /Jordan Jones/);
   assert.match(markup, /Face 3/);
+  assert.match(markup, /Manual link/);
   assert.match(markup, /Usage permissions/);
   assert.match(markup, /hidden face is omitted from the released preview overlay/i);
+  assert.doesNotMatch(markup, /Jordan Jones/);
+  assert.doesNotMatch(markup, /jordan@example.com/);
   assert.doesNotMatch(markup, /Release review context/);
   assert.doesNotMatch(markup, /Snapshot notes/);
   assert.doesNotMatch(markup, /Released asset preview/);

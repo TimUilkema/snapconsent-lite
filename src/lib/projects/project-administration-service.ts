@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { loadAuthUserEmailMap } from "@/lib/supabase/auth-user-email-map";
 import { roleHasCapability, type MembershipRole } from "@/lib/tenant/role-capabilities";
 import {
   userHasAnyTenantCustomRoleCapabilities,
@@ -275,21 +276,9 @@ export async function listAssignablePhotographersForProjectAdministration(input:
     return [];
   }
 
-  const { data: authUsers, error: authUsersError } = await admin.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
-  });
-
-  if (authUsersError) {
-    throw new HttpError(500, "photographer_lookup_failed", "Unable to load photographers.");
-  }
-
-  const photographerUserIdSet = new Set(photographerUserIds);
-  const emailByUserId = new Map<string, string>();
-  authUsers.users.forEach((authUser) => {
-    if (photographerUserIdSet.has(authUser.id)) {
-      emailByUserId.set(authUser.id, authUser.email?.trim().toLowerCase() ?? "unknown@email");
-    }
+  const emailByUserId = await loadAuthUserEmailMap(admin, photographerUserIds, {
+    errorCode: "photographer_lookup_failed",
+    errorMessage: "Unable to load photographers.",
   });
 
   return photographerUserIds.map((photographerUserId) => ({

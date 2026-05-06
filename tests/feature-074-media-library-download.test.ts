@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { HttpError } from "../src/lib/http/errors";
-import { createMediaLibraryAssetDownloadResponse } from "../src/lib/project-releases/media-library-download";
+import {
+  createMediaLibraryAssetDownloadResponse,
+  createMediaLibraryAssetOpenResponse,
+} from "../src/lib/project-releases/media-library-download";
 
 function createAuthClient(userId: string | null) {
   return {
@@ -16,14 +19,27 @@ function createAuthClient(userId: string | null) {
   };
 }
 
-function createAdminStorageClient(result: { signedUrl?: string | null; error?: { message: string } | null }) {
+function createAdminStorageClient(result: {
+  signedUrl?: string | null;
+  error?: { message: string } | null;
+  expectedDownload?: string | null;
+}) {
   return {
     storage: {
       from: (bucket: string) => ({
-        createSignedUrl: async (path: string, ttlSeconds: number) => {
+        createSignedUrl: async (
+          path: string,
+          ttlSeconds: number,
+          options?: { download?: string | boolean },
+        ) => {
           assert.equal(bucket, "project-assets");
           assert.equal(path, "tenant/t1/project/p1/asset/a1/file.jpg");
           assert.equal(ttlSeconds, 120);
+          if (result.expectedDownload === null) {
+            assert.equal(options, undefined);
+          } else if (result.expectedDownload) {
+            assert.deepEqual(options, { download: result.expectedDownload });
+          }
           return {
             data: result.signedUrl ? { signedUrl: result.signedUrl } : null,
             error: result.error ?? null,
@@ -90,7 +106,10 @@ test("feature 074 media download returns a signed redirect for authorized releas
   const response = await createMediaLibraryAssetDownloadResponse(
     {
       authSupabase: createAuthClient("user-reviewer") as never,
-      adminSupabase: createAdminStorageClient({ signedUrl: "https://example.com/signed-download" }) as never,
+      adminSupabase: createAdminStorageClient({
+        signedUrl: "https://example.com/signed-download",
+        expectedDownload: "file.jpg",
+      }) as never,
       releaseAssetId: "release-asset-1",
     },
     {
@@ -99,6 +118,7 @@ test("feature 074 media download returns a signed redirect for authorized releas
         row: {
           original_storage_bucket: "project-assets",
           original_storage_path: "tenant/t1/project/p1/asset/a1/file.jpg",
+          original_filename: "file.jpg",
         },
       }),
     } as never,
@@ -106,6 +126,32 @@ test("feature 074 media download returns a signed redirect for authorized releas
 
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("location"), "https://example.com/signed-download");
+});
+
+test("feature 101 media open original returns an inline signed redirect for authorized release assets", async () => {
+  const response = await createMediaLibraryAssetOpenResponse(
+    {
+      authSupabase: createAuthClient("user-reviewer") as never,
+      adminSupabase: createAdminStorageClient({
+        signedUrl: "https://example.com/signed-open",
+        expectedDownload: null,
+      }) as never,
+      releaseAssetId: "release-asset-1",
+    },
+    {
+      resolveTenantId: async () => "tenant-1",
+      getReleaseAssetDetail: async () => ({
+        row: {
+          original_storage_bucket: "project-assets",
+          original_storage_path: "tenant/t1/project/p1/asset/a1/file.jpg",
+          original_filename: "file.jpg",
+        },
+      }),
+    } as never,
+  );
+
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), "https://example.com/signed-open");
 });
 
 test("feature 074 media download reports missing source objects explicitly", async () => {
@@ -122,6 +168,7 @@ test("feature 074 media download reports missing source objects explicitly", asy
           row: {
             original_storage_bucket: "project-assets",
             original_storage_path: "tenant/t1/project/p1/asset/a1/file.jpg",
+            original_filename: "file.jpg",
           },
         }),
       } as never,

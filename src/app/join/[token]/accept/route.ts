@@ -49,6 +49,10 @@ export async function POST(request: Request, context: RouteContext) {
     return redirectToInvite(request, token, { error: "signin_required" });
   }
 
+  if (!user.email_confirmed_at) {
+    return redirectToInvite(request, token, { confirmation: "1" });
+  }
+
   try {
     const accepted = await acceptTenantMembershipInvite(supabase, token);
     const response = redirectRelative(request, "/projects");

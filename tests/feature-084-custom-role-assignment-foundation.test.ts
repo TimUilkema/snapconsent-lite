@@ -703,6 +703,7 @@ test("feature 084 Members UI renders assignment labels and active assignment con
         assignment,
         assignableRole,
       }),
+      showAdvancedRoleSettings: true,
       statusMessage: null,
       isPending: false,
       inviteEmail: "",

@@ -5,6 +5,7 @@ import {
   buildMediaLibraryUsagePermissionSummaries,
   deriveMediaLibraryReleaseSafety,
 } from "../src/lib/project-releases/media-library-release-safety";
+import { buildMediaLibraryUsagePermissionTable } from "../src/lib/project-releases/media-library-usage-permission-table";
 import { buildReleasePhotoOverlaySummary } from "../src/lib/project-releases/media-library-release-overlays";
 import type { ProjectReleaseAssetRow } from "../src/lib/project-releases/types";
 
@@ -233,7 +234,41 @@ test("feature 077 release safety treats blocked and restricted as advisory confi
   assert.equal(summary.hasLowLevelReviewContext, true);
   assert.equal(summary.requiresDownloadConfirmation, true);
   assert.equal(summary.primaryState, "blocked");
-  assert.deepEqual(summary.badges, ["blocked", "restricted", "manual"]);
+  assert.deepEqual(summary.badges, ["blocked", "manual"]);
+});
+
+test("feature 077 release safety does not promote non-granted scopes into a list restricted badge", () => {
+  const row = createReleaseAssetRow({
+    scope_snapshot: {
+      owners: [
+        {
+          projectFaceAssigneeId: "assignee-1",
+          identityKind: "project_consent",
+          consentId: "consent-1",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          effectiveScopes: [
+            {
+              templateKey: "usage",
+              scopeKey: "print",
+              label: "Print",
+              status: "not_granted",
+              governingSourceKind: "project_consent",
+            },
+          ],
+          signedScopes: [],
+        },
+      ],
+    },
+  });
+
+  const summary = deriveMediaLibraryReleaseSafety(row);
+
+  assert.equal(summary.hasRestrictedState, true);
+  assert.equal(summary.hasNonGrantedEffectiveScopes, true);
+  assert.equal(summary.requiresDownloadConfirmation, true);
+  assert.equal(summary.primaryState, "restricted");
+  assert.deepEqual(summary.badges, []);
 });
 
 test("feature 077 hidden, suppressed, and manual-only state stays low-level context", () => {
@@ -377,6 +412,144 @@ test("feature 077 usage permissions join exact-face links to linked owners and e
   assert.equal(owners[0]?.exactFaceLinks[0]?.assetFaceId, "face-3");
   assert.equal(owners[0]?.hasWholeAssetLink, true);
   assert.equal(owners[0]?.hasFallbackLink, true);
+});
+
+test("feature 077 usage permission table aggregates released scope state by neutral face column", () => {
+  const row = createReleaseAssetRow({
+    consent_snapshot: {
+      linkedOwners: [
+        {
+          projectFaceAssigneeId: "assignee-1",
+          identityKind: "project_consent",
+          consentId: "consent-1",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          displayName: "Jordan Jones",
+          email: "jordan@example.com",
+          currentStatus: "active",
+          signedAt: "2026-04-24T10:00:00.000Z",
+          consentVersion: "v1",
+          faceMatchOptIn: true,
+        },
+        {
+          projectFaceAssigneeId: "assignee-2",
+          identityKind: "project_consent",
+          consentId: "consent-2",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          displayName: "Riley Revoked",
+          email: "riley@example.com",
+          currentStatus: "revoked",
+          signedAt: "2026-04-24T10:00:00.000Z",
+          consentVersion: "v1",
+          faceMatchOptIn: true,
+        },
+      ],
+      linkedPeopleCount: 2,
+    },
+    link_snapshot: {
+      exactFaceLinks: [
+        {
+          assetFaceId: "face-1",
+          materializationId: "materialization-1",
+          faceRank: 0,
+          projectFaceAssigneeId: "assignee-1",
+          identityKind: "project_consent",
+          consentId: "consent-1",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          linkSource: "auto",
+          matchConfidence: 0.97,
+        },
+        {
+          assetFaceId: "face-2",
+          materializationId: "materialization-1",
+          faceRank: 1,
+          projectFaceAssigneeId: "assignee-2",
+          identityKind: "project_consent",
+          consentId: "consent-2",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          profileId: null,
+          linkSource: "manual",
+          matchConfidence: null,
+        },
+      ],
+    },
+    review_snapshot: {
+      faces: [
+        {
+          assetFaceId: "face-1",
+          materializationId: "materialization-1",
+          faceRank: 0,
+          faceSource: "detector",
+          detectionProbability: 0.97,
+          faceBox: { x_min: 10, y_min: 10, x_max: 40, y_max: 40 },
+          faceBoxNormalized: { x_min: 0.1, y_min: 0.1, x_max: 0.4, y_max: 0.4 },
+        },
+        {
+          assetFaceId: "face-2",
+          materializationId: "materialization-1",
+          faceRank: 1,
+          faceSource: "detector",
+          detectionProbability: 0.92,
+          faceBox: { x_min: 50, y_min: 10, x_max: 80, y_max: 40 },
+          faceBoxNormalized: { x_min: 0.5, y_min: 0.1, x_max: 0.8, y_max: 0.4 },
+        },
+      ],
+    },
+    scope_snapshot: {
+      owners: [
+        {
+          projectFaceAssigneeId: "assignee-1",
+          identityKind: "project_consent",
+          consentId: "consent-1",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          effectiveScopes: [
+            {
+              templateKey: "usage",
+              scopeKey: "website",
+              label: "Website",
+              status: "granted",
+              governingSourceKind: "project_consent",
+            },
+          ],
+          signedScopes: [],
+        },
+        {
+          projectFaceAssigneeId: "assignee-2",
+          identityKind: "project_consent",
+          consentId: "consent-2",
+          recurringProfileConsentId: null,
+          projectProfileParticipantId: null,
+          effectiveScopes: [
+            {
+              templateKey: "usage",
+              scopeKey: "website",
+              label: "Website",
+              status: "granted",
+              governingSourceKind: "project_consent",
+            },
+          ],
+          signedScopes: [],
+        },
+      ],
+    },
+  });
+  const owners = buildMediaLibraryUsagePermissionSummaries(row);
+  const faces = buildReleasePhotoOverlaySummary(row).visibleFaces;
+
+  const table = buildMediaLibraryUsagePermissionTable({ owners, faces });
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["face:face-1", "face:face-2"]);
+  assert.deepEqual(table.columns.map((column) => column.faceRank), [0, 1]);
+  assert.equal(table.rows.length, 1);
+  assert.deepEqual(table.rows[0]?.cells.map((cell) => cell.status), ["granted", "revoked"]);
+  assert.equal(table.rows[0]?.finalStatus, "blocked");
 });
 
 test("feature 077 release overlays omit hidden faces and normalize raw geometry from snapshots only", () => {

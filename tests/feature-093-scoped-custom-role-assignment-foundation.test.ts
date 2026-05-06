@@ -771,6 +771,7 @@ test("feature 093 Members UI renders scope labels, target pickers, and mixed-sco
         projectId: assignment.projectId!,
         workspaceId: assignment.workspaceId!,
       }),
+      showAdvancedRoleSettings: true,
       statusMessage: null,
       isPending: false,
       inviteEmail: "",

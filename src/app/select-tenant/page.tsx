@@ -6,8 +6,8 @@ import { getTranslations } from "next-intl/server";
 import { LanguageSwitch } from "@/components/i18n/language-switch";
 import { createClient } from "@/lib/supabase/server";
 import { listCurrentUserTenantMemberships } from "@/lib/tenant/active-tenant";
+import { getUsablePendingOrgInvitePath } from "@/lib/tenant/pending-org-invite";
 import { ACTIVE_TENANT_COOKIE_NAME, PENDING_ORG_INVITE_COOKIE_NAME } from "@/lib/tenant/tenant-cookies";
-import { buildTenantMembershipInvitePath } from "@/lib/url/paths";
 
 type SelectTenantPageProps = {
   searchParams: Promise<{
@@ -44,19 +44,24 @@ export default async function SelectTenantPage({ searchParams }: SelectTenantPag
     redirect("/login?next=%2Fselect-tenant");
   }
 
+  if (!user.email_confirmed_at) {
+    redirect("/create-account?confirmation=1");
+  }
+
   const cookieStore = await cookies();
   const pendingOrgInviteToken = cookieStore.get(PENDING_ORG_INVITE_COOKIE_NAME)?.value ?? null;
   const activeTenantCookie = cookieStore.get(ACTIVE_TENANT_COOKIE_NAME)?.value ?? null;
-  const memberships = await listCurrentUserTenantMemberships(supabase);
+  const memberships = await listCurrentUserTenantMemberships(supabase, user.id);
   const resolvedSearchParams = await searchParams;
   const invalidSelection = resolvedSearchParams.error === "invalid_selection";
 
   if (memberships.length === 0) {
-    if (pendingOrgInviteToken) {
-      redirect(buildTenantMembershipInvitePath(pendingOrgInviteToken));
+    const pendingInvitePath = await getUsablePendingOrgInvitePath(supabase, pendingOrgInviteToken);
+    if (pendingInvitePath) {
+      redirect(pendingInvitePath);
     }
 
-    redirect("/dashboard");
+    redirect("/organization/setup");
   }
 
   if (memberships.length === 1) {

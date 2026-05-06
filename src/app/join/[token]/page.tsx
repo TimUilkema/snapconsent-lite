@@ -3,6 +3,7 @@ import { getTranslations } from "next-intl/server";
 
 import { LanguageSwitch } from "@/components/i18n/language-switch";
 import { createClient } from "@/lib/supabase/server";
+import { resolveInviteAccountState, type InviteAccountState } from "@/lib/tenant/invite-account-state";
 import { getPublicTenantMembershipInvite } from "@/lib/tenant/membership-invites";
 
 type JoinInvitePageProps = {
@@ -69,6 +70,20 @@ function mapAuthError(error: string | undefined, t: Awaited<ReturnType<typeof ge
   }
 }
 
+function inviteAuthSectionClasses(isPrimary: boolean, orderClass: string) {
+  return [
+    orderClass,
+    "rounded-lg border px-4 py-4",
+    isPrimary ? "border-zinc-300 bg-zinc-50" : "border-zinc-200 bg-white",
+  ].join(" ");
+}
+
+function inviteAuthButtonClasses(isPrimary: boolean) {
+  return isPrimary
+    ? "rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800"
+    : "rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50";
+}
+
 export default async function JoinInvitePage({ params, searchParams }: JoinInvitePageProps) {
   const { token } = await params;
   const resolvedSearchParams = await searchParams;
@@ -86,6 +101,9 @@ export default async function JoinInvitePage({ params, searchParams }: JoinInvit
   const signedInEmail = user?.email?.trim().toLowerCase() ?? null;
   const invitedEmail = invite?.email.trim().toLowerCase() ?? null;
   const emailMatches = signedInEmail && invitedEmail ? signedInEmail === invitedEmail : false;
+  const accountState: InviteAccountState = user ? "unknown" : await resolveInviteAccountState(invite);
+  const signUpIsPrimary = accountState === "no_known_account" || authMode === "signup";
+  const signInIsPrimary = !signUpIsPrimary;
 
   return (
     <main className="page-frame flex min-h-screen items-center py-8 sm:py-10">
@@ -192,9 +210,16 @@ export default async function JoinInvitePage({ params, searchParams }: JoinInvit
               )
             ) : (
               <div className="grid gap-6 lg:grid-cols-2">
-                <section className="rounded-lg border border-zinc-200 px-4 py-4">
+                <section
+                  className={inviteAuthSectionClasses(
+                    signInIsPrimary,
+                    accountState === "no_known_account" ? "lg:order-2" : "lg:order-1",
+                  )}
+                >
                   <p className="text-sm font-medium text-zinc-900">{t("signInTitle")}</p>
-                  <p className="mt-1 text-sm text-zinc-600">{t("signInBody")}</p>
+                  <p className="mt-1 text-sm text-zinc-600">
+                    {accountState === "known_account" ? t("signInExistingBody") : t("signInBody")}
+                  </p>
                   <form action="/auth/login" method="post" className="mt-4 space-y-4">
                     <input type="hidden" name="email" value={invite.email} />
                     <input type="hidden" name="next" value={`/join/${token}`} />
@@ -227,23 +252,27 @@ export default async function JoinInvitePage({ params, searchParams }: JoinInvit
                     </div>
                     <button
                       type="submit"
-                      className={`rounded-lg px-4 py-2.5 text-sm font-medium ${
-                        authMode === "signin"
-                          ? "bg-zinc-900 text-white hover:bg-zinc-800"
-                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-                      }`}
+                      className={inviteAuthButtonClasses(signInIsPrimary)}
                     >
                       {t("signInSubmit")}
                     </button>
                   </form>
                 </section>
 
-                <section className="rounded-lg border border-zinc-200 px-4 py-4">
+                <section
+                  className={inviteAuthSectionClasses(
+                    signUpIsPrimary,
+                    accountState === "no_known_account" ? "lg:order-1" : "lg:order-2",
+                  )}
+                >
                   <p className="text-sm font-medium text-zinc-900">{t("signUpTitle")}</p>
-                  <p className="mt-1 text-sm text-zinc-600">{t("signUpBody")}</p>
+                  <p className="mt-1 text-sm text-zinc-600">
+                    {accountState === "no_known_account" ? t("signUpNewBody") : t("signUpBody")}
+                  </p>
                   <form action="/auth/sign-up" method="post" className="mt-4 space-y-4">
                     <input type="hidden" name="email" value={invite.email} />
                     <input type="hidden" name="next" value={`/join/${token}`} />
+                    <input type="hidden" name="confirmation_redirect" value={`/join/${token}`} />
                     <input type="hidden" name="error_redirect" value={`/join/${token}`} />
                     <input type="hidden" name="pending_org_invite_token" value={token} />
                     <div>
@@ -273,11 +302,7 @@ export default async function JoinInvitePage({ params, searchParams }: JoinInvit
                     </div>
                     <button
                       type="submit"
-                      className={`rounded-lg px-4 py-2.5 text-sm font-medium ${
-                        authMode === "signup"
-                          ? "bg-zinc-900 text-white hover:bg-zinc-800"
-                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-                      }`}
+                      className={inviteAuthButtonClasses(signUpIsPrimary)}
                     >
                       {t("signUpSubmit")}
                     </button>

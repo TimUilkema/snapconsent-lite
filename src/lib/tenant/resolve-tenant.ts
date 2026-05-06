@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "@/lib/http/errors";
+import { isPendingOrgInviteTokenUsable } from "@/lib/tenant/pending-org-invite";
 import {
   ACTIVE_TENANT_COOKIE_NAME,
   PENDING_ORG_INVITE_COOKIE_NAME,
@@ -28,16 +29,26 @@ type TenantCookieValues = {
 };
 
 type ResolveTenantDependencies = {
-  loadMemberships?: (supabase: SupabaseClient) => Promise<TenantMembershipLookupResult>;
+  authenticatedUserId?: string;
+  missingMembershipBehavior?: "setup_required" | "bootstrap";
+  loadMemberships?: (
+    supabase: SupabaseClient,
+    authenticatedUserId: string,
+  ) => Promise<TenantMembershipLookupResult>;
   loadEnsuredTenantId?: (supabase: SupabaseClient) => Promise<TenantRpcResult>;
-  hasAuthenticatedUser?: (supabase: SupabaseClient) => Promise<boolean>;
+  loadAuthenticatedUserId?: (supabase: SupabaseClient) => Promise<string | null>;
   loadTenantCookies?: () => Promise<TenantCookieValues>;
+  validatePendingOrgInviteToken?: (supabase: SupabaseClient, token: string) => Promise<boolean>;
 };
 
-async function loadCurrentUserMemberships(supabase: SupabaseClient): Promise<TenantMembershipLookupResult> {
+async function loadCurrentUserMemberships(
+  supabase: SupabaseClient,
+  authenticatedUserId: string,
+): Promise<TenantMembershipLookupResult> {
   const { data, error } = await supabase
     .from("memberships")
     .select("tenant_id, created_at")
+    .eq("user_id", authenticatedUserId)
     .order("created_at", { ascending: true });
 
   return {
@@ -58,13 +69,13 @@ async function loadEnsuredTenantId(supabase: SupabaseClient): Promise<TenantRpcR
   };
 }
 
-async function hasAuthenticatedUser(supabase: SupabaseClient): Promise<boolean> {
+async function loadAuthenticatedUserId(supabase: SupabaseClient): Promise<string | null> {
   const {
     data: { user },
     error,
   } = await supabase.auth.getUser();
 
-  return !error && !!user;
+  return !error && user ? user.id : null;
 }
 
 async function loadTenantCookies(): Promise<TenantCookieValues> {
@@ -108,25 +119,51 @@ function throwPendingOrgInviteAcceptanceRequired() {
   );
 }
 
+function throwOrganizationSetupRequired() {
+  throw new HttpError(
+    409,
+    "organization_setup_required",
+    "Set up your organization before continuing.",
+  );
+}
+
 async function resolveTenantIdWithRecovery(
   supabase: SupabaseClient,
   dependencies: ResolveTenantDependencies = {},
 ): Promise<string | null> {
   const loadMemberships = dependencies.loadMemberships ?? loadCurrentUserMemberships;
   const ensureTenantForCurrentUser = dependencies.loadEnsuredTenantId ?? loadEnsuredTenantId;
-  const loadAuthState = dependencies.hasAuthenticatedUser ?? hasAuthenticatedUser;
+  const loadCurrentUserId = dependencies.loadAuthenticatedUserId ?? loadAuthenticatedUserId;
   const readCookies = dependencies.loadTenantCookies ?? loadTenantCookies;
+  const validatePendingOrgInviteToken =
+    dependencies.validatePendingOrgInviteToken ?? isPendingOrgInviteTokenUsable;
 
   const cookieValues = await readCookies();
-  const currentMembershipLookup = await loadMemberships(supabase);
+  const authenticatedUserId = dependencies.authenticatedUserId ?? await loadCurrentUserId(supabase);
+  if (!authenticatedUserId) {
+    return null;
+  }
+
+  const currentMembershipLookup = await loadMemberships(supabase, authenticatedUserId);
   if (currentMembershipLookup.memberships.length > 0) {
     return selectActiveTenantId(currentMembershipLookup.memberships, cookieValues.activeTenantId);
   }
 
   let lastError = currentMembershipLookup.error;
 
-  if (cookieValues.pendingOrgInviteToken) {
+  if (
+    cookieValues.pendingOrgInviteToken &&
+    await validatePendingOrgInviteToken(supabase, cookieValues.pendingOrgInviteToken)
+  ) {
     throwPendingOrgInviteAcceptanceRequired();
+  }
+
+  if ((dependencies.missingMembershipBehavior ?? "setup_required") !== "bootstrap") {
+    if (lastError) {
+      throw new HttpError(500, "tenant_lookup_failed", "Unable to resolve tenant.");
+    }
+
+    throwOrganizationSetupRequired();
   }
 
   const ensuredTenant = await ensureTenantForCurrentUser(supabase);
@@ -136,18 +173,17 @@ async function resolveTenantIdWithRecovery(
 
   lastError = ensuredTenant.error ?? lastError;
 
-  const retriedMembershipLookup = await loadMemberships(supabase);
+  const retriedMembershipLookup = await loadMemberships(supabase, authenticatedUserId);
   if (retriedMembershipLookup.memberships.length > 0) {
     return selectActiveTenantId(retriedMembershipLookup.memberships, cookieValues.activeTenantId);
   }
 
   lastError = retriedMembershipLookup.error ?? lastError;
 
-  if (!(await loadAuthState(supabase))) {
-    return null;
-  }
-
-  if (cookieValues.pendingOrgInviteToken) {
+  if (
+    cookieValues.pendingOrgInviteToken &&
+    await validatePendingOrgInviteToken(supabase, cookieValues.pendingOrgInviteToken)
+  ) {
     throwPendingOrgInviteAcceptanceRequired();
   }
 

@@ -33,6 +33,8 @@ import type {
 } from "@/lib/project-releases/types";
 
 const RELEASE_ASSET_INSERT_CHUNK_SIZE = 100;
+export const MEDIA_LIBRARY_DEFAULT_PAGE_SIZE = 24;
+export const MEDIA_LIBRARY_ALLOWED_PAGE_SIZES = [24, 48, 96] as const;
 
 type FinalizedProjectRow = {
   id: string;
@@ -179,6 +181,7 @@ type MediaLibraryFolderRow = {
   id: string;
   tenant_id: string;
   name: string;
+  parent_folder_id: string | null;
   archived_at: string | null;
 };
 
@@ -192,7 +195,24 @@ type MediaLibraryFolderMembershipRow = {
 export type MediaLibraryFolderSummary = {
   id: string;
   name: string;
+  parentFolderId: string | null;
   assetCount: number;
+};
+
+export type MediaLibraryFolderPathSegment = {
+  id: string;
+  name: string;
+};
+
+export type MediaLibraryFolderOption = MediaLibraryFolderSummary & {
+  depth: number;
+  path: MediaLibraryFolderPathSegment[];
+  pathLabel: string;
+  descendantIds: string[];
+};
+
+export type MediaLibraryFolderTreeNode = MediaLibraryFolderOption & {
+  children: MediaLibraryFolderTreeNode[];
 };
 
 export type MediaLibraryListItemWithFolder = MediaLibraryListItem & {
@@ -201,12 +221,24 @@ export type MediaLibraryListItemWithFolder = MediaLibraryListItem & {
   folderName: string | null;
 };
 
+export type MediaLibraryPagination = {
+  page: number;
+  limit: number;
+  totalCount: number;
+  totalPages: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+};
+
 export type MediaLibraryPageData = {
-  folders: MediaLibraryFolderSummary[];
+  folders: MediaLibraryFolderTreeNode[];
+  folderOptions: MediaLibraryFolderOption[];
   items: MediaLibraryListItemWithFolder[];
   selectedFolderId: string | null;
   selectedFolder: MediaLibraryFolderSummary | null;
+  selectedFolderPath: MediaLibraryFolderPathSegment[];
   canManageFolders: boolean;
+  pagination: MediaLibraryPagination;
 };
 
 type ReleaseAssetDetail = {
@@ -215,6 +247,8 @@ type ReleaseAssetDetail = {
   releaseVersion: number;
   projectName: string;
   workspaceName: string;
+  releaseWorkspaceCount: number;
+  hasPhotographerWorkspaces: boolean;
 };
 
 function firstRelation<
@@ -1652,6 +1686,124 @@ function buildMediaLibraryLineageKey(projectId: string, sourceAssetId: string) {
   return `${projectId}:${sourceAssetId}`;
 }
 
+export function normalizeMediaLibraryPaginationInput(input: {
+  page?: number | null;
+  limit?: number | null;
+}) {
+  const page = Number.isInteger(input.page) && (input.page ?? 0) > 0 ? input.page as number : 1;
+  const limit = MEDIA_LIBRARY_ALLOWED_PAGE_SIZES.includes(input.limit as (typeof MEDIA_LIBRARY_ALLOWED_PAGE_SIZES)[number])
+    ? input.limit as (typeof MEDIA_LIBRARY_ALLOWED_PAGE_SIZES)[number]
+    : MEDIA_LIBRARY_DEFAULT_PAGE_SIZE;
+
+  return { page, limit };
+}
+
+function buildMediaLibraryPagination(input: {
+  page?: number | null;
+  limit?: number | null;
+  totalCount: number;
+}) {
+  const normalized = normalizeMediaLibraryPaginationInput(input);
+  const totalPages = Math.max(1, Math.ceil(input.totalCount / normalized.limit));
+  const page = Math.min(normalized.page, totalPages);
+
+  return {
+    page,
+    limit: normalized.limit,
+    totalCount: input.totalCount,
+    totalPages,
+    hasPreviousPage: page > 1,
+    hasNextPage: page < totalPages,
+  } satisfies MediaLibraryPagination;
+}
+
+function sliceMediaLibraryPage<T>(items: T[], pagination: MediaLibraryPagination) {
+  const offset = (pagination.page - 1) * pagination.limit;
+  return items.slice(offset, offset + pagination.limit);
+}
+
+function sortMediaLibraryFolderRows(a: MediaLibraryFolderRow, b: MediaLibraryFolderRow) {
+  const byName = a.name.localeCompare(b.name, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+  return byName === 0 ? a.id.localeCompare(b.id) : byName;
+}
+
+function buildVisibleMediaLibraryFolderTree(input: {
+  folders: MediaLibraryFolderRow[];
+  assetCountByFolderId?: Map<string, number>;
+}) {
+  const rowsById = new Map(input.folders.map((folder) => [folder.id, folder] as const));
+  const childrenByParentId = new Map<string | null, MediaLibraryFolderRow[]>();
+  for (const folder of input.folders) {
+    if (folder.parent_folder_id && !rowsById.has(folder.parent_folder_id)) {
+      continue;
+    }
+
+    const parentKey = folder.parent_folder_id ?? null;
+    const children = childrenByParentId.get(parentKey) ?? [];
+    children.push(folder);
+    childrenByParentId.set(parentKey, children);
+  }
+
+  for (const children of childrenByParentId.values()) {
+    children.sort(sortMediaLibraryFolderRows);
+  }
+
+  const flatOptions: MediaLibraryFolderOption[] = [];
+  const visited = new Set<string>();
+
+  function mapFolder(
+    folder: MediaLibraryFolderRow,
+    depth: number,
+    path: MediaLibraryFolderPathSegment[],
+  ): MediaLibraryFolderTreeNode | null {
+    if (visited.has(folder.id)) {
+      return null;
+    }
+    visited.add(folder.id);
+
+    const nextPath = [...path, { id: folder.id, name: folder.name }];
+    const children = (childrenByParentId.get(folder.id) ?? [])
+      .map((child) => mapFolder(child, depth + 1, nextPath))
+      .filter((child): child is MediaLibraryFolderTreeNode => Boolean(child));
+    const descendantIds = children.flatMap((child) => [child.id, ...child.descendantIds]);
+    const node: MediaLibraryFolderTreeNode = {
+      id: folder.id,
+      name: folder.name,
+      parentFolderId: folder.parent_folder_id,
+      assetCount: input.assetCountByFolderId?.get(folder.id) ?? 0,
+      depth,
+      path: nextPath,
+      pathLabel: nextPath.map((segment) => segment.name).join(" / "),
+      descendantIds,
+      children,
+    };
+    flatOptions.push({
+      id: node.id,
+      name: node.name,
+      parentFolderId: node.parentFolderId,
+      assetCount: node.assetCount,
+      depth: node.depth,
+      path: node.path,
+      pathLabel: node.pathLabel,
+      descendantIds: node.descendantIds,
+    });
+    return node;
+  }
+
+  const tree = (childrenByParentId.get(null) ?? [])
+    .map((folder) => mapFolder(folder, 0, []))
+    .filter((folder): folder is MediaLibraryFolderTreeNode => Boolean(folder));
+
+  return {
+    tree,
+    flatOptions,
+    visibleFolderById: new Map(flatOptions.map((folder) => [folder.id, folder] as const)),
+  };
+}
+
 export async function listMediaLibraryAssets(input: {
   supabase: SupabaseClient;
   tenantId: string;
@@ -1729,12 +1881,14 @@ export async function getMediaLibraryPageData(input: {
   tenantId: string;
   userId: string;
   folderId?: string | null;
+  page?: number | null;
+  limit?: number | null;
 }) {
   const [baseItems, foldersResult, access] = await Promise.all([
     listMediaLibraryAssets(input),
     input.supabase
       .from("media_library_folders")
-      .select("id, tenant_id, name, archived_at")
+      .select("id, tenant_id, name, parent_folder_id, archived_at")
       .eq("tenant_id", input.tenantId)
       .is("archived_at", null)
       .order("name", { ascending: true }),
@@ -1746,27 +1900,30 @@ export async function getMediaLibraryPageData(input: {
   }
 
   const activeFolderRows = (foldersResult.data ?? []) as MediaLibraryFolderRow[];
-  const activeFolderById = new Map(activeFolderRows.map((folder) => [folder.id, folder] as const));
+  const emptyTree = buildVisibleMediaLibraryFolderTree({ folders: activeFolderRows });
+  const activeFolderById = emptyTree.visibleFolderById;
   const requestedFolderId = input.folderId?.trim() ? input.folderId.trim() : null;
   if (requestedFolderId && !activeFolderById.has(requestedFolderId)) {
     throw new HttpError(404, "folder_not_found", "Folder not found.");
   }
 
   if (baseItems.length === 0) {
-    const emptyFolders = activeFolderRows.map((folder) => ({
-      id: folder.id,
-      name: folder.name,
-      assetCount: 0,
-    }));
+    const pagination = buildMediaLibraryPagination({
+      page: input.page,
+      limit: input.limit,
+      totalCount: 0,
+    });
+    const selectedFolder = requestedFolderId ? activeFolderById.get(requestedFolderId) ?? null : null;
 
     return {
-      folders: emptyFolders,
+      folders: emptyTree.tree,
+      folderOptions: emptyTree.flatOptions,
       items: [],
       selectedFolderId: requestedFolderId,
-      selectedFolder: requestedFolderId
-        ? emptyFolders.find((folder) => folder.id === requestedFolderId) ?? null
-        : null,
+      selectedFolder,
+      selectedFolderPath: selectedFolder?.path ?? [],
       canManageFolders: access.canManageFolders,
+      pagination,
     } satisfies MediaLibraryPageData;
   }
 
@@ -1836,23 +1993,29 @@ export async function getMediaLibraryPageData(input: {
     } satisfies MediaLibraryListItemWithFolder;
   });
 
-  const folders = activeFolderRows.map((folder) => ({
-    id: folder.id,
-    name: folder.name,
-    assetCount: assetCountByFolderId.get(folder.id) ?? 0,
-  }));
+  const folderTree = buildVisibleMediaLibraryFolderTree({
+    folders: activeFolderRows,
+    assetCountByFolderId,
+  });
+  const selectedFolder = requestedFolderId ? folderTree.visibleFolderById.get(requestedFolderId) ?? null : null;
   const items = requestedFolderId
     ? enrichedItems.filter((item) => item.folderId === requestedFolderId)
     : enrichedItems;
+  const pagination = buildMediaLibraryPagination({
+    page: input.page,
+    limit: input.limit,
+    totalCount: items.length,
+  });
 
   return {
-    folders,
-    items,
+    folders: folderTree.tree,
+    folderOptions: folderTree.flatOptions,
+    items: sliceMediaLibraryPage(items, pagination),
     selectedFolderId: requestedFolderId,
-    selectedFolder: requestedFolderId
-      ? folders.find((folder) => folder.id === requestedFolderId) ?? null
-      : null,
+    selectedFolder,
+    selectedFolderPath: selectedFolder?.path ?? [],
     canManageFolders: access.canManageFolders,
+    pagination,
   } satisfies MediaLibraryPageData;
 }
 
@@ -1888,7 +2051,7 @@ export async function getReleaseAssetDetail(input: {
 
   const { data: releaseRow, error: releaseError } = await input.supabase
     .from("project_releases")
-    .select("id")
+    .select("id, project_snapshot")
     .eq("tenant_id", input.tenantId)
     .eq("id", row.release_id)
     .eq("status", "published")
@@ -1908,6 +2071,10 @@ export async function getReleaseAssetDetail(input: {
     releaseVersion: row.workspace_snapshot.release.releaseVersion,
     projectName: row.workspace_snapshot.project.name,
     workspaceName: row.workspace_snapshot.workspace.name,
+    releaseWorkspaceCount: ((releaseRow as Pick<ProjectReleaseRow, "project_snapshot">).project_snapshot?.workspaces ?? []).length,
+    hasPhotographerWorkspaces: ((releaseRow as Pick<ProjectReleaseRow, "project_snapshot">).project_snapshot?.workspaces ?? []).some(
+      (workspace) => workspace.workspaceKind === "photographer",
+    ),
   } satisfies ReleaseAssetDetail;
 }
 

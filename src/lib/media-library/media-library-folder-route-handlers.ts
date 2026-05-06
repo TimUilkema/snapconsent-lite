@@ -26,6 +26,12 @@ type ArchiveFolderDependencies = {
   archiveMediaLibraryFolder: typeof import("@/lib/media-library/media-library-folder-service").archiveMediaLibraryFolder;
 };
 
+type MoveFolderDependencies = {
+  createClient: () => Promise<SupabaseClient>;
+  resolveTenantId: (client: SupabaseClient) => Promise<string | null>;
+  moveMediaLibraryFolder: typeof import("@/lib/media-library/media-library-folder-service").moveMediaLibraryFolder;
+};
+
 type FolderAssetMutationDependencies = {
   createClient: () => Promise<SupabaseClient>;
   resolveTenantId: (client: SupabaseClient) => Promise<string | null>;
@@ -45,6 +51,10 @@ type FolderAssetMutationDependencies = {
 
 type FolderNameBody = {
   name?: string;
+};
+
+type FolderMoveBody = {
+  parentFolderId?: string | null;
 };
 
 type FolderAssetBody = {
@@ -153,6 +163,43 @@ export async function handleArchiveMediaLibraryFolderPost(
       tenantId,
       userId,
       folderId,
+    });
+
+    return Response.json(result, { status: 200 });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+export async function handleMoveMediaLibraryFolderPost(
+  request: Request,
+  context: FolderRouteContext,
+  dependencies: MoveFolderDependencies,
+) {
+  try {
+    const { supabase, tenantId, userId } = await requireAuthenticatedTenantContext(
+      dependencies.createClient,
+      dependencies.resolveTenantId,
+    );
+    const body = await parseJsonBody<FolderMoveBody>(request);
+    const { folderId } = await context.params;
+
+    if (!Object.prototype.hasOwnProperty.call(body, "parentFolderId")) {
+      throw new HttpError(400, "invalid_parent_folder_id", "Select a valid parent folder.");
+    }
+    if (
+      body.parentFolderId !== null
+      && (typeof body.parentFolderId !== "string" || body.parentFolderId.trim().length === 0)
+    ) {
+      throw new HttpError(400, "invalid_parent_folder_id", "Select a valid parent folder.");
+    }
+
+    const result = await dependencies.moveMediaLibraryFolder({
+      supabase,
+      tenantId,
+      userId,
+      folderId,
+      parentFolderId: body.parentFolderId === null ? null : body.parentFolderId.trim(),
     });
 
     return Response.json(result, { status: 200 });
